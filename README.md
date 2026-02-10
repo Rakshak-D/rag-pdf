@@ -2,7 +2,7 @@
 ---
 
 # 📄 RAG-PDF: Multimodal Document Intelligence
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 [![LangChain](https://img.shields.io/badge/LangChain-0.1-blue)](https://www.langchain.com/)
 [![Ollama](https://img.shields.io/badge/Ollama-Local%20LLM-green)](https://ollama.ai/)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector%20DB-yellow)](https://www.trychroma.com/)
