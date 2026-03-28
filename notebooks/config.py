@@ -77,7 +77,7 @@ class Config:
 
     use_hybrid: bool = True
     use_reranker: bool = True
-    adaptive_weighting: bool = False
+    adaptive_weighting: bool = True
     score_fusion: bool = True
 
     rouge_top_k_chunks: int = 5
@@ -86,7 +86,7 @@ class Config:
     def validate(self) -> None:
         if abs((self.bm25_weight + self.semantic_weight) - 1.0) > 1e-6:
             raise ValueError("bm25_weight and semantic_weight must sum to 1.0.")
-        if not (0.0 < self.image_caption_image_weight <= 1.0):
+        if not (0.0 <= self.image_caption_image_weight <= 1.0):
             raise ValueError("image_caption_image_weight must be between 0 and 1.")
         if self.text_k < self.rerank_k:
             raise ValueError("text_k must be greater than or equal to rerank_k.")
