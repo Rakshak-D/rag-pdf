@@ -1359,6 +1359,15 @@ class ContextFormatter:
     def _load_image(self, image_path: str) -> Optional[Image.Image]:
         if not image_path or not isinstance(image_path, str):
             return None
+            
+        # Fix dynamic relative paths from old notebook execution
+        if image_path.startswith("..\\data\\"):
+            image_path = image_path.replace("..\\data\\", "data\\")
+        elif image_path.startswith("../data/"):
+            image_path = image_path.replace("../data/", "data/")
+        
+        # Also handle absolute paths if they get somehow strangely resolved
+        import os
         if not os.path.exists(image_path):
             print(f"Warning: Image path does not exist: {image_path}")
             return None
@@ -2200,704 +2209,122 @@ import psutil
 
 
 TEST_QUESTIONS = [
-    # ======================
-    # SECTION 1: VOYAGER GRAND TOUR (Questions 1-8)
-    # ======================
     {
         "id": 1,
-        "type": "numerical_trajectory_constraint",
-        "question": (
-            "The trajectory diagram labels Voyager 1 reaching Jupiter on 9 Jul 79 and Saturn on 12 Nov 80, "
-            "while Voyager 2's path extends to Uranus on 24 Jan 86 and Neptune on 25 Aug 89. "
-            "Why do these four specific encounter dates form a one-time window that will not repeat for 175 years, "
-            "and how does the visual geometry of the two diverging paths encode the irreversible cost of "
-            "prioritizing the Titan flyby over allowing Voyager 1 to continue toward Uranus and Neptune?"
-        ),
-        "expected_images": True,
-        "image_reference": {
-            "page": 1,
-            "position": "Left diagram: annotated flight paths of Voyager 1 and 2 with labeled planetary encounter dates"
-        },
-        "required_context": {
-            "pages": [1, 3],
-            "focus": (
-                "175-year planetary alignment window, labeled encounter dates on trajectory diagram, "
-                "Titan flyby as trajectory-terminating decision, Grand Tour original vs scaled-back plan"
-            )
-        }
+        "intended_mode": "semantic",
+        "source_document": "Voyager Grand Tour PDF.pdf",
+        "question": "The trajectory diagram of Voyager 1 and Voyager 2 shows clearly diverging paths after Saturn. Using both the trajectory image and the mission text, explain why the two paths diverge at that point, and what specific orbital geometry decision made Voyager 1's post-Saturn path irrecoverable for further planetary encounters.",
+        "ground_truth_answer": "The trajectory diagram shows Voyager 1's path bending sharply away from the ecliptic plane after Saturn while Voyager 2 continues along a shallower arc toward Uranus and Neptune. The text explains this divergence was caused by Voyager 1's close flyby of Titan, coming within 4,000 miles of its surface. That encounter changed Voyager 1's trajectory such that it could not make any further planetary encounters, sending it out of the solar system. Voyager 2 used a different Saturn geometry \u2014 a closest approach at 63,000 miles versus Voyager 1's 77,000 miles \u2014 that preserved the gravitational slingshot angle needed for the Uranus and Neptune legs. The diagram makes the irreversibility visually concrete: the labeled date nodes on Voyager 2's path continue to Jan 24, 1986 (Uranus) and Aug 25, 1989 (Neptune), while Voyager 1's path terminates its planetary arc at Saturn Nov 12, 1980.",
+        "required_pages": [
+            1,
+            3
+        ],
+        "required_image": "Voyager 1 and 2 trajectory diagram showing diverging paths through outer solar system",
+        "required_entities": [
+            "trajectory diagram",
+            "Titan",
+            "Voyager 1",
+            "Voyager 2",
+            "Saturn",
+            "Uranus",
+            "Neptune",
+            "4,000 miles"
+        ],
+        "difficulty": "very hard"
     },
     {
         "id": 2,
-        "type": "scale_paradox_with_specific_distance",
-        "question": (
-            "At exactly 7.25 million miles, Voyager 1 captured the first-ever single-frame photograph "
-            "of the Earth-Moon system on September 18, 1977. Given that 7.25 million miles is less than "
-            "0.008% of the distance to Neptune the spacecraft would later reach, why is this specific "
-            "distance the precise geometric threshold at which both bodies first fit within a single camera "
-            "frame, and what does successfully framing both bodies prove about the optical system's "
-            "capabilities that the subsequent planetary montage photographs would depend on?"
-        ),
-        "expected_images": True,
-        "image_reference": {
-            "page": 2,
-            "position": "Left image: first photograph of Earth and Moon together in a single frame, taken September 18, 1977"
-        },
-        "required_context": {
-            "pages": [2, 4],
-            "focus": (
-                "Earth-Moon photo at 7.25 million miles on September 18 1977, solar system scale context, "
-                "camera field-of-view implication, Family Portrait from 6 billion km as endpoint comparison"
-            )
-        }
+        "intended_mode": "semantic",
+        "source_document": "Voyager Grand Tour PDF.pdf",
+        "question": "The Earth-Moon photograph taken by Voyager 1 is described as the first single-frame image of both bodies together. Using the image itself and the surrounding mission text, explain what engineering and operational conditions had to be simultaneously satisfied to produce it, and why this milestone was considered a meaningful preview of capabilities rather than merely a publicity photograph.",
+        "ground_truth_answer": "The image shows both Earth and the Moon captured together in a single frame from 7.25 million miles, taken just 13 days after launch on September 18, 1977. To produce it, the camera had to achieve stable long-range pointing at two objects separated by significant angular distance, frame both within a single exposure without saturating on Earth's brightness, and do so while the spacecraft was still in early operational checkout. The text describes it as the first of Voyager 1's many firsts, framing it as a sneak preview of the discoveries ahead. The engineering significance is that it validated the imaging system's ability to handle multi-body framing at interplanetary distances under real flight conditions, not just in laboratory testing. For mission planners, a camera that could jointly frame Earth and Moon from 7.25 million miles had clearly demonstrated the pointing precision and dynamic range that would be needed to image moons near giant planets from comparable or greater distances during the actual science campaign.",
+        "required_pages": [
+            2
+        ],
+        "required_image": "First photograph of Earth-Moon system in a single frame taken by Voyager 1",
+        "required_entities": [
+            "Earth-Moon",
+            "single frame",
+            "7.25 million miles",
+            "13 days",
+            "September 18 1977",
+            "pointing precision"
+        ],
+        "difficulty": "hard"
     },
     {
         "id": 3,
-        "type": "jupiter_discovery_density_visual_evidence",
-        "question": (
-            "At Jupiter, the Voyagers discovered that Io has active volcanoes, Europa has a geologically "
-            "young ice surface possibly floating on an ocean of liquid water, Jupiter has a faint ring system, "
-            "and three previously undiscovered small moons exist. Looking at the Jupiter montage image, "
-            "which of these four discoveries is visually detectable from the montage alone, "
-            "which require spectroscopic or instrument data beyond photography, and why does the "
-            "distinction between visually-inferable and instrument-dependent discoveries fundamentally "
-            "limit what any future flyby mission relying only on cameras could confirm?"
-        ),
-        "expected_images": True,
-        "image_reference": {
-            "page": 3,
-            "position": "Left montage: Jupiter and its four largest moons Io, Europa, Ganymede, Callisto — not to scale"
-        },
-        "required_context": {
-            "pages": [2, 3],
-            "focus": (
-                "Io active volcanoes, Europa ice surface and possible liquid water ocean, "
-                "Jupiter faint ring system, three undiscovered small moons, "
-                "visual inference vs instrument measurement boundary"
-            )
-        }
+        "intended_mode": "semantic",
+        "source_document": "mars-science-laboratory.pdf",
+        "question": "Curiosity's Sky Crane landing image and the text description of the landing sequence together tell a more complete story than either alone. Using both the image of the sky crane lowering Curiosity and the technical description of the EDL sequence, explain why the sky crane approach was necessary rather than airbag-based landing used by earlier rovers, and what physical constraints of the crater site made this the only viable solution.",
+        "ground_truth_answer": "The image shows Curiosity being lowered on a tether from the upper sky crane stage to land wheels-down on the Martian surface. The text explains that Curiosity's payload is more than 10 times as massive as earlier rovers and its science equipment required distributing samples to internal analytical instruments, which necessitated landing upright on wheels rather than rolling in a protective airbag cocoon. The precision landing capability reduced the target ellipse to about 20 kilometers, a five-fold improvement over earlier missions. The Gale Crater site was so close to the crater wall and Mount Sharp that airbag-style landing with the wider uncertainty ellipses of earlier missions would have been unsafe. The sky crane therefore solved two simultaneous problems: it accommodated Curiosity's size and upright instrument layout while also enabling the precision that unlocked Gale Crater as a scientifically viable destination.",
+        "required_pages": [
+            1,
+            2
+        ],
+        "required_image": "Curiosity rover being lowered by Sky Crane during landing",
+        "required_entities": [
+            "sky crane",
+            "tether",
+            "20 kilometers",
+            "crater wall",
+            "Mount Sharp",
+            "airbag",
+            "precision landing",
+            "upright"
+        ],
+        "difficulty": "very hard"
     },
     {
-        "id": 4,
-        "type": "saturn_titan_flyby_tradeoff_irreversibility",
-        "question": (
-            "Voyager 1 came within 4,000 miles of Titan's South Pole during its closest approach, "
-            "while Voyager 2 made its closest Saturn approach at 63,000 miles on August 25, 1981. "
-            "The Titan encounter permanently altered Voyager 1's trajectory, ending all future planetary flybys. "
-            "Given that the Voyagers discovered Saturn's rings were far more complex than previously believed, "
-            "Titan may have lakes of liquid hydrocarbons, and three previously unknown satellites were found — "
-            "reconstruct the decision logic that made a 4,000-mile Titan flyby worth sacrificing all future "
-            "encounters, and explain what the Saturn and moons montage image reveals about ring complexity "
-            "that could not have been anticipated from Earth-based observations."
-        ),
-        "expected_images": True,
-        "image_reference": {
-            "page": 3,
-            "position": "Right montage: Saturn and several of its moons — not to scale"
-        },
-        "required_context": {
-            "pages": [3],
-            "focus": (
-                "Titan flyby 4,000 miles South Pole, Voyager 2 Saturn closest approach 63,000 miles August 25 1981, "
-                "ring complexity discovery, Titan liquid hydrocarbon lakes, trajectory sacrifice decision, "
-                "three new Saturn satellites"
-            )
-        }
+        "id": 9,
+        "intended_mode": "hybrid",
+        "source_document": "Voyager Grand Tour PDF.pdf",
+        "question": "The Uranus montage and the Neptune-Triton montage each show a planet alongside several moons. Using these images in combination with the text on Voyager 2's encounters, explain why Voyager 2 discovered 11 moons at Uranus and 6 at Neptune despite having far less observing time at each world than it had spent at Jupiter, and what this implies about the relationship between mission geometry and small-body discovery yield.",
+        "ground_truth_answer": "The Uranus montage shows several larger moons around the tilted ice giant, while the Neptune montage shows Triton prominently alongside Neptune. The text states Voyager 2 began studying Uranus in November 1985 and made its closest approach on January 24, 1986, discovering 11 new moons, while the Neptune encounter beginning June 1989 yielded 6 new moons. At Jupiter, which Voyager 2 studied intensively from April to August 1979 \u2014 a much longer campaign \u2014 only three previously undiscovered small moons were found. The inversion in discovery yield relative to time suggests that proximity geometry and illumination conditions during a fast flyby can be more favorable for detecting small, faint satellites than a longer but more distant observation campaign. At Uranus and Neptune the extremely close approach distances (50,600 miles and 3,076 miles respectively) provided the angular resolution and lighting angles needed to detect objects that would have remained hidden from farther distances, regardless of integration time.",
+        "required_pages": [
+            3,
+            4
+        ],
+        "required_image_pair": [
+            "Uranus montage with moons",
+            "Neptune and Triton montage"
+        ],
+        "required_entities": [
+            "Uranus",
+            "11 new moons",
+            "Neptune",
+            "6 new moons",
+            "50,600 miles",
+            "3,076 miles",
+            "Jupiter",
+            "angular resolution",
+            "flyby geometry"
+        ],
+        "difficulty": "very hard"
     },
     {
-        "id": 5,
-        "type": "moon_discovery_asymmetry_numerical",
-        "question": (
-            "Voyager 2 discovered 11 new moons at Uranus during a flyby at 50,600 miles altitude "
-            "and only 6 new moons at Neptune during a much closer pass at 3,076 miles altitude. "
-            "Why does cutting flyby altitude by more than 94% at Neptune result in fewer moon discoveries "
-            "than the more distant Uranus encounter, and what does this specific inverse relationship — "
-            "combined with the visual dominance of Triton in the Neptune montage image — reveal about "
-            "how a single massive moon can suppress the detectability of smaller satellites in its system?"
-        ),
-        "expected_images": True,
-        "image_reference": {
-            "page": 4,
-            "position": "Left montage: Uranus with several larger moons; Right image: Neptune with its largest moon Triton dominating the frame"
-        },
-        "required_context": {
-            "pages": [3, 4],
-            "focus": (
-                "Uranus flyby 50,600 miles yielding 11 moons, Neptune flyby 3,076 miles yielding 6 moons, "
-                "Triton dominance at Neptune, satellite system architecture, observation geometry constraints, "
-                "Neptune Great Dark Spot and magnetic field"
-            )
-        }
-    },
-    # {
-    #     "id": 6,
-    #     "type": "family_portrait_timing_philosophy",
-    #     "question": (
-    #         "On February 14, 1990 — more than 12 years after launch and shortly before its cameras "
-    #         "were permanently turned off to conserve power — Voyager 1 spun around and captured a "
-    #         "60-image mosaic Family Portrait of six planets from 6 billion kilometers. "
-    #         "Why was this specific act structurally impossible to perform at any earlier point in the mission, "
-    #         "what does the decision to use the final camera power for a backward-looking portrait rather than "
-    #         "forward-looking interstellar imaging reveal about the mission's philosophical priorities, "
-    #         "and why is Earth's appearance as a 'pale blue dot' in this image scientifically informative "
-    #         "despite being too small to show any surface detail?"
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 4,
-    #         "position": "Bottom image: Voyager 1 Family Portrait mosaic of six planets taken February 14, 1990, from 6 billion km"
-    #     },
-    #     "required_context": {
-    #         "pages": [4],
-    #         "focus": (
-    #             "February 14 1990 Family Portrait, 60-image mosaic, 6 billion km distance, "
-    #             "camera shutdown to conserve power, pale blue dot Earth appearance, "
-    #             "backward-looking vs forward-looking imaging philosophy"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 7,
-    #     "type": "interstellar_mission_power_projection",
-    #     "question": (
-    #         "The Voyager Interstellar Mission began in 1989 with both spacecraft operating more than "
-    #         "10 billion miles from Earth, most science instruments turned off to conserve power, "
-    #         "and projected operational life estimated to continue until approximately 2025. "
-    #         "Voyager 1 crossed into true interstellar space in August 2012, while Voyager 2 was "
-    #         "expected to follow within a few years. Given that neither spacecraft will come within "
-    #         "one light-year of any star for tens of thousands of years, explain why the boundary "
-    #         "crossing in 2012 was scientifically difficult to confirm in real time, and what the "
-    #         "sequential shutdown of science instruments tells us about how the mission's definition "
-    #         "of 'operational' shifted across its four decades."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 2,
-    #         "position": "Right image: Voyager spacecraft as it would appear in space, showing the dish antenna, instrument boom, and RTG power source configuration"
-    #     },
-    #     "required_context": {
-    #         "pages": [5],
-    #         "focus": (
-    #             "Voyager Interstellar Mission 1989, 10 billion miles from Earth, science instruments shutdown, "
-    #             "2025 operational projection, Voyager 1 interstellar boundary August 2012, "
-    #             "Voyager 2 follow-suit estimate, boundary confirmation data analysis difficulty"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 8,
-    #     "type": "analog_encoding_temporal_robustness",
-    #     "question": (
-    #         "Each Voyager carries a golden record using 1970s phonograph vinyl technology, physically "
-    #         "paired with a stylus and engraved playback instructions — intended for a potential finder "
-    #         "tens of thousands of years from now, long after the spacecraft will have ceased to "
-    #         "communicate with Earth. The record contains sounds including music, greetings in multiple "
-    #         "languages, and whale songs, plus photographs of Earthly activities. "
-    #         "Explain why analog groove-based encoding is specifically more durable than any digital format "
-    #         "for this timescale, what universal physical assumption about the finder the stylus-and-groove "
-    #         "mechanism encodes, and why the engraved cover instructions are themselves a self-referential "
-    #         "instance of the communication problem they are trying to solve."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 5,
-    #         "position": "Both images: Golden Record vinyl disc showing 'Sounds of Earth' label, and cover plate with engraved playback diagram, pulsar star map, and stylus illustration"
-    #     },
-    #     "required_context": {
-    #         "pages": [5],
-    #         "focus": (
-    #             "Golden Record 1970s analog vinyl, physical stylus inclusion, tens-of-thousands-year timescale, "
-    #             "engraved playback instructions self-referentiality, sounds music greetings whale songs, "
-    #             "photographs of Earthly activities, interstellar finder physical law assumptions"
-    #         )
-    #     }
-    # },
-    #
-    # # ======================
-    # # SECTION 2: CURIOSITY / MARS SCIENCE LABORATORY (Questions 9-16)
-    # # ======================
-    # {
-    #     "id": 9,
-    #     "type": "precision_landing_causal_prerequisite",
-    #     "question": (
-    #         "The Mars Science Laboratory achieved a landing ellipse of approximately 20 kilometers — "
-    #         "a five-fold improvement over earlier Mars landings — and the document explicitly states "
-    #         "the Gale Crater site 'would not have been considered safe' under the previous precision standard. "
-    #         "Trace the complete causal chain from the 20-kilometer ellipse to the specific geological "
-    #         "target at Yellowknife Bay, explaining why each intermediate step — site selection eligibility, "
-    #         "proximity to the crater wall, access to Mount Sharp's layered base strata — was individually "
-    #         "unlocked by this specific numerical precision improvement and not by any lesser improvement."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 1,
-    #         "position": "Bottom image: Gale Crater aerial view showing crater size comparable to Connecticut and Rhode Island combined"
-    #     },
-    #     "required_context": {
-    #         "pages": [1, 2],
-    #         "focus": (
-    #             "20km landing ellipse five-fold improvement, Gale Crater wall proximity Mount Sharp, "
-    #             "Yellowknife Bay ancient river and fan system, site selection over 30 Martian locations 100 scientists, "
-    #             "habitability evidence chain"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 10,
-    #     "type": "geological_stream_flow_evidence_limits",
-    #     "question": (
-    #         "In the first weeks after landing, the rock outcrop called Link showed rounded pebbles "
-    #         "mixed with hardened sand in conglomerate rocks, which the team interpreted as evidence "
-    #         "that 'water once coursed vigorously over the surface.' Explain the specific physical "
-    #         "process by which flowing water rounds pebbles, why this visual evidence alone cannot "
-    #         "distinguish between a single catastrophic flood and sustained habitable water flow, "
-    #         "and what additional instrument measurements from Yellowknife Bay's John Klein drill sample "
-    #         "were required to upgrade 'water flowed here' into 'conditions were favorable for microbial life.'"
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 2,
-    #         "position": "Top-left image: rock outcrop called Link showing rounded pebbles in conglomerate rock, with 1cm scale bar"
-    #     },
-    #     "required_context": {
-    #         "pages": [2],
-    #         "focus": (
-    #             "Link rock outcrop rounded pebbles conglomerate, stream flow evidence, "
-    #             "John Klein drill sample habitability evidence: sustained liquid water, "
-    #             "elemental ingredients, chemical energy source, non-acidic non-saline water, "
-    #             "flood vs sustained flow distinction"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 11,
-    #     "type": "radiometric_age_preservation_paradox",
-    #     "question": (
-    #         "The John Klein drill sample measured 4.2 billion years old yet had been exposed at the "
-    #         "Martian surface for only 80 million years — an age gap of approximately 4.12 billion years "
-    #         "of subsurface preservation. Explain why this specific gap is paradoxical given Mars' known "
-    #         "history of impact cratering and surface erosion over the same period, what geological "
-    #         "mechanism must have protected the sample from surface processes for over four billion years, "
-    #         "and why the powdered interior color visible in the drill hole image is itself direct "
-    #         "mineralogical evidence of this preservation state rather than merely a byproduct of drilling."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 2,
-    #         "position": "Bottom-right image: Curiosity's first sample drilling at rock called John Klein showing circular drill hole and surrounding rock surface"
-    #     },
-    #     "required_context": {
-    #         "pages": [2],
-    #         "focus": (
-    #             "John Klein 4.2 billion years old, 80 million years surface exposure, "
-    #             "4.12 billion year preservation gap, Mars erosion and cratering history, "
-    #             "drill powder color mineralogical evidence, first age measurement on another planet"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 12,
-    #     "type": "self_portrait_assembly_mobility_inference",
-    #     "question": (
-    #         "The Curiosity self-portrait was assembled from multiple images taken by the Mars Hand Lens "
-    #         "Imager mounted on the rover's arm — an instrument designed primarily for extreme close-up "
-    #         "photography revealing details smaller than the width of a human hair. Explain the technical "
-    #         "procedure by which a close-range arm-mounted camera produces a full-body self-portrait with "
-    #         "no arm visible in the final composite, what the completed portrait reveals about the rover's "
-    #         "positional mobility across the Martian terrain, and why the same instrument that produces "
-    #         "panoramic self-portraits can also examine textures invisible to the Mast Camera."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 3,
-    #         "position": "Left image: self-portrait of Curiosity assembled from Mars Hand Lens Imager frames showing full rover on Martian surface"
-    #     },
-    #     "required_context": {
-    #         "pages": [3],
-    #         "focus": (
-    #             "Mars Hand Lens Imager arm-mounted close-up camera, details smaller than human hair width, "
-    #             "self-portrait assembly technique, arm absent from final composite, "
-    #             "Mast Camera stereo high-resolution imaging at human-eye height, mobility documentation"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 13,
-    #     "type": "RTG_power_decay_longevity_validation",
-    #     "question": (
-    #         "The multi-mission radioisotope thermoelectric generator produced approximately 110 watts at "
-    #         "launch and was still producing over 100 watts two years after landing — a decline of fewer "
-    #         "than 10 watts across roughly 730 Earth days. Given that plutonium-238 has a half-life of "
-    #         "approximately 87.7 years, explain why the observed sub-10-watt decline is physically consistent "
-    #         "with radioactive decay on this timescale, why this validates the designed operational lifespan "
-    #         "of one full Martian year (687 Earth days) or more, and why the same excess heat that causes "
-    #         "the power decline is simultaneously essential to keeping rover electronics within safe "
-    #         "operating temperatures on the Martian surface."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 3,
-    #         "position": "Left image: Curiosity self-portrait showing RTG protruding at rear of rover"
-    #     },
-    #     "required_context": {
-    #         "pages": [3],
-    #         "focus": (
-    #             "RTG 110W at launch, over 100W two years after landing, plutonium-238 radioactive decay, "
-    #             "687 Earth day Mars year design lifespan, warm fluids thermal plumbing for electronics, "
-    #             "power decline rate validation"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 14,
-    #     "type": "atmospheric_loss_top_down_mechanism",
-    #     "question": (
-    #         "Early in the mission, Curiosity's analysis of Mars' atmospheric composition provided evidence "
-    #         "that the planet lost much of its original atmosphere 'by a process favoring loss from the top "
-    #         "of the atmosphere rather than interaction with the surface.' Explain the physical mechanism "
-    #         "by which atmospheric loss preferentially occurs from the top rather than the bottom, "
-    #         "why this top-down process is specifically linked to Mars losing its global magnetic field, "
-    #         "and why the isotope ratio measurements from the Sample Analysis at Mars instrument suite "
-    #         "are the specific data type that can reconstruct this historical loss process rather than "
-    #         "any imaging or mineralogical instrument."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 2,
-    #         "position": "Top-left image: rock outcrop Link as contextual anchor for early mission surface environment findings"
-    #     },
-    #     "required_context": {
-    #         "pages": [2, 3],
-    #         "focus": (
-    #             "Mars atmospheric loss from top of atmosphere not surface interaction, "
-    #             "Sample Analysis at Mars gas chromatograph mass spectrometer tunable laser spectrometer, "
-    #             "isotope ratios atmosphere and water history clues, magnetic field loss mechanism"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 15,
-    #     "type": "instrument_hierarchy_habitability_proof",
-    #     "question": (
-    #         "Curiosity carries instruments including Sample Analysis at Mars, CheMin X-ray diffraction, "
-    #         "Mars Hand Lens Imager, Alpha Particle X-ray Spectrometer, ChemCam laser spectrometer, "
-    #         "and the Mast Camera. Construct the minimum ordered chain of instruments whose combined "
-    #         "outputs were necessary and sufficient to confirm that Yellowknife Bay's John Klein rock "
-    #         "represented a past habitable environment — explaining why each instrument in your chain "
-    #         "provides a piece of evidence that no other instrument in the suite could substitute for, "
-    #         "and why the Mast Camera alone — despite its stereo high-definition imaging capability — "
-    #         "could never have been the final confirming instrument."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 3,
-    #         "position": "Left image: Curiosity self-portrait showing mast with Mast Camera and ChemCam, arm with MAHLI and APXS, and rear RTG"
-    #     },
-    #     "required_context": {
-    #         "pages": [3],
-    #         "focus": (
-    #             "Sample Analysis at Mars carbon compounds isotopes, CheMin mineral identification quantification, "
-    #             "MAHLI close-up rock texture, APXS elemental abundances, ChemCam laser remote spectroscopy, "
-    #             "Mast Camera stereo color imaging, habitability evidence: sustained water, ingredients, energy source, chemistry"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 16,
-    #     "type": "sky_crane_site_selection_enablement",
-    #     "question": (
-    #         "The sky crane landing system lowered Curiosity upright on a tether in the final seconds of "
-    #         "descent, after S-curve atmospheric maneuvers, parachute deployment, and retrorocket firing "
-    #         "around the rim of the upper stage. This sequence enabled landing within a 20-kilometer ellipse "
-    #         "at 4.6 degrees south latitude, 137.4 degrees east longitude, at minus 4,501 meters elevation. "
-    #         "Explain why landing Curiosity upright on its wheels — rather than using airbag bouncing "
-    #         "as earlier rovers did — was a physical prerequisite for carrying a science payload more than "
-    #         "10 times as massive as Spirit and Opportunity, and how the specific elevation of minus 4,501 "
-    #         "meters at Gale Crater relates to the atmospheric density available for the parachute phase."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 1,
-    #         "position": "Top-right image: Curiosity being lowered by sky crane tether during final landing seconds"
-    #     },
-    #     "required_context": {
-    #         "pages": [1],
-    #         "focus": (
-    #             "Sky crane tether upright landing, S-curve maneuvers, parachute retrorocket sequence, "
-    #             "20km ellipse 4.6S 137.4E minus 4501m elevation, payload 10x heavier than Spirit Opportunity, "
-    #             "airbag limitation for heavy rovers, atmospheric density at elevation"
-    #         )
-    #     }
-    # },
-    #
-    # # ======================
-    # # SECTION 3: HUBBLE (Questions 17-23)
-    # # ======================
-    # {
-    #     "id": 17,
-    #     "type": "hubble_constant_uncertainty_cosmological_consequence",
-    #     "question": (
-    #         "Before Hubble launched, the Hubble constant was so imprecise that the universe's age ranged "
-    #         "from 10 billion to 20 billion years. Hubble observations refined this to 13.8 billion years. "
-    #         "Using Cepheid variable star brightness cycles observed in Andromeda across four dates — "
-    #         "December 17, December 21, December 30, 2010, and January 26, 2011 — combined with Type Ia "
-    #         "supernova standard candles from the 1995 and 2002 Hubble Deep Field comparisons, explain "
-    #         "why a 10-billion-year uncertainty was not merely an age error but a fundamental barrier to "
-    #         "determining whether the universe would expand forever, collapse, or reach equilibrium — "
-    #         "and why each method covers a different rung of the cosmic distance ladder."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 3,
-    #         "position": "Top: four-panel inset time series of Cepheid in Andromeda Dec 2010–Jan 2011; Bottom pair: 1995 and 2002 Hubble Deep Field with supernova arrow"
-    #     },
-    #     "required_context": {
-    #         "pages": [3],
-    #         "focus": (
-    #             "Hubble constant pre-launch imprecision 10–20 billion year range, refined 13.8 billion years, "
-    #             "Cepheid variable cyclical brightness distance measurement, Type Ia supernova characteristic brightness, "
-    #             "dark energy acceleration Nobel Prize 2011, universe fate expansion collapse equilibrium"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 18,
-    #     "type": "ultra_deep_field_galaxy_morphology_evolution",
-    #     "question": (
-    #         "The Hubble Ultra Deep Field required approximately one million seconds of cumulative exposure "
-    #         "time across 11 days to capture. The accompanying sample images show the faintest and farthest "
-    #         "galaxies to be irregularly shaped and frequently interacting. Hubble also predicts with "
-    #         "certainty that the Milky Way and Andromeda — currently 2.5 million light-years apart — "
-    #         "will begin colliding 4 billion years from now. Explain why the deep field galaxies being "
-    #         "irregular and interacting is not a coincidence but a direct consequence of observing the "
-    #         "universe when it was physically smaller, and how the predicted Milky Way-Andromeda collision "
-    #         "is itself an observable instance of the same process frozen in the deep field images."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 4,
-    #         "position": "Left: Hubble Ultra Deep Field full mosaic; Right: sample grid of faintest farthest galaxies showing irregular shapes and interactions"
-    #     },
-    #     "required_context": {
-    #         "pages": [4],
-    #         "focus": (
-    #             "Ultra Deep Field one million seconds 11 days exposure, farthest galaxies irregular frequently interacting, "
-    #             "universe smaller in past galaxies closer more likely to interact, "
-    #             "Andromeda 2.5 million light-years approaching, collision in 4 billion years, "
-    #             "giant elliptical galaxy merger outcome"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 19,
-    #     "type": "europa_ganymede_ocean_evidence_method_difference",
-    #     "question": (
-    #         "Hubble found spectroscopic evidence of oxygen and hydrogen on Europa's surface — the blue "
-    #         "mapped areas — consistent with water vapor plumes erupting from a subsurface ocean, "
-    #         "with recent visual confirmation of those plumes also captured by Hubble. Separately, "
-    #         "Hubble detected a subsurface saltwater ocean on Ganymede — the largest moon in the solar "
-    #         "system — by observing related activity in Ganymede's own auroras, with that ocean estimated "
-    #         "to contain more water than all of Earth's surface water combined. Explain why the aurora-based "
-    #         "evidence for Ganymede's ocean and the spectroscopic plume evidence for Europa's ocean "
-    #         "represent fundamentally different inference chains, and which provides stronger evidence "
-    #         "for a currently liquid subsurface ocean rather than a frozen or historical one."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 9,
-    #         "position": "Bottom-left: Europa globe with blue hydrogen-oxygen spectroscopic evidence areas mapped; Bottom-right: Europa surface showing cracked ice texture from Voyager and Galileo data"
-    #     },
-    #     "required_context": {
-    #         "pages": [8, 9],
-    #         "focus": (
-    #             "Europa spectroscopic oxygen hydrogen blue areas water vapor plumes, visual plume confirmation, "
-    #             "Ganymede saltwater ocean aurora activity evidence, more water than all Earth surface water, "
-    #             "aurora magnetic field liquid conductor inference vs spectroscopic atmospheric composition"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 20,
-    #     "type": "supernova_ring_temporal_sequence_proof",
-    #     "question": (
-    #         "The six-panel sequence of Supernova 1987A spans from September 24, 1994 through December 6, 2006 "
-    #         "and shows spots on the pre-existing ring brightening progressively. The document states the rings "
-    #         "were 'three mysterious rings of material encircling the doomed star' that were revealed by Hubble. "
-    #         "Explain why the spots brighten sequentially around the ring rather than simultaneously, "
-    #         "why the ring was already in place before the 1987 explosion rather than being ejected by it, "
-    #         "and why this specific 12-year observational baseline was the minimum necessary to distinguish "
-    #         "the expanding shockwave hypothesis from the alternative that the brightening was caused by "
-    #         "the light pulse itself illuminating the ring."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 15,
-    #         "position": "Top-left six-panel grid: SN 1987A from Sept 24 1994 through Dec 6 2006 showing progressive spot brightening on ring; Top-right: 1994 single full view"
-    #     },
-    #     "required_context": {
-    #         "pages": [14, 15],
-    #         "focus": (
-    #             "SN 1987A three rings pre-existing around doomed star, expanding shockwave slamming into ring, "
-    #             "progressive spot brightening 1994–2006, shockwave vs direct light illumination distinction, "
-    #             "12-year minimum temporal baseline, light travel time across ring"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 21,
-    #     "type": "planetary_nebula_shape_complexity_white_dwarf_dynamics",
-    #     "question": (
-    #         "Ground-based images suggested that planetary nebulas had simple spherical shapes. "
-    #         "Hubble revealed that their shapes are much more varied: pinwheels, butterflies, hourglasses, "
-    #         "and other complex forms. The 16-image mosaic shows this full morphological range. "
-    #         "Explain why spherical symmetry was the default ground-based assumption given atmospheric "
-    #         "seeing limitations, what physical processes during a Sun-like star's death — specifically the "
-    #         "release of outer gaseous layers before collapse to a white dwarf — cause non-spherical "
-    #         "geometries, and why an hourglass shape specifically implies a binary companion star "
-    #         "rather than a solitary stellar death."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 14,
-    #         "position": "Bottom: 4x4 mosaic of sixteen planetary nebulas showing pinwheel, butterfly, hourglass, ring, and complex asymmetric morphologies"
-    #     },
-    #     "required_context": {
-    #         "pages": [14],
-    #         "focus": (
-    #             "Planetary nebulas ground-based spherical assumption, Hubble revealed varied complex shapes, "
-    #             "pinwheels butterflies hourglasses, outer gaseous layer release before white dwarf collapse, "
-    #             "binary companion star hourglass mechanism, atmospheric seeing limitation on ground"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 22,
-    #     "type": "dark_matter_filament_arc_reverse_engineering",
-    #     "question": (
-    #         "The visible-light image of cluster Cl 0024+17 shows blue arcs among yellowish galaxies, "
-    #         "while the blue overlay reconstructs the dark matter density required to account for those "
-    #         "distortions. The universe is estimated to contain approximately five times more dark matter "
-    #         "than regular matter, organized around an immense network of filaments with galaxy clusters "
-    #         "at intersections. Explain the specific mathematical steps by which arc curvature and "
-    #         "angular position in the camera image uniquely constrain the three-dimensional dark matter "
-    #         "distribution — rather than just total cluster mass — and why dark matter's inability to "
-    #         "emit, absorb, or reflect electromagnetic radiation makes the gravitational lensing arc "
-    #         "method the only currently viable technique for mapping its structure."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 6,
-    #         "position": "Bottom pair: visible-light image of Cl 0024+17 with elongated blue arcs among yellowish cluster galaxies, and blue dark-matter-density overlay on same cluster"
-    #     },
-    #     "required_context": {
-    #         "pages": [6],
-    #         "focus": (
-    #             "Gravitational lensing arc distortion mathematics reverse engineering, Cl 0024+17 blue arcs, "
-    #             "dark matter 5x normal matter ratio, filament network galaxy clusters at intersections, "
-    #             "no electromagnetic interaction dark matter, lensing as only mapping technique"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 23,
-    #     "type": "protoplanetary_disk_gap_planet_inference",
-    #     "question": (
-    #         "Using a coronagraphic mask to block the star TW Hydrae's light, Hubble identified a gap "
-    #         "1.9 billion miles wide in the surrounding protoplanetary disk of gas and dust — attributed "
-    #         "to an unseen growing planet gravitationally sweeping material like a snowplow. Separately, "
-    #         "Hubble resolved protoplanetary disks around nearly 200 stars in the Orion Nebula, visible "
-    #         "as silhouettes illuminated from behind. Explain why a gap in a disk is stronger evidence "
-    #         "for a forming planet than a brightness variation, why the gap being 'not yet completely "
-    #         "cleared of material' is a more informative finding than a fully cleared gap would be, "
-    #         "and what the 1997-to-2012 Beta Pictoris disk comparison images reveal about the "
-    #         "timescale on which a massive embedded planet reshapes its disk."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 17,
-    #         "position": "Bottom pair: Hubble image and illustration of TW Hydrae disk with dark gap ring; Top-right: sample Orion Nebula protoplanetary disk silhouettes; Middle pair: Beta Pictoris edge-on disk in 1997 and 2012"
-    #     },
-    #     "required_context": {
-    #         "pages": [17],
-    #         "focus": (
-    #             "TW Hydrae protoplanetary disk gap 1.9 billion miles wide coronagraphic mask, "
-    #             "unseen planet gravitationally sweeping material, gap not fully cleared, "
-    #             "Orion Nebula 200 disk silhouettes, Beta Pictoris 1997 and 2012 disk changes, "
-    #             "embedded massive planet disk reshaping timescale"
-    #         )
-    #     }
-    # },
-    #
-    # # ======================
-    # # SECTION 4: CROSS-DOCUMENT SYNTHESIS (Questions 24-25)
-    # # ======================
-    # {
-    #     "id": 24,
-    #     "type": "cross_doc_power_philosophy_mission_duration",
-    #     "question": (
-    #         "Voyager 1 permanently shut off its cameras on February 14, 1990 — more than 12 years into "
-    #         "the mission and after capturing the Family Portrait from 6 billion kilometers — to conserve "
-    #         "power, with both spacecraft projected to function only until approximately 2025. "
-    #         "Curiosity's radioisotope generator was engineered to deliver over 100 watts continuously "
-    #         "across at least 687 Earth days, with warm fluids plumbed throughout the rover to maintain "
-    #         "electronics at safe temperatures. Hubble has taken over one million observations across "
-    #         "more than three decades, with six Space Shuttle servicing missions replacing and upgrading "
-    #         "instruments to keep it state-of-the-art. "
-    #         "These three missions represent three distinct philosophies of engineering for longevity. "
-    #         "Analyze what each philosophy reveals about its mission's relationship to irreplaceability, "
-    #         "and whether the Family Portrait — a backward-looking final act — could have been "
-    #         "planned from the beginning or required the constraint of imminent shutdown to be meaningful."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 4,
-    #         "position": "Bottom image: Voyager 1 Family Portrait mosaic, February 14, 1990, 6 billion km — cameras permanently shut down shortly after"
-    #     },
-    #     "required_context": {
-    #         "pages": [4, 3, 2],
-    #         "focus": (
-    #             "Voyager camera shutdown February 14 1990 power conservation, 2025 operational projection, "
-    #             "Curiosity RTG 110W→100W sustained warm fluid thermal plumbing 687 day lifespan, "
-    #             "Hubble six servicing missions one million observations 30 years, "
-    #             "three longevity philosophies: expendable, sustained isotope, serviceable orbital"
-    #         )
-    #     }
-    # },
-    # {
-    #     "id": 25,
-    #     "type": "cross_doc_habitability_evidence_hierarchy_three_missions",
-    #     "question": (
-    #         "Voyager imaged Europa's geologically young ice surface 'possibly floating on an ocean of "
-    #         "liquid water.' Hubble later mapped spectroscopic evidence of oxygen and hydrogen on Europa "
-    #         "and detected water vapor plumes, while also finding Ganymede's aurora implies a subsurface "
-    #         "saltwater ocean with more water than all of Earth's surface combined. Curiosity drilled "
-    #         "the John Klein rock and found geological and mineralogical evidence for 'sustained liquid "
-    #         "water, key elemental ingredients for life, a chemical energy source, and water not too "
-    #         "acidic or too salty' — 4.2 billion years ago. "
-    #         "Rank these four pieces of evidence by their proximity to confirming the existence of "
-    #         "current extant life rather than past or possible habitability. Justify each rank by "
-    #         "identifying the specific evidentiary gap between what was measured and what extant life "
-    #         "requires — and explain why the mission with the most direct physical contact with its "
-    #         "target produced confirmed past habitability while the missions relying on remote sensing "
-    #         "produced only probable or possible present liquid water."
-    #     ),
-    #     "expected_images": True,
-    #     "image_reference": {
-    #         "page": 3,
-    #         "position": "Left montage: Jupiter and its four largest moons including Europa — Voyager basis for ice surface and possible ocean claim"
-    #     },
-    #     "required_context": {
-    #         "pages": [3, 2, 8, 9],
-    #         "focus": (
-    #             "Europa ice surface possibly on liquid water ocean (Voyager), "
-    #             "Europa spectroscopic oxygen hydrogen plumes (Hubble), "
-    #             "Ganymede saltwater ocean aurora evidence more water than Earth surface (Hubble), "
-    #             "John Klein drill sustained liquid water elemental ingredients chemical energy non-acidic (Curiosity), "
-    #             "remote sensing vs in-situ contact evidence hierarchy, extant vs past life distinction"
-    #         )
-    #     }
-    # },
+        "id": 10,
+        "intended_mode": "hybrid",
+        "source_document": "mars-science-laboratory.pdf",
+        "question": "Curiosity's self-portrait assembled from MAHLI images is shown in the document. Using the image to assess what the composite reveals about rover configuration and condition, and the technical text describing MAHLI's capabilities and arm placement, explain why this imaging method provides more diagnostic value for mission engineers than a single wide-angle shot from a fixed camera would.",
+        "ground_truth_answer": "The self-portrait shows the full rover body, mast, arm, and wheel configuration in a composite assembled from many close-range images. The text states MAHLI is the Mars Hand Lens Imager mounted on the robotic arm, capable of taking extreme close-up images revealing details smaller than a human hair, and that it can focus on hard-to-reach objects more than an arm's length away. Because the arm repositions the camera at multiple locations and angles, the resulting mosaic provides overlapping, close-range coverage of surfaces that a fixed wide-angle camera would capture only at low resolution and from a single viewpoint. For engineers, this means dust accumulation on solar panel analogs, wheel wear patterns, hardware surface changes, and instrument condition can all be assessed at sub-millimeter detail in routine imaging without requiring dedicated inspection hardware. The method also confirms arm articulation health implicitly \u2014 a successful multi-position mosaic is itself evidence of normal arm function.",
+        "required_pages": [
+            3
+        ],
+        "required_image": "Curiosity self-portrait assembled from MAHLI images",
+        "required_entities": [
+            "MAHLI",
+            "robotic arm",
+            "mosaic",
+            "self-portrait",
+            "close-up",
+            "arm articulation",
+            "diagnostic",
+            "composite"
+        ],
+        "difficulty": "hard"
+    }
 ]
-
 
 # # METRICS
 
@@ -3202,6 +2629,194 @@ def compute_context_length(formatted_output: List[Dict]) -> float:
     print(f"     └─ Min: {min(lengths)}, Max: {max(lengths)}")
     print(f"{'─'*60}")
     return avg
+
+
+# In[100]:
+
+
+# M10 (BLEU)
+def compute_bleu(per_query_results: List[Dict], k: int = 5) -> float:
+    """
+    M10: BLEU between generated response and retrieved context.
+    """
+    scores = []
+    skipped = 0
+    try:
+        from nltk.translate.bleu_score import sentence_bleu
+        import warnings
+    except ImportError:
+        print("  [Warning] nltk not installed. Returning 0.")
+        return 0.0
+
+    for item in per_query_results:
+        response_text = item.get("response_text", "").strip()
+        reference_text = _get_reference_text(item, top_k_chunks=k)
+        if not response_text or not reference_text:
+            skipped += 1
+            continue
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                score = sentence_bleu([reference_text.split()], response_text.split())
+            scores.append(score)
+        except Exception as e:
+            print(f"  M10 calculation failed: {e}")
+            skipped += 1
+            
+    avg_score = statistics.mean(scores) if scores else 0.0
+    print(f"\n  {'─'*60}")
+    print(f"  M10 BLEU: {avg_score:.4f}")
+    print(f"       Evaluated: {len(scores)}, Skipped: {skipped}")
+    print(f"{'─'*60}")
+    return avg_score
+
+
+# In[101]:
+
+
+# M11 (METEOR)
+def compute_meteor(per_query_results: List[Dict], k: int = 5) -> float:
+    """
+    M11: METEOR Score using NLTK.
+    """
+    scores = []
+    skipped = 0
+    try:
+        import nltk
+        nltk.download('wordnet', quiet=True)
+        from nltk.translate.meteor_score import meteor_score
+    except ImportError:
+        print("  [Warning] nltk not installed. Returning 0.")
+        return 0.0
+
+    for item in per_query_results:
+        response_text = item.get("response_text", "").strip()
+        reference_text = _get_reference_text(item, top_k_chunks=k)
+        if not response_text or not reference_text:
+            skipped += 1
+            continue
+        try:
+            score = meteor_score([reference_text.split()], response_text.split())
+            scores.append(score)
+        except Exception as e:
+            print(f"  M11 calculation failed: {e}")
+            skipped += 1
+            
+    avg_score = statistics.mean(scores) if scores else 0.0
+    print(f"\n  {'─'*60}")
+    print(f"  M11 METEOR: {avg_score:.4f}")
+    print(f"       Evaluated: {len(scores)}, Skipped: {skipped}")
+    print(f"{'─'*60}")
+    return avg_score
+
+
+# In[102]:
+
+
+# M12 (BERTScore)
+def compute_bertscore(per_query_results: List[Dict], k: int = 5) -> float:
+    """
+    M12: BERTScore (F1)
+    """
+    scores = []
+    skipped = 0
+    try:
+        from bert_score import score as bert_score_fn
+    except ImportError:
+        print("  [Warning] bert_score not installed. Please `pip install bert-score`")
+        return 0.0
+        
+    for item in per_query_results:
+        response_text = item.get("response_text", "").strip()
+        reference_text = _get_reference_text(item, top_k_chunks=k)
+        if not response_text or not reference_text:
+            skipped += 1
+            continue
+        try:
+            _, _, F1 = bert_score_fn([response_text], [reference_text], lang="en", verbose=False)
+            scores.append(F1.item())
+        except Exception as e:
+            print(f"  M12 calculation failed: {e}")
+            skipped += 1
+            
+    avg_score = statistics.mean(scores) if scores else 0.0
+    print(f"\n  {'─'*60}")
+    print(f"  M12 BERTScore (F1): {avg_score:.4f}")
+    print(f"       Evaluated: {len(scores)}, Skipped: {skipped}")
+    print(f"{'─'*60}")
+    return avg_score
+
+
+# In[103]:
+
+
+# M13 (Factual Consistency FCD)
+def compute_fcd(per_query_results: List[Dict], k: int = 5) -> float:
+    """
+    M13: Factual Consistency - Grounding score vs context. Lower is better.
+    """
+    scores = []
+    skipped = 0
+    try:
+        from bert_score import score as bert_score_fn
+    except ImportError:
+        print("  [Warning] bert_score not installed for FCD. Returning 0.")
+        return 0.0
+        
+    for item in per_query_results:
+        response_text = item.get("response_text", "").strip()
+        reference_text = _get_reference_text(item, top_k_chunks=k)
+        if not response_text or not reference_text:
+            skipped += 1
+            continue
+        try:
+            _, _, F1 = bert_score_fn([response_text], [reference_text], lang="en", verbose=False)
+            fcd = (1.0 - F1.item()) * 100
+            scores.append(fcd)
+        except Exception as e:
+            print(f"  M13 calculation failed: {e}")
+            skipped += 1
+            
+    avg_score = statistics.mean(scores) if scores else 0.0
+    print(f"\n  {'─'*60}")
+    print(f"  M13 Factual Consistency (FCD): {avg_score:.2f}")
+    print(f"       Evaluated: {len(scores)}, Skipped: {skipped}")
+    print(f"{'─'*60}")
+    return avg_score
+
+
+# In[104]:
+
+
+# M14 (Faithfulness)
+def compute_faithfulness(per_query_results: List[Dict]) -> float:
+    """
+    M14: Faithfulness - % of chunks effectively used.
+    """
+    scores = []
+    skipped = 0
+    for item in per_query_results:
+        response_text = item.get("response_text", "").strip().lower()
+        chunks = item.get("result", {}).get("text_results", {}).get("documents", [[]])[0]
+        
+        if not response_text or not chunks:
+            skipped += 1
+            continue
+            
+        chunks_used = 0
+        for chunk in chunks:
+            chunk_tokens = set(chunk.lower().split())
+            ans_tokens = set(response_text.split())
+            if chunk_tokens and len(chunk_tokens.intersection(ans_tokens)) > 3:
+                chunks_used += 1
+        scores.append((chunks_used / len(chunks)) * 100 if chunks else 0.0)
+    
+    avg_score = statistics.mean(scores) if scores else 0.0
+    print(f"\n  {'─'*60}")
+    print(f"  M14 Faithfulness: {avg_score:.2f}%")
+    print(f"       Evaluated: {len(scores)}, Skipped: {skipped}")
+    print(f"{'─'*60}")
+    return avg_score
 
 
 # In[58]:
@@ -3753,6 +3368,53 @@ def export_results_to_pdf(results, model_name: str, metrics_summary: dict, outpu
 # In[73]:
 
 
+
+# In[105]:
+
+
+# M20 (Answer Relevance via Cosine Similarity of Embeddings)
+def compute_answer_relevance(per_query_results: List[Dict], test_questions: List[Dict], text_embedder) -> float:
+    """
+    M20: Computes embedding-based cosine similarity between the LLM's generated response
+    and the original Ground Truth Answer using the provided TextEmbeddingModel.
+    """
+    import numpy as np
+    scores = []
+    skipped = 0
+    for item in per_query_results:
+        query = item.get("query", "").strip()
+        ans = item.get("response_text", "").strip()
+        
+        # Locate corresponding ground truth
+        gt = ""
+        for q in test_questions:
+            if q.get("question", "").strip() == query:
+                gt = q.get("ground_truth_answer", "").strip()
+                break
+                
+        if not ans or not gt:
+            skipped += 1
+            continue
+            
+        try:
+            # Embed both answers directly using the model
+            emb_ans = text_embedder.embed_query(ans)
+            emb_gt = text_embedder.embed_query(gt)
+            
+            # calculate cosine similarity
+            sim = np.dot(emb_ans, emb_gt) / (np.linalg.norm(emb_ans) * np.linalg.norm(emb_gt))
+            scores.append(float(sim))
+        except Exception as e:
+            print(f"  M20 calculation failed: {e}")
+            skipped += 1
+            
+    avg_score = statistics.mean(scores) if scores else 0.0
+    print(f"\n  {'─'*60}")
+    print(f"  M20 Answer Relevance (Similarity): {avg_score:.4f}")
+    print(f"       Evaluated: {len(scores)}, Skipped: {skipped}")
+    print(f"{'─'*60}")
+    return avg_score
+
 def main(test_questions):
     cfg.validate()
     print("\n" + "="*100)
@@ -3774,116 +3436,109 @@ def main(test_questions):
     text_db.add_documents(chunks, text_embeddings)
     image_db.add_documents(image_objects, image_embeddings)
 
-    print("\n" + "="*100)
-    print("PHASE 3: RETRIEVAL SETUP")
-    print("="*100)
-    retriever = RetrievalRag(image_embedder=image_embedder, text_embedder=text_embedder, image_vectordb=image_db, text_vectordb=text_db, use_hybrid=cfg.use_hybrid, adaptive_weighting=cfg.adaptive_weighting, score_fusion=cfg.score_fusion, use_reranker=cfg.use_reranker, bm25_weight=cfg.bm25_weight, semantic_weight=cfg.semantic_weight)
-    is_hybrid = retriever.use_hybrid
     formatter = ContextFormatter(max_text_chunks=cfg.max_text_chunks, max_images=cfg.max_images, text_distance_threshold=cfg.text_distance_threshold, image_distance_threshold=cfg.image_distance_threshold, use_percentile_filtering=True, percentile_cutoff=cfg.percentile_cutoff)
-    models = [cfg.llm_model]
 
-    for model_name in models:
-        print("\n" + "="*100)
-        print(f"PHASE 4: EVALUATING MODEL - {model_name}")
-        print("="*100)
-        llm = LocalLLM(model_name=model_name, text_embedder=text_embedder)
-        formatted_output, retrieval_times, cosine_sims_text, cosine_sims_image, retrieval_for_m5, raw_retrieval_results = [], [], [], [], [], []
-        print(f"\n  Retrieving context for {len(test_questions)} questions...")
-        for q in test_questions:
-            start = time.perf_counter()
-            out = retriever.retrieve(q["question"], text_k=cfg.text_k, image_k=cfg.image_k, rerank_k=cfg.rerank_k)
-            retrieval_times.append(time.perf_counter() - start)
-            cosine_sims_text.append(out.cosine_sim_text)
-            cosine_sims_image.append(out.cosine_sim_image)
-            legacy_result = out.to_legacy_dict()
-            formatted = formatter.format(legacy_result)
-            formatted["query"] = q["question"]
-            formatted_output.append(formatted)
-            retrieval_for_m5.append({"id": q.get("id"), "result": legacy_result})
-            raw_retrieval_results.append({"id": q.get("id"), "query": q["question"], "result": legacy_result})
+    models_to_test = ["ministral-3:3b", "gemma4:e2b"]
+    retrieval_modes = [(False, "Semantic"), (True, "Hybrid")]
 
-        per_query_results = llm_response(llm=llm, formatted_output=formatted_output, test_questions=test_questions, stream=True)
+    comparison_results = []
 
-        print("\n" + "="*100)
-        print("PHASE 5: CALCULATING METRICS")
-        print("="*100)
+    for model_name in models_to_test:
+        for use_hybrid, mode_name in retrieval_modes:
+            print(f"\n{'*'*100}")
+            print(f"RUNNING EXP: Model={model_name} | Retrieval={mode_name}")
+            print(f"{'*'*100}")
 
-        metrics_summary = {}
+            cfg.use_hybrid = use_hybrid
+            retriever = RetrievalRag(
+                image_embedder=image_embedder, text_embedder=text_embedder, 
+                image_vectordb=image_db, text_vectordb=text_db, 
+                use_hybrid=cfg.use_hybrid, adaptive_weighting=cfg.adaptive_weighting, 
+                score_fusion=cfg.score_fusion, use_reranker=cfg.use_reranker, 
+                bm25_weight=cfg.bm25_weight, semantic_weight=cfg.semantic_weight
+            )
 
-        metrics_summary["m1_embedding_time"] = compute_embedding_time(text_time, image_time)
-        metrics_summary["m2_index_size"] = compute_index_size(text_db, image_db)
-        metrics_summary["m3_retrieval_latency"] = compute_retrieval_latency(retrieval_times)
-        metrics_summary["m4_cosine_similarity"] = compute_cosine_similarity(cosine_sims_text, label="M4 Cosine Similarity (Text)")
-        metrics_summary["m4_cosine_similarity_image"] = compute_cosine_similarity(cosine_sims_image, label="M4 Cosine Similarity (Image)")
-        metrics_summary["m5_top_k_accuracy"] = compute_top_k_accuracy(retrieval_for_m5, test_questions, k=cfg.top_k_accuracy_k)
-        metrics_summary["m6_rouge1"] = compute_rouge1(per_query_results, k=cfg.rouge_top_k_chunks)
-        metrics_summary["m7_rouge2"] = compute_rouge2(per_query_results, k=cfg.rouge_top_k_chunks)
-        metrics_summary["m8_rougeL"] = compute_rougeL(per_query_results, k=cfg.rouge_top_k_chunks)
-        metrics_summary["m15_context_coverage"] = compute_context_coverage(per_query_results)
-        metrics_summary["m9_context_length"] = compute_context_length(formatted_output)
-        metrics_summary["m16_e2e_latency"] = compute_e2e_latency(per_query_results)
-        metrics_summary["m17_throughput"] = compute_throughput(per_query_results)
-        metrics_summary["m18_cpu_usage"] = compute_cpu_usage(per_query_results)
-        metrics_summary["m19_ram_usage"] = compute_ram_usage(per_query_results)
-        metrics_summary["gpu_usage"] = compute_gpu_usage(per_query_results)
+            llm = LocalLLM(model_name=model_name, text_embedder=text_embedder)
+            formatted_output, retrieval_times, cosine_sims_text, cosine_sims_image, retrieval_for_m5, raw_retrieval_results = [], [], [], [], [], []
 
-        if is_hybrid:
-            hybrid_stats = compute_hybrid_stats(raw_retrieval_results)
-            fusion_signal = compute_fusion_effectiveness(raw_retrieval_results)
-            metrics_summary["hybrid"] = hybrid_stats
-            metrics_summary["fusion_signal_agreement"] = fusion_signal
-        else:
-            hybrid_stats = None
-            fusion_signal = None
+            print(f"\n  Retrieving context for {len(test_questions)} questions...")
+            for q in test_questions:
+                start = time.perf_counter()
+                out = retriever.retrieve(q["question"], text_k=cfg.text_k, image_k=cfg.image_k, rerank_k=cfg.rerank_k)
+                retrieval_times.append(time.perf_counter() - start)
+                cosine_sims_text.append(out.cosine_sim_text)
+                cosine_sims_image.append(out.cosine_sim_image)
+                legacy_result = out.to_legacy_dict()
+                formatted = formatter.format(legacy_result)
+                formatted["query"] = q["question"]
+                formatted_output.append(formatted)
+                retrieval_for_m5.append({"id": q.get("id"), "result": legacy_result})
+                raw_retrieval_results.append({"id": q.get("id"), "query": q["question"], "result": legacy_result})
 
-        print("\n" + "="*100)
-        print("PHASE 6: FINAL METRICS SUMMARY")
-        print("="*100)
-        print(f"\n  ┌{'─'*58}┐")
-        print(f"  │{'METRIC':<30}│{'VALUE':>26}│")
-        print(f"  ├{'─'*58}┤")
-        print(f"  │{'EFFICIENCY':^56}│")
-        print(f"  │{'M1 Embedding Time':<30}│{metrics_summary['m1_embedding_time']:>24.4f} s│")
-        print(f"  │{'M2 Index Size':<30}│{metrics_summary['m2_index_size']:>26}│")
-        print(f"  │{'RETRIEVAL QUALITY':^56}│")
-        print(f"  │{'M3 Retrieval Latency':<30}│{metrics_summary['m3_retrieval_latency']:>24.4f} s│")
-        print(f"  │{'M4 Cosine Sim (Text)':<30}│{metrics_summary['m4_cosine_similarity']:>26.4f}│")
-        print(f"  │{'M4 Cosine Sim (Image)':<30}│{metrics_summary['m4_cosine_similarity_image']:>26.4f}│")
-        print(f"  │{'M5 Page Coverage@k':<30}│{metrics_summary['m5_top_k_accuracy']:>25.2f} %│")
-        print(f"  │{'GENERATION QUALITY':^56}│")
-        print(f"  │{'M6 ROUGE-1':<30}│{metrics_summary['m6_rouge1']:>26.4f}│")
-        print(f"  │{'M7 ROUGE-2':<30}│{metrics_summary['m7_rouge2']:>26.4f}│")
-        print(f"  │{'M8 ROUGE-L':<30}│{metrics_summary['m8_rougeL']:>26.4f}│")
-        print(f"  │{'M15 Context Utilization':<30}│{metrics_summary['m15_context_coverage']:>25.2f} %│")
-        print(f"  │{'CONTEXT & PERFORMANCE':^56}│")
-        print(f"  │{'M9 Context Length':<30}│{metrics_summary['m9_context_length']:>23.2f} ch│")
-        print(f"  │{'M16 E2E Latency':<30}│{metrics_summary['m16_e2e_latency']:>24.4f} s│")
-        print(f"  │{'M17 Throughput':<30}│{metrics_summary['m17_throughput']:>25.3f} q/s│")
-        print(f"  │{'M18 CPU Usage':<30}│{metrics_summary['m18_cpu_usage']:>25.2f} %│")
-        print(f"  │{'M19 RAM Usage':<30}│{metrics_summary['m19_ram_usage']:>24.3f} GB│")
-        print(f"  │{'GPU Usage':<30}│{metrics_summary['gpu_usage']:>25.2f} %│")
-        print(f"  └{'─'*58}┘")
-        if is_hybrid:
-            print_hybrid_metrics_summary(hybrid_stats)
-            print(f"\n  {'─'*78}")
-            print(f"  {'FUSION SIGNAL AGREEMENT':^76}")
-            print(f"  {'─'*78}")
-            print(f"  {'Avg mixed-signal support:':<50} {fusion_signal['avg_signal_agreement']:.1f}%")
-            print(f"  {'Queries with >30% mixed support:':<50} {fusion_signal['mixed_signal_queries']}")
-            print(f"  {'Agreement std dev:':<50} {fusion_signal['agreement_std']:.2f}")
-            print(f"  {'─'*78}")
-        else:
-            print(f"\n  {'─'*78}")
-            print(f"  {'HYBRID SEARCH':^76}")
-            print(f"  {'─'*78}")
-            print(f"  {'Status:':<50} Disabled (Semantic Only)")
-            print(f"  {'─'*78}")
+            per_query_results = llm_response(llm=llm, formatted_output=formatted_output, test_questions=test_questions, stream=False)
 
-        print("\n" + "="*100)
-        print("PHASE 7: EXPORTING RESULTS")
-        print("="*100)
-        export_retrieved_results_to_pdf(formatted_output=formatted_output, output_dir=cfg.retrieval_results_dir)
-        export_results_to_pdf(results=per_query_results, model_name=model_name, metrics_summary=metrics_summary, output_dir=cfg.results_dir)
+            metrics_summary = {}
+            metrics_summary["m1_embedding_time"] = compute_embedding_time(text_time, image_time)
+            metrics_summary["m2_index_size"] = compute_index_size(text_db, image_db)
+            metrics_summary["m3_retrieval_latency"] = compute_retrieval_latency(retrieval_times)
+            metrics_summary["m4_cosine_similarity"] = compute_cosine_similarity(cosine_sims_text, label="M4 Cosine Similarity (Text)")
+            metrics_summary["m4_cosine_similarity_image"] = compute_cosine_similarity(cosine_sims_image, label="M4 Cosine Similarity (Image)")
+            metrics_summary["m5_top_k_accuracy"] = compute_top_k_accuracy(retrieval_for_m5, test_questions, k=cfg.top_k_accuracy_k)
+            metrics_summary["m6_rouge1"] = compute_rouge1(per_query_results, k=cfg.rouge_top_k_chunks)
+            metrics_summary["m7_rouge2"] = compute_rouge2(per_query_results, k=cfg.rouge_top_k_chunks)
+            metrics_summary["m8_rougeL"] = compute_rougeL(per_query_results, k=cfg.rouge_top_k_chunks)
+            
+            metrics_summary["m10_bleu"] = compute_bleu(per_query_results, k=cfg.rouge_top_k_chunks)
+            metrics_summary["m11_meteor"] = compute_meteor(per_query_results, k=cfg.rouge_top_k_chunks)
+            metrics_summary["m12_bertscore"] = compute_bertscore(per_query_results, k=cfg.rouge_top_k_chunks)
+            metrics_summary["m13_fcd"] = compute_fcd(per_query_results, k=cfg.rouge_top_k_chunks)
+            metrics_summary["m14_faithfulness"] = compute_faithfulness(per_query_results)
+
+            metrics_summary["m15_context_coverage"] = compute_context_coverage(per_query_results)
+            metrics_summary["m9_context_length"] = compute_context_length(formatted_output)
+            metrics_summary["m16_e2e_latency"] = compute_e2e_latency(per_query_results)
+            metrics_summary["m17_throughput"] = compute_throughput(per_query_results)
+            metrics_summary["m18_cpu_usage"] = compute_cpu_usage(per_query_results)
+            metrics_summary["m19_ram_usage"] = compute_ram_usage(per_query_results)
+            metrics_summary["m20_answer_relevance"] = compute_answer_relevance(per_query_results, test_questions, text_embedder)
+            metrics_summary["gpu_usage"] = compute_gpu_usage(per_query_results)
+
+            # Store for final comparison
+            metrics_summary["Model"] = model_name
+            metrics_summary["Mode"] = mode_name
+            comparison_results.append(metrics_summary)
+
+    print("\n" + "="*100)
+    print("FINAL COMPARISON TABLE")
+    print("="*100)
+    try:
+        import pandas as pd
+        df = pd.DataFrame(comparison_results)
+        # Select and format all 20 metrics plus Model and Mode!
+        cols = [
+            'Model', 'Mode', 
+            'm1_embedding_time', 'm2_index_size', 'm3_retrieval_latency', 
+            'm4_cosine_similarity', 'm4_cosine_similarity_image', 'm5_top_k_accuracy',
+            'm6_rouge1', 'm7_rouge2', 'm8_rougeL', 'm9_context_length',
+            'm10_bleu', 'm11_meteor', 'm12_bertscore', 'm13_fcd',
+            'm14_faithfulness', 'm15_context_coverage', 'm16_e2e_latency',
+            'm17_throughput', 'm18_cpu_usage', 'm19_ram_usage', 'm20_answer_relevance'
+        ]
+        # Keep only columns that actually exist in the dataframe to prevent KeyError
+        valid_cols = [c for c in cols if c in df.columns]
+        
+        # Make the dataframe display nicely
+        formatted_df = df[valid_cols].copy()
+        
+        # Attempt to format numerics strictly so the markdown table doesn't get utterly destroyed
+        for col in valid_cols[2:]:
+            formatted_df[col] = formatted_df[col].apply(lambda x: f"{x:.4f}" if isinstance(x, float) else x)
+            
+        print(formatted_df.to_markdown(index=False))
+    except ImportError:
+        print("Pandas/Tabulate not installed to format table properly.")
+        for r in comparison_results:
+            print(f"| {r['Model']} | {r['Mode']} | Acc: {r['m5_top_k_accuracy']:.2f} | ROUGE-L: {r['m8_rougeL']:.4f} | BLEU: {r['m10_bleu']:.4f} | BERTScore: {r['m12_bertscore']:.4f} | FCD: {r['m13_fcd']:.2f} | Faith: {r['m14_faithfulness']:.2f} | Latency: {r['m16_e2e_latency']:.2f}s | Throughput: {r['m17_throughput']:.2f}q/s |")
 
     print("\n" + "="*100)
     print("PIPELINE COMPLETED SUCCESSFULLY")
