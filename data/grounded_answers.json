@@ -1,0 +1,166 @@
+{
+  "dataset_name": "multimodal_rag_hard_benchmark_v2",
+  "version": "v2",
+  "source_pdf": [
+    "Voyager Grand Tour PDF.pdf",
+    "mars-science-laboratory.pdf",
+    "highlights_of_hubbles_exploration_of_the_universe.pdf"
+  ],
+  "notes": "Redesigned benchmark. All questions require joint text + image evidence. First 7 are semantic-focused, next 7 are hybrid-focused. Image retrieval is mandatory, not optional, for full credit on every question.",
+  "questions": [
+    {
+      "id": 1,
+      "intended_mode": "semantic",
+      "source_document": "Voyager Grand Tour PDF.pdf",
+      "question": "The trajectory diagram of Voyager 1 and Voyager 2 shows clearly diverging paths after Saturn. Using both the trajectory image and the mission text, explain why the two paths diverge at that point, and what specific orbital geometry decision made Voyager 1's post-Saturn path irrecoverable for further planetary encounters.",
+      "ground_truth_answer": "The trajectory diagram shows Voyager 1's path bending sharply away from the ecliptic plane after Saturn while Voyager 2 continues along a shallower arc toward Uranus and Neptune. The text explains this divergence was caused by Voyager 1's close flyby of Titan, coming within 4,000 miles of its surface. That encounter changed Voyager 1's trajectory such that it could not make any further planetary encounters, sending it out of the solar system. Voyager 2 used a different Saturn geometry — a closest approach at 63,000 miles versus Voyager 1's 77,000 miles — that preserved the gravitational slingshot angle needed for the Uranus and Neptune legs. The diagram makes the irreversibility visually concrete: the labeled date nodes on Voyager 2's path continue to Jan 24, 1986 (Uranus) and Aug 25, 1989 (Neptune), while Voyager 1's path terminates its planetary arc at Saturn Nov 12, 1980.",
+      "required_pages": [1, 3],
+      "required_image": "Voyager 1 and 2 trajectory diagram showing diverging paths through outer solar system",
+      "required_entities": ["trajectory diagram", "Titan", "Voyager 1", "Voyager 2", "Saturn", "Uranus", "Neptune", "4,000 miles"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 2,
+      "intended_mode": "semantic",
+      "source_document": "Voyager Grand Tour PDF.pdf",
+      "question": "The Earth-Moon photograph taken by Voyager 1 is described as the first single-frame image of both bodies together. Using the image itself and the surrounding mission text, explain what engineering and operational conditions had to be simultaneously satisfied to produce it, and why this milestone was considered a meaningful preview of capabilities rather than merely a publicity photograph.",
+      "ground_truth_answer": "The image shows both Earth and the Moon captured together in a single frame from 7.25 million miles, taken just 13 days after launch on September 18, 1977. To produce it, the camera had to achieve stable long-range pointing at two objects separated by significant angular distance, frame both within a single exposure without saturating on Earth's brightness, and do so while the spacecraft was still in early operational checkout. The text describes it as the first of Voyager 1's many firsts, framing it as a sneak preview of the discoveries ahead. The engineering significance is that it validated the imaging system's ability to handle multi-body framing at interplanetary distances under real flight conditions, not just in laboratory testing. For mission planners, a camera that could jointly frame Earth and Moon from 7.25 million miles had clearly demonstrated the pointing precision and dynamic range that would be needed to image moons near giant planets from comparable or greater distances during the actual science campaign.",
+      "required_pages": [2],
+      "required_image": "First photograph of Earth-Moon system in a single frame taken by Voyager 1",
+      "required_entities": ["Earth-Moon", "single frame", "7.25 million miles", "13 days", "September 18 1977", "pointing precision"],
+      "difficulty": "hard"
+    },
+    {
+      "id": 3,
+      "intended_mode": "semantic",
+      "source_document": "mars-science-laboratory.pdf",
+      "question": "Curiosity's Sky Crane landing image and the text description of the landing sequence together tell a more complete story than either alone. Using both the image of the sky crane lowering Curiosity and the technical description of the EDL sequence, explain why the sky crane approach was necessary rather than airbag-based landing used by earlier rovers, and what physical constraints of the crater site made this the only viable solution.",
+      "ground_truth_answer": "The image shows Curiosity being lowered on a tether from the upper sky crane stage to land wheels-down on the Martian surface. The text explains that Curiosity's payload is more than 10 times as massive as earlier rovers and its science equipment required distributing samples to internal analytical instruments, which necessitated landing upright on wheels rather than rolling in a protective airbag cocoon. The precision landing capability reduced the target ellipse to about 20 kilometers, a five-fold improvement over earlier missions. The Gale Crater site was so close to the crater wall and Mount Sharp that airbag-style landing with the wider uncertainty ellipses of earlier missions would have been unsafe. The sky crane therefore solved two simultaneous problems: it accommodated Curiosity's size and upright instrument layout while also enabling the precision that unlocked Gale Crater as a scientifically viable destination.",
+      "required_pages": [1, 2],
+      "required_image": "Curiosity rover being lowered by Sky Crane during landing",
+      "required_entities": ["sky crane", "tether", "20 kilometers", "crater wall", "Mount Sharp", "airbag", "precision landing", "upright"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 4,
+      "intended_mode": "semantic",
+      "source_document": "mars-science-laboratory.pdf",
+      "question": "The image of the rock outcrop called Link and the image of the first drill sample at John Klein represent two distinct evidentiary steps in Curiosity's habitability argument. Using both images and the corresponding text, explain why the visual evidence from Link was scientifically necessary but not sufficient, and what the John Klein drilling contributed that images alone could never provide.",
+      "ground_truth_answer": "The Link outcrop image shows rounded pebbles mixed with hardened sand in conglomerate rock, which the text identifies as evidence for past vigorous water flow — the rounding and sorting of the pebbles indicates sustained fluvial transport. However, visual evidence of ancient stream flow establishes only water presence and movement, not water chemistry, persistence, or geochemical habitability. The John Klein drill image shows the first borehole ever made in Martian rock, and the text explains that analysis of that drilled sample provided the full habitability evidence package: geological and mineralogical evidence for sustained liquid water, key elemental ingredients for life, a chemical energy source, and water that was neither too acidic nor too salty. Images could establish morphology and sedimentary context; only in situ chemical analysis of drilled interior material could constrain whether the ancient environment was genuinely suited to microbial life.",
+      "required_pages": [2, 3],
+      "required_image_pair": ["Rock outcrop Link showing water deposition signs", "Curiosity first drill sample at John Klein rock"],
+      "required_entities": ["Link", "rounded pebbles", "conglomerate", "John Klein", "drilling", "elemental ingredients", "chemical energy source", "habitability"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 5,
+      "intended_mode": "semantic",
+      "source_document": "highlights_of_hubbles_exploration_of_the_universe.pdf",
+      "question": "The Hubble deep field image and the panel of faint early galaxies shown alongside it are described as evidence for galaxy growth over cosmic time. Using the visual appearance of those galaxies and the text about hierarchical galaxy formation, explain how the morphological evidence in the images connects to the theoretical prediction that large present-day galaxies assembled through mergers rather than forming fully intact.",
+      "ground_truth_answer": "The Ultra Deep Field image reveals thousands of galaxies at varying distances, and the close-up panel of faint, distant galaxies shows they are small, irregular, and frequently interacting — very different from the grand spiral and elliptical galaxies seen in the nearby universe. The text states that the most distant and earliest galaxies are smaller and more irregularly shaped, and that the universe was smaller in the past, making gravitational interactions between galaxies more frequent. The visual evidence of disturbed morphologies, asymmetric shapes, and apparent mergers in the distant panels directly supports hierarchical growth: these compact, irregular systems are the raw building blocks that collide and merge over billions of years into the familiar large galaxies seen nearby. The deep field effectively provides a time-ordered fossil record where increasing distance corresponds to increasing lookback time, allowing morphological evolution to be read directly from the images.",
+      "required_pages": [4],
+      "required_image_pair": ["Hubble Ultra Deep Field wide image", "panel of faint irregular distant galaxies from Ultra Deep Field"],
+      "required_entities": ["Ultra Deep Field", "irregular galaxies", "mergers", "hierarchical growth", "spiral", "elliptical", "cosmic time", "lookback time"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 6,
+      "intended_mode": "semantic",
+      "source_document": "highlights_of_hubbles_exploration_of_the_universe.pdf",
+      "question": "The dark matter page shows two views of galaxy cluster Cl 0024+17 — one in visible light showing blue arcs, and one with a blue dark matter density overlay. Using both images together with the gravitational lensing text, explain the full chain of inference that connects the visible arc morphology in the first image to the quantitative dark matter mass estimate cited in the text.",
+      "ground_truth_answer": "The visible-light image of Cl 0024+17 shows blue arc-shaped features among the yellowish cluster galaxies. The text explains these are magnified, distorted images of background galaxies whose light has been bent by the cluster's gravity — a phenomenon called gravitational lensing. The second image overlays in blue the dark matter density distribution required to mathematically account for the observed distortions. The inference chain is: (1) measure the shapes, positions, and degree of distortion of the background arcs; (2) mathematically reverse-engineer the mass distribution needed to produce those specific distortions; (3) compare that total mass to the luminous matter visible in the cluster. The text states the result is that the universe appears to contain about five times more dark matter than regular matter, and that large structures are found at intersections of immense dark matter filament networks. The two images together show both the raw observational input (arcs) and the derived mass product (blue overlay), making the lensing inference chain visually complete.",
+      "required_pages": [6],
+      "required_image_pair": ["Cl 0024+17 visible light image with blue arcs", "Cl 0024+17 blue dark matter density overlay"],
+      "required_entities": ["Cl 0024+17", "blue arcs", "gravitational lensing", "dark matter density", "five times", "reverse-engineer", "filaments"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 7,
+      "intended_mode": "semantic",
+      "source_document": "highlights_of_hubbles_exploration_of_the_universe.pdf",
+      "question": "The image series of Supernova 1987A from 1994 through 2006 shows a ring of material progressively lighting up over twelve years. Using both the time-sequence images and the text description of the shock wave dynamics, explain what physical process the brightening ring documents, why it is observable only over a multi-year baseline, and what this reveals about the pre-explosion mass loss history of the progenitor star.",
+      "ground_truth_answer": "The six-panel image sequence shows SN 1987A's middle ring going from a faint structure in 1994 to a brightening necklace of hot spots by 2006. The text explains that an expanding shock wave from the central explosion is slamming into a pre-existing ring of material surrounding the dead star. As the blast wave reaches and compresses ring material, those sections are heated and begin to glow — the sequentially brightening spots represent the shock front progressively encountering denser regions around the ring's circumference. The process requires a multi-year baseline because the shock wave must physically travel from the explosion center to the ring, and the ring's finite circumference means different azimuthal sections are reached at slightly different times. The existence of the ring itself implies the progenitor star shed a structured shell of material in an asymmetric mass-loss event before it exploded, providing direct evidence that massive stars undergo significant pre-supernova mass ejection that shapes the circumstellar environment the eventual blast wave must propagate through.",
+      "required_pages": [14, 15],
+      "required_image": "Time sequence of Supernova 1987A ring brightening from 1994 to 2006",
+      "required_entities": ["SN 1987A", "shock wave", "ring brightening", "hot spots", "pre-existing ring", "mass loss", "progenitor", "multi-year sequence"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 8,
+      "intended_mode": "hybrid",
+      "source_document": "Voyager Grand Tour PDF.pdf",
+      "question": "The Saturn montage image shows the planet alongside several of its moons at different scales. Using the image to identify visible moons and the text description of Voyager 1's Titan encounter, explain the specific trade-off that made Titan the highest-priority Saturn target, why that priority decision permanently closed Voyager 1's path to the outer planets, and what Voyager 2's different Saturn geometry preserved for the mission as a whole.",
+      "ground_truth_answer": "The Saturn montage shows the planet's rings and several moons, with Titan visible as a large body. The text states Titan is larger than Earth's own Moon and was known to have a dense atmosphere, making it uniquely scientifically valuable among Saturn's satellites. Voyager 1 flew within 4,000 miles of Titan's surface near its South Pole — the text explicitly states this Titan encounter changed Voyager 1's trajectory so it could not make any further planetary encounters. Voyager 2's closest Saturn approach was at 63,000 miles, a different geometry that did not incur the same trajectory penalty. The consequence was that Voyager 2's Saturn flyby automatically set up a coast of five and a half years to Uranus, where it discovered 11 new moons, and then continued to Neptune where it discovered 6 more moons and observed geysers on Triton. The two-spacecraft strategy deliberately split the objectives: one vehicle maximized Titan science at the cost of the extended tour, while the other preserved the grand-tour continuation.",
+      "required_pages": [1, 3],
+      "required_image": "Saturn montage showing planet and several moons including Titan",
+      "required_entities": ["Titan", "dense atmosphere", "4,000 miles", "South Pole", "trajectory penalty", "Voyager 2", "Uranus", "Neptune", "63,000 miles"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 9,
+      "intended_mode": "hybrid",
+      "source_document": "Voyager Grand Tour PDF.pdf",
+      "question": "The Uranus montage and the Neptune-Triton montage each show a planet alongside several moons. Using these images in combination with the text on Voyager 2's encounters, explain why Voyager 2 discovered 11 moons at Uranus and 6 at Neptune despite having far less observing time at each world than it had spent at Jupiter, and what this implies about the relationship between mission geometry and small-body discovery yield.",
+      "ground_truth_answer": "The Uranus montage shows several larger moons around the tilted ice giant, while the Neptune montage shows Triton prominently alongside Neptune. The text states Voyager 2 began studying Uranus in November 1985 and made its closest approach on January 24, 1986, discovering 11 new moons, while the Neptune encounter beginning June 1989 yielded 6 new moons. At Jupiter, which Voyager 2 studied intensively from April to August 1979 — a much longer campaign — only three previously undiscovered small moons were found. The inversion in discovery yield relative to time suggests that proximity geometry and illumination conditions during a fast flyby can be more favorable for detecting small, faint satellites than a longer but more distant observation campaign. At Uranus and Neptune the extremely close approach distances (50,600 miles and 3,076 miles respectively) provided the angular resolution and lighting angles needed to detect objects that would have remained hidden from farther distances, regardless of integration time.",
+      "required_pages": [3, 4],
+      "required_image_pair": ["Uranus montage with moons", "Neptune and Triton montage"],
+      "required_entities": ["Uranus", "11 new moons", "Neptune", "6 new moons", "50,600 miles", "3,076 miles", "Jupiter", "angular resolution", "flyby geometry"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 10,
+      "intended_mode": "hybrid",
+      "source_document": "mars-science-laboratory.pdf",
+      "question": "Curiosity's self-portrait assembled from MAHLI images is shown in the document. Using the image to assess what the composite reveals about rover configuration and condition, and the technical text describing MAHLI's capabilities and arm placement, explain why this imaging method provides more diagnostic value for mission engineers than a single wide-angle shot from a fixed camera would.",
+      "ground_truth_answer": "The self-portrait shows the full rover body, mast, arm, and wheel configuration in a composite assembled from many close-range images. The text states MAHLI is the Mars Hand Lens Imager mounted on the robotic arm, capable of taking extreme close-up images revealing details smaller than a human hair, and that it can focus on hard-to-reach objects more than an arm's length away. Because the arm repositions the camera at multiple locations and angles, the resulting mosaic provides overlapping, close-range coverage of surfaces that a fixed wide-angle camera would capture only at low resolution and from a single viewpoint. For engineers, this means dust accumulation on solar panel analogs, wheel wear patterns, hardware surface changes, and instrument condition can all be assessed at sub-millimeter detail in routine imaging without requiring dedicated inspection hardware. The method also confirms arm articulation health implicitly — a successful multi-position mosaic is itself evidence of normal arm function.",
+      "required_pages": [3],
+      "required_image": "Curiosity self-portrait assembled from MAHLI images",
+      "required_entities": ["MAHLI", "robotic arm", "mosaic", "self-portrait", "close-up", "arm articulation", "diagnostic", "composite"],
+      "difficulty": "hard"
+    },
+    {
+      "id": 11,
+      "intended_mode": "hybrid",
+      "source_document": "highlights_of_hubbles_exploration_of_the_universe.pdf",
+      "question": "The Cepheid star brightness sequence images from the Andromeda galaxy and the distant supernova comparison images from 1995 and 2002 are presented as two complementary distance-measurement methods. Using both image sets and the text about refining the Hubble constant, explain why astronomers need both techniques rather than relying on only one, and how the combination of refined distances and velocity measurements changed the estimated age of the universe.",
+      "ground_truth_answer": "The Cepheid sequence shows a star in Andromeda varying in brightness across multiple observation dates — this cyclical brightness change is the basis for the period-luminosity distance calibration. The 1995 and 2002 comparison images show a supernova appearing in a previously empty patch of the Hubble Deep Field, illustrating how Type Ia supernovas serve as standard candles at distances where individual Cepheids cannot be resolved. The text explains astronomers measure distances by comparing the known brightness of objects like Cepheid stars or standard supernovas to their apparent brightness in distant galaxies. Cepheids are well-resolved and reliable within the local universe but too faint to detect in very distant galaxies; supernovas are bright enough to see at cosmological distances but need Cepheid-based calibration in the local universe to set their absolute luminosity scale. By combining both ladders, Hubble refined galaxy distance measurements sufficiently to narrow the Hubble constant uncertainty, and coupling those distances with galaxy velocity measurements from other telescopes, calculations currently place the age of the universe at 13.8 billion years, far more precise than the pre-Hubble range of 10 to 20 billion years.",
+      "required_pages": [3],
+      "required_image_pair": ["Cepheid star brightness sequence in Andromeda galaxy", "1995 and 2002 Hubble Deep Field supernova comparison"],
+      "required_entities": ["Cepheid", "period-luminosity", "supernova", "standard candle", "Hubble constant", "13.8 billion years", "distance ladder", "velocity measurements"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 12,
+      "intended_mode": "hybrid",
+      "source_document": "highlights_of_hubbles_exploration_of_the_universe.pdf",
+      "question": "The M84 galaxy images show a camera view with a dark dust band and a spectrograph plot with dramatic color shifts from blue to red. Using both images and the text on black hole mass measurements, explain exactly what physical phenomenon the color shift encodes, why the spectrograph slit position relative to the core is critical to the measurement, and how this technique established the mass relationship between black holes and their host galaxies.",
+      "ground_truth_answer": "The camera image shows M84's bright core crossed by a dark vertical band of gas and dust, while the spectrograph plot shows a sharp transition from blue on one side of the core to red on the other. The text explains that blueshifted light indicates the emitting source is moving toward Earth while redshifted light indicates recession — stars and gas nearest the core are orbiting a central black hole at 880,000 miles per hour, so material on one side of the rotation axis approaches Earth while material on the other side recedes. The spectrograph slit must be positioned centered on the core because the Doppler shift gradient is steepest where the orbital velocities are highest, right at the innermost region around the black hole. The width and sharpness of the blue-to-red transition encodes the rotational velocity, which through Kepler's laws yields the enclosed mass. Applying this technique across many galaxies in a Hubble census revealed that black hole mass scales with the mass of the host galaxy's central stellar bulge — the larger the galaxy, the larger the black hole — suggesting black holes and their galaxies co-evolved.",
+      "required_pages": [7],
+      "required_image_pair": ["M84 camera view with dark dust band", "M84 spectrograph color shift plot blue to red"],
+      "required_entities": ["M84", "blueshift", "redshift", "880,000 miles per hour", "spectrograph slit", "Doppler", "enclosed mass", "bulge mass scaling"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 13,
+      "intended_mode": "hybrid",
+      "source_document": "highlights_of_hubbles_exploration_of_the_universe.pdf",
+      "question": "The Jupiter impact sequence showing cloud darkening from Comet Shoemaker-Levy 9, the close-up plume image from the first large fragment impact, and the Saturn aurora image are all on the same or adjacent pages. Using these three images and the text covering both the impact events and aurora observations, explain what each image type contributes uniquely to understanding planetary atmospheric dynamics, and why continuous ultraviolet monitoring capability is the common prerequisite for all three scientific results.",
+      "ground_truth_answer": "The Shoemaker-Levy 9 cloud darkening sequence shows Jupiter's atmosphere progressively accumulating impact scars as 21 fragments struck sequentially in 1994 — each dark sooty scar documents energy deposition depth and lateral spread in the Jovian cloud deck. The plume image from the first large fragment shows a colossal debris column rising above Jupiter's limb in time-stamped frames at minute-level cadence, capturing the transient ejecta dynamics during the first seconds to minutes after impact. The Saturn aurora image shows UV-bright curtains of light at Saturn's polar regions, capturing magnetospheric particle precipitation into the upper atmosphere. Each contributes something distinct: the scar sequence measures integrated impact effects over days to weeks; the plume sequence captures real-time ballistic ejecta dynamics; the aurora image characterizes steady-state magnetospheric coupling. All three depend on ultraviolet sensitivity because: impact plumes and atmospheric ejecta are bright in UV; auroral emission from excited atmospheric molecules peaks in the UV; and the temporal fidelity needed to capture transients requires space-based UV capability free from atmospheric UV absorption that blocks ground-based observation of these phenomena.",
+      "required_pages": [8, 9],
+      "required_image_triple": ["Shoemaker-Levy 9 Jupiter cloud darkening sequence", "Jupiter impact plume time sequence", "Saturn aurora ultraviolet image"],
+      "required_entities": ["Shoemaker-Levy 9", "21 fragments", "plume", "2009 impact", "Saturn aurora", "ultraviolet", "magnetosphere", "time-domain"],
+      "difficulty": "very hard"
+    },
+    {
+      "id": 14,
+      "intended_mode": "hybrid",
+      "source_document": "highlights_of_hubbles_exploration_of_the_universe.pdf",
+      "question": "The TW Hydrae disk image shows a gap structure around the star, and the 1997 and 2012 Beta Pictoris disk images show an edge-on disk changing over fifteen years. Using both sets of images alongside the planet-formation text, explain what specific morphological features in each image constitute evidence for an embedded or nearby planet, why temporal baseline matters for the Beta Pictoris case but not for TW Hydrae, and how these two systems together support a dynamic rather than static picture of disk evolution.",
+      "ground_truth_answer": "The TW Hydrae image shows a protoplanetary disk with a gap approximately 1.9 billion miles wide that is not yet completely cleared of material. The text explains this gap is most likely caused by a growing, unseen planet gravitationally sweeping up material like a snowplow, carving a lane in the disk. The morphological evidence is the gap itself — its width, incomplete clearing, and position within the disk are all consistent with an embedded planet at that orbital radius. The Beta Pictoris pair shows the large edge-on disk in 1997 and 2012; the text states scientists studied changes in the orbiting material caused by a massive planet embedded within the dust disk. For TW Hydrae, a single image suffices because the gap is a static structural feature that persists on timescales far longer than an observation campaign. For Beta Pictoris, the 15-year baseline is essential because the planet-induced changes in disk structure — warps, asymmetries, or material redistribution — are only detectable as differences between epochs, not from any single snapshot. Together, TW Hydrae shows a planet actively carving its initial gap while Beta Pictoris shows a more evolved system where a mature embedded planet continues to dynamically reshape disk material over decadal timescales.",
+      "required_pages": [15],
+      "required_image_pair": ["TW Hydrae protoplanetary disk gap image", "Beta Pictoris disk 1997 and 2012 comparison"],
+      "required_entities": ["TW Hydrae", "gap", "1.9 billion miles", "Beta Pictoris", "1997", "2012", "embedded planet", "snowplow", "temporal baseline", "disk evolution"],
+      "difficulty": "very hard"
+    }
+  ]
+}

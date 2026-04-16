@@ -35,7 +35,7 @@ class Config:
     image_embed_model: str = "ViT-L-14"
     image_embed_pretrained: str = "laion2b_s32b_b82k"
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
-    llm_model: str = "gemma3:4b"
+    llm_model: str = "gemma4:e2b"
     tiktoken_encoding: str = "cl100k_base"
 
     chunk_max_tokens: int = 384
