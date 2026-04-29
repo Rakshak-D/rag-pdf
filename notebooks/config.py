@@ -52,7 +52,7 @@ class Config:
 
     # ── LLM settings ──────────────────────────────────────────────────────────
     llm_model: str = "qwen3.5:2b"
-    llm_models: List[str] = field(default_factory=lambda: ["gemma3:4b", "gemma4:e2b","ministral-3:3b","llava-phi3:3.8b","qwen3.5:2b"])
+    llm_models: List[str] = field(default_factory=lambda: ["gemma4:e2b"])
 
     tiktoken_encoding: str = "cl100k_base"
 
@@ -86,18 +86,20 @@ class Config:
 
     max_text_chunks: int = 3
     max_images: int = 1
-    text_distance_threshold: float = 0.65
+    text_distance_threshold: float = 1.0
     image_distance_threshold: float = 0.75
-    percentile_cutoff: int = 60
+    percentile_cutoff: int = 100
 
     llm_temperature: float = 0.25
     llm_max_tokens: int = 384
     llm_think_mode=False
 
+    retrieval_mode: str = "bm25"  # Retrieval strategy: \"semantic\", \"bm25\", or \"hybrid\"
+
     use_hybrid: bool = True
-    use_reranker: bool = True
-    adaptive_weighting: bool = True
-    score_fusion: bool = True
+    use_reranker: bool = False
+    adaptive_weighting: bool = False
+    score_fusion: bool = False
 
     rouge_top_k_chunks: int = 5
     top_k_accuracy_k: int = 5
@@ -135,6 +137,8 @@ class Config:
     img_max_aspect_ratio: float = 10.0    # Maximum width/height ratio (filters wide banners)
 
     def validate(self) -> None:
+        if self.retrieval_mode not in {"semantic", "bm25", "hybrid"}:
+            raise ValueError("retrieval_mode must be one of 'semantic', 'bm25', or 'hybrid'.")
         if abs((self.bm25_weight + self.semantic_weight) - 1.0) > 1e-6:
             raise ValueError("bm25_weight and semantic_weight must sum to 1.0.")
         if not (0.0 <= self.image_caption_image_weight <= 1.0):

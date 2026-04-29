@@ -1805,14 +1805,16 @@ class RetrievalRag:
                  bm25_weight: float = cfg.bm25_weight, semantic_weight: float = cfg.semantic_weight,
                  formatter: Optional['ContextFormatter'] = None,
                  adaptive_weighting: bool = cfg.adaptive_weighting,
-                 score_fusion: bool = cfg.score_fusion):
+                 score_fusion: bool = cfg.score_fusion,
+                 retrieval_mode: str = cfg.retrieval_mode):
         self.image_embedder = image_embedder
         self.text_embedder = text_embedder
         self.image_vectordb = image_vectordb
         self.text_vectordb = text_vectordb
         self.reranker = Reranker() if use_reranker else None
         self.formatter = formatter or ContextFormatter()
-        self.use_hybrid = use_hybrid
+        self.retrieval_mode = retrieval_mode
+        self.use_hybrid = retrieval_mode == "hybrid"
         self.adaptive_weighting = adaptive_weighting
         self.score_fusion = score_fusion
         if not (0.0 <= bm25_weight <= 1.0) or not (0.0 <= semantic_weight <= 1.0):
@@ -1822,13 +1824,16 @@ class RetrievalRag:
         self.bm25_weight = bm25_weight
         self.semantic_weight = semantic_weight
         self.hybrid_metrics_history = []
-        if self.use_hybrid:
+        if self.retrieval_mode in ("bm25", "hybrid"):
             self.bm25_index = BM25IndexBuilder.from_vectorstore(text_vectordb, enable_preprocessing=True)
-            LOGGER.info("Hybrid search enabled: %s with adaptive=%s",
-                        'Score-based fusion' if score_fusion else 'RRF', adaptive_weighting)
+            if self.retrieval_mode == "hybrid":
+                LOGGER.info("Hybrid search enabled: %s with adaptive=%s",
+                            'Score-based fusion' if score_fusion else 'RRF', adaptive_weighting)
+            else:
+                LOGGER.info("BM25-only retrieval enabled.")
         else:
             self.bm25_index = None
-            LOGGER.info("Hybrid search disabled: using semantic search only.")
+            LOGGER.info("Semantic-only retrieval enabled.")
 
     @staticmethod
     def _clamp(value: float, lower: float, upper: float) -> float:
@@ -2035,52 +2040,77 @@ class RetrievalRag:
         if not isinstance(k, int) or k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}.")
         start_total = perf_counter()
-        start_embed = perf_counter()
-        query_embedding = self.text_embedder.embed_query(query)
-        embed_time = perf_counter() - start_embed
-        start_search = perf_counter()
-        semantic_results = self.text_vectordb.query(query_embedding=query_embedding, k=k * 2)
+        embed_time = 0.0
+        semantic_results = None
+        bm25_results = None
         hybrid_stats = {}
-        if self.use_hybrid and self.bm25_index:
+        search_mode = self.retrieval_mode
+
+        start_search = perf_counter()
+
+        if self.retrieval_mode in ("semantic", "hybrid"):
+            start_embed = perf_counter()
+            query_embedding = self.text_embedder.embed_query(query)
+            embed_time = perf_counter() - start_embed
+            semantic_results = self.text_vectordb.query(query_embedding=query_embedding, k=k * 2)
+
+        if self.retrieval_mode in ("bm25", "hybrid") and self.bm25_index:
             bm25_results = self.bm25_index.query(query=query, k=k * 2, expand_query=True)
-            adaptive_bm25_w, adaptive_sem_w, adaptive_info = self._get_adaptive_weights(query, bm25_results)
-            bm25_ids = bm25_results.get("ids", [[]])[0]
-            overlap_stats = self._calculate_overlap(bm25_ids, semantic_results.get("ids", [[]])[0]) if bm25_ids else {
-                "intersection_size": 0, "union_size": 0, "jaccard_similarity": 0.0, "overlap_percentage": 0.0,
-                "intersection_ids": []}
-            if adaptive_info.get("fallback_to_semantic", False):
-                results = semantic_results
-                fusion_stats = {"bm25_contribution_mean": 0.0, "semantic_contribution_mean": 1.0, "bm25_only_docs": 0,
-                                "semantic_only_docs": len(semantic_results.get("ids", [[]])[0]), "both_signals_docs": 0}
-                search_mode = "semantic_fallback"
-            else:
-                orig_bm25_w, orig_sem_w = self.bm25_weight, self.semantic_weight
-                self.bm25_weight, self.semantic_weight = adaptive_bm25_w, adaptive_sem_w
-                try:
-                    results, fusion_stats = self._fuse_scores(bm25_results,
-                                                              semantic_results) if self.score_fusion else self._rrf_fusion(
-                        bm25_results, semantic_results, k_rrf=cfg.rrf_k_constant)
-                finally:
-                    self.bm25_weight, self.semantic_weight = orig_bm25_w, orig_sem_w
-                search_mode = "hybrid_score_fusion" if self.score_fusion else "hybrid_rrf"
-            hybrid_stats = {
-                "query_type": adaptive_info["query_type"], "bm25_weight_used": adaptive_bm25_w,
-                "semantic_weight_used": adaptive_sem_w,
-                "bm25_max_score": bm25_results.get("bm25_stats", {}).get("max_score", 0),
-                "bm25_mean_score": bm25_results.get("bm25_stats", {}).get("mean_score", 0),
-                "bm25_std_score": bm25_results.get("bm25_stats", {}).get("std_score", 0),
-                "bm25_corpus_coverage": bm25_results.get("bm25_stats", {}).get("corpus_coverage", 0),
-                "bm25_signal_strength": adaptive_info.get("bm25_signal_strength", 0.0),
-                "lexical_query_signal": adaptive_info.get("lexical_query_signal", 0.0),
-                "weight_adjusted": adaptive_info.get("weight_adjusted", False),
-                "fallback_to_semantic": adaptive_info.get("fallback_to_semantic", False),
-                "fallback_reason": adaptive_info.get("fallback_reason", ""),
-                "overlap_jaccard": overlap_stats["jaccard_similarity"],
-                "overlap_percentage": overlap_stats["overlap_percentage"], "fusion_stats": fusion_stats
-            }
-        else:
-            results = semantic_results
+
+        if self.retrieval_mode == "bm25":
+            results = bm25_results or {"documents": [[]], "metadatas": [[]], "ids": [[]], "scores": []}
+            scores = results.get("scores", [])
+            max_score = max(scores) if scores else 1.0
+            distances = [[1.0 - (s / max_score) if max_score > 0 else 1.0 for s in scores]]
+            results["distances"] = distances
+            results["bm25_scores"] = [scores]
+            search_mode = "bm25_only"
+
+        elif self.retrieval_mode == "semantic":
+            results = semantic_results or {"documents": [[]], "metadatas": [[]], "ids": [[]], "distances": [[]]}
             search_mode = "semantic_only"
+
+        else:  # hybrid
+            if not bm25_results or not semantic_results:
+                results = semantic_results or bm25_results
+                search_mode = "hybrid_fallback"
+            else:
+                adaptive_bm25_w, adaptive_sem_w, adaptive_info = self._get_adaptive_weights(query, bm25_results)
+                bm25_ids = bm25_results.get("ids", [[]])[0]
+                overlap_stats = self._calculate_overlap(bm25_ids, semantic_results.get("ids", [[]])[0]) if bm25_ids else {
+                    "intersection_size": 0, "union_size": 0, "jaccard_similarity": 0.0, "overlap_percentage": 0.0,
+                    "intersection_ids": []}
+                if adaptive_info.get("fallback_to_semantic", False):
+                    results = semantic_results
+                    fusion_stats = {"bm25_contribution_mean": 0.0, "semantic_contribution_mean": 1.0, "bm25_only_docs": 0,
+                                    "semantic_only_docs": len(semantic_results.get("ids", [[]])[0]), "both_signals_docs": 0}
+                    search_mode = "semantic_fallback"
+                else:
+                    orig_bm25_w, orig_sem_w = self.bm25_weight, self.semantic_weight
+                    self.bm25_weight, self.semantic_weight = adaptive_bm25_w, adaptive_sem_w
+                    try:
+                        results, fusion_stats = self._fuse_scores(bm25_results,
+                                                                  semantic_results) if self.score_fusion else self._rrf_fusion(
+                            bm25_results, semantic_results, k_rrf=cfg.rrf_k_constant)
+                    finally:
+                        self.bm25_weight, self.semantic_weight = orig_bm25_w, orig_sem_w
+                    search_mode = "hybrid_score_fusion" if self.score_fusion else "hybrid_rrf"
+                hybrid_stats = {
+                    "query_type": adaptive_info["query_type"], "bm25_weight_used": adaptive_bm25_w,
+                    "semantic_weight_used": adaptive_sem_w,
+                    "bm25_max_score": bm25_results.get("bm25_stats", {}).get("max_score", 0),
+                    "bm25_mean_score": bm25_results.get("bm25_stats", {}).get("mean_score", 0),
+                    "bm25_std_score": bm25_results.get("bm25_stats", {}).get("std_score", 0),
+                    "bm25_corpus_coverage": bm25_results.get("bm25_stats", {}).get("corpus_coverage", 0),
+                    "bm25_signal_strength": adaptive_info.get("bm25_signal_strength", 0.0),
+                    "lexical_query_signal": adaptive_info.get("lexical_query_signal", 0.0),
+                    "weight_adjusted": adaptive_info.get("weight_adjusted", False),
+                    "fallback_to_semantic": adaptive_info.get("fallback_to_semantic", False),
+                    "fallback_reason": adaptive_info.get("fallback_reason", ""),
+                    "overlap_jaccard": overlap_stats["jaccard_similarity"],
+                    "overlap_percentage": overlap_stats["overlap_percentage"], "fusion_stats": fusion_stats
+                }
+
         for key in ["documents", "metadatas", "distances", "ids", "fused_scores", "bm25_scores"]:
             if key in results and results[key]:
                 results[key][0] = results[key][0][:k]
@@ -4098,6 +4128,8 @@ def export_retrieved_results_to_pdf(formatted_output, output_dir=cfg.retrieval_r
     elements.append(Paragraph("Retrieved Results Report", title_style))
     elements.append(Paragraph(f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}", body_style))
     elements.append(Paragraph(f"Total Queries: {len(formatted_output)}", body_style))
+    config_info = f"Retrieval: {cfg.retrieval_mode} | Reranker: {'ON' if cfg.use_reranker else 'OFF'} | Adaptive: {'ON' if cfg.adaptive_weighting else 'OFF'}"
+    elements.append(Paragraph(config_info, body_style))
     elements.append(Spacer(1, 0.4 * inch))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.grey))
     elements.append(Spacer(1, 0.5 * inch))
@@ -4174,6 +4206,9 @@ def export_results_to_pdf(results, model_name: str, metrics_summary: dict, outpu
     elements.append(Paragraph("RAG Evaluation Report", title_style))
     elements.append(Paragraph(f"Model: <b>{model_name}</b>", body_style))
     elements.append(Paragraph(f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}", body_style))
+    elements.append(Spacer(1, 0.2 * inch))
+    config_info = f"Retrieval Mode: <b>{cfg.retrieval_mode}</b> | Reranker: <b>{'ON' if cfg.use_reranker else 'OFF'}</b> | Adaptive: <b>{'ON' if cfg.adaptive_weighting else 'OFF'}</b> | Fusion: <b>{'Score' if cfg.score_fusion else 'RRF'}</b><br/>BM25/Semantic: {cfg.bm25_weight}/{cfg.semantic_weight} | text_k={cfg.text_k}, rerank_k={cfg.rerank_k}, image_k={cfg.image_k}"
+    elements.append(Paragraph(config_info, body_style))
     elements.append(Spacer(1, 0.4 * inch))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.grey))
     elements.append(Spacer(1, 0.3 * inch))
@@ -4332,6 +4367,8 @@ def export_comparison_to_pdf(all_model_metrics: Dict[str, Dict], shared_metrics:
         f"Models evaluated: {', '.join(models)}  |  "
         f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}",
         sub_style))
+    config_info = f"Retrieval: {cfg.retrieval_mode} | Reranker: {'ON' if cfg.use_reranker else 'OFF'} | Adaptive: {'ON' if cfg.adaptive_weighting else 'OFF'} | Fusion: {'Score' if cfg.score_fusion else 'RRF'} | Weights: {cfg.bm25_weight}/{cfg.semantic_weight}"
+    elements.append(Paragraph(config_info, sub_style))
     elements.append(Spacer(1, 0.3 * inch))
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.grey))
     elements.append(Spacer(1, 0.3 * inch))
@@ -4499,6 +4536,8 @@ def print_model_comparison_table(all_model_metrics: Dict[str, Dict], shared_metr
     print("=" * 100)
     print(f"  PHASE 6: MODEL COMPARISON TABLE  ({n} model{'s' if n > 1 else ''})")
     print("=" * 100)
+    print(f"  Config: retrieval={cfg.retrieval_mode} | reranker={'ON' if cfg.use_reranker else 'OFF'} | adaptive={'ON' if cfg.adaptive_weighting else 'OFF'} | fusion={'score' if cfg.score_fusion else 'rrf'}")
+    print("-" * 100)
 
     headers = [abbrev(m) for m in models]
 
@@ -4609,9 +4648,10 @@ def main(test_questions):
         image_vectordb=image_db, text_vectordb=text_db,
         use_hybrid=cfg.use_hybrid, adaptive_weighting=cfg.adaptive_weighting,
         score_fusion=cfg.score_fusion, use_reranker=cfg.use_reranker,
-        bm25_weight=cfg.bm25_weight, semantic_weight=cfg.semantic_weight
+        bm25_weight=cfg.bm25_weight, semantic_weight=cfg.semantic_weight,
+        retrieval_mode=cfg.retrieval_mode
     )
-    is_hybrid = retriever.use_hybrid
+    is_hybrid = retriever.retrieval_mode == "hybrid"
     formatter = ContextFormatter(
         max_text_chunks=cfg.max_text_chunks, max_images=cfg.max_images,
         text_distance_threshold=cfg.text_distance_threshold,
