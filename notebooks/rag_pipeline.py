@@ -5,8 +5,6 @@
 # %% [markdown]
 # # RAG Pipeline (PDF → Vector DB → Retrieval → LLM → Metrics)
 #
-# This notebook-friendly Python script implements an end-to-end Retrieval-Augmented Generation (RAG) pipeline:
-#
 # 1. **Document loading**: read PDFs, extract text blocks + useful images.
 # 2. **Chunking**: group nearby text blocks into semantically coherent chunks (with page + bbox metadata).
 # 3. **Embedding**: create vector embeddings for text and images.
@@ -15,11 +13,6 @@
 # 6. **Context formatting**: build an LLM-ready prompt context.
 # 7. **LLM evaluation**: answer questions with one or more local LLMs.
 # 8. **Metrics + reports**: compute retrieval/generation/performance metrics and export PDFs.
-#
-# Notes for non-coders:
-# - Think of **embeddings** as numeric fingerprints for text/images that allow fast similarity search.
-# - The **vector store** is a database optimized for “find things similar to this query”.
-# - The LLM never reads your full PDFs directly; it reads only the **retrieved context** we select here.
 
 # %% [markdown]
 # # Document Loading
@@ -40,12 +33,7 @@ import traceback
 from dataclasses import dataclass, field
 
 # %%
-try:
-    PROJECT_ROOT = Path(__file__).resolve().parent
-except NameError:
-    PROJECT_ROOT = Path.cwd()
-    if not (PROJECT_ROOT / 'data').exists() and (PROJECT_ROOT.parent / 'data').exists():
-        PROJECT_ROOT = PROJECT_ROOT.parent
+from config import Config, cfg, PROJECT_ROOT
 
 # %%
 import sys
@@ -53,11 +41,6 @@ import sys
 NOTEBOOK_ROOT = PROJECT_ROOT / "notebooks" if (PROJECT_ROOT / "notebooks").exists() else PROJECT_ROOT
 if str(NOTEBOOK_ROOT) not in sys.path:
     sys.path.insert(0, str(NOTEBOOK_ROOT))
-
-# %%
-from config import Config, cfg
-
-
 # %%
 import logging as py_logging
 import shutil
@@ -206,6 +189,7 @@ def is_low_variance(pix, threshold: int = cfg.img_variance_threshold) -> bool:
         LOGGER.debug("is_low_variance failed: %s", e)
         return True
 
+
 # %%
 def is_mostly_white(pix, threshold: int = cfg.img_white_pixel_threshold,
                     ratio: float = cfg.img_white_ratio_threshold) -> bool:
@@ -226,9 +210,11 @@ def is_mostly_white(pix, threshold: int = cfg.img_white_pixel_threshold,
     except Exception as e:
         LOGGER.debug("is_mostly_white failed: %s", e)
         return True
+
+
 # %%
 def is_extreme_aspect_ratio(pix, min_ratio: float = cfg.img_min_aspect_ratio,
-                             max_ratio: float = cfg.img_max_aspect_ratio) -> bool:
+                            max_ratio: float = cfg.img_max_aspect_ratio) -> bool:
     """
     Checks if an image is extremely thin or wide (header/footer lines, decorative bars).
     Bounds read from config.
@@ -241,6 +227,8 @@ def is_extreme_aspect_ratio(pix, min_ratio: float = cfg.img_min_aspect_ratio,
     except Exception as e:
         LOGGER.debug("is_extreme_aspect_ratio failed: %s", e)
         return True
+
+
 # %%
 def loading_pdf(dir_path: str = cfg.pdf_dir, images_dir: str = cfg.images_dir) -> List[Dict]:
     """
@@ -354,7 +342,7 @@ def loading_pdf(dir_path: str = cfg.pdf_dir, images_dir: str = cfg.images_dir) -
                         LOGGER.warning("       Error processing image %d: %s", img_index, img_error)
                     finally:
                         if pix is not None:
-                            pix = None
+                            pix.close()
 
                 blocks = sorted(page.get_text("blocks"), key=lambda b: (b[1], b[0]))
                 for block_id, b in enumerate(blocks):
@@ -398,6 +386,13 @@ def loading_pdf(dir_path: str = cfg.pdf_dir, images_dir: str = cfg.images_dir) -
     LOGGER.info("       Successful: %d/%d", len(pdf_files) - len(failed_pdf), len(pdf_files))
 
     if failed_pdf:
+        # Surface the failure rate as a percentage so it appears in logs
+        # alongside the raw count and is easy to spot during batch runs.
+        fail_rate_pct = len(failed_pdf) / max(len(pdf_files), 1) * 100
+        LOGGER.warning(
+            "  PDF failure rate: %.1f%% (%d/%d files failed)",
+            fail_rate_pct, len(failed_pdf), len(pdf_files),
+        )
         LOGGER.info("")
         LOGGER.info("  Failed PDFs:")
         for fp in failed_pdf:
@@ -585,7 +580,7 @@ def build_image_objects(pages: List[Dict]) -> List[Dict]:
 
 # %%
 def build_chunk(source: str, page_num: int, blocks: List, page_images: List[Dict],
-                related_image_ids: List[str] | None = None) -> Document:
+                related_image_ids: Optional[List[str]] = None) -> Optional[Document]:
     """
     Assemble a LangChain Document from a list of text blocks.
 
@@ -878,10 +873,14 @@ class ImageEmbeddingModel:
                     caption_embedding = self.model.encode_text(tokens)
                     caption_embedding = caption_embedding / caption_embedding.norm(dim=-1, keepdim=True)
                     caption_embedding = caption_embedding.cpu().numpy()[0]
+                    # Both components are already L2-normalised. Renormalising after
+                    # the weighted sum would distort the caller-specified blend ratio,
+                    # because the post-fusion norm depends on the angle between the
+                    # two vectors and is not guaranteed to equal 1. Storing the raw
+                    # weighted sum preserves the intended image_weight/caption_weight
+                    # balance while still producing a vector whose magnitude is in
+                    # (0, 1] when both inputs are unit vectors.
                     fused_embedding = (image_weight * image_embedding) + (caption_weight * caption_embedding)
-                    norm = np.linalg.norm(fused_embedding)
-                    if norm > 1e-8:
-                        fused_embedding = fused_embedding / norm
                     final_embeddings.append(fused_embedding)
                 except Exception as e:
                     LOGGER.warning("Caption embedding failed; using image-only embedding (%s)", e)
@@ -1122,6 +1121,11 @@ class VectorStore:
             if exists and self.reset_collection:
                 try:
                     self.client.delete_collection(name=self.collection_name)
+                    # Brief pause after deletion so the filesystem can
+                    # release any locks on the underlying SQLite file before
+                    # create_collection() opens a new handle.
+                    import time as _reset_time
+                    _reset_time.sleep(0.1)
                 except Exception:
                     pass
                 exists = False
@@ -1137,7 +1141,7 @@ class VectorStore:
                                                                 metadata={"hnsw:space": "cosine"})
             self._existing_ids = set(self.collection.get(include=[])["ids"])
             if not self.silent:
-               LOGGER.info(
+                LOGGER.info(
                     "Vector store ready — %d existing documents.", len(self._existing_ids)
                 )
         except Exception as e:  # Exception handling.
@@ -1230,7 +1234,7 @@ class VectorStore:
         )
         self._existing_ids.update(ids[i] for i in new_indices)
         if not self.silent:
-             LOGGER.info("Added %d new documents to collection.", len(new_indices))
+            LOGGER.info("Added %d new documents to collection.", len(new_indices))
 
     def collection_exists(self, collection_name: str) -> bool:
         """Return True if a collection with the given name already exists in the database."""
@@ -1245,10 +1249,13 @@ class VectorStore:
             raise ValueError("Query embedding must be a 1D vector.")
         if not isinstance(k, int) or k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}.")
+        collection_count = self.collection.count()
+        if collection_count <= 0:
+            return {"documents": [[]], "metadatas": [[]], "distances": [[]], "ids": [[]]}
 
         results = self.collection.query(  # Storing results.
             query_embeddings=[query_embedding.tolist()],
-            n_results=k,
+            n_results=min(k, collection_count),
             where=where,
             include=["documents", "metadatas", "distances"]
         )
@@ -1393,6 +1400,13 @@ class RetrievalOutput:
     """
     Structured retrieval response used by the main pipeline and evaluation code.
 
+    Latency is tracked at four distinct stages so benchmarks can attribute
+    wall-clock time accurately:
+      - embed_time_sec   : dense vector encoding of the query
+      - bm25_time_sec    : BM25 index lookup
+      - fusion_time_sec  : RRF or weighted score merge
+      - rerank_time_sec  : cross-encoder reranking (0 when reranker is off)
+
     The properties below rebuild the older nested-dictionary format so existing
     formatting and metric utilities can keep working while the pipeline gains a
     more explicit internal structure.
@@ -1407,6 +1421,22 @@ class RetrievalOutput:
     cosine_sim_image: float
     search_mode: str
     hybrid_stats: Dict[str, Any] = field(default_factory=dict)
+    # Granular stage latencies — populated by RetrievalRag.retrieve()
+    embed_time_sec: float = 0.0
+    bm25_time_sec: float = 0.0
+    fusion_time_sec: float = 0.0
+    rerank_time_sec: float = 0.0
+
+    @property
+    def latency_breakdown(self) -> Dict[str, float]:
+        """Return per-stage latency as a flat dict for logging and export."""
+        return {
+            "embed_time_sec": round(self.embed_time_sec, 4),
+            "bm25_time_sec": round(self.bm25_time_sec, 4),
+            "fusion_time_sec": round(self.fusion_time_sec, 4),
+            "rerank_time_sec": round(self.rerank_time_sec, 4),
+            "total_latency_sec": round(self.total_latency_sec, 4),
+        }
 
     @property
     def text_results(self) -> Dict:
@@ -1419,7 +1449,8 @@ class RetrievalOutput:
             "retrieval_metrics": {
                 "text_search_time": round(self.text_latency_sec, 4),
                 "search_mode": self.search_mode,
-                "hybrid_stats": self.hybrid_stats
+                "hybrid_stats": self.hybrid_stats,
+                "latency_breakdown": self.latency_breakdown,
             }
         }
 
@@ -1430,9 +1461,11 @@ class RetrievalOutput:
             "metadatas": [[item.metadata for item in self.image_items]],
             "distances": [[item.distance for item in self.image_items]],
             "ids": [[item.doc_id for item in self.image_items]],
+            "fused_scores": [[item.fused_score for item in self.image_items]],
             "retrieval_metrics": {
                 "image_search_time": round(self.image_latency_sec, 4),
-                "image_total_retrieval_time": round(self.image_latency_sec, 4)
+                "image_total_retrieval_time": round(self.image_latency_sec, 4),
+                "search_mode": self.search_mode
             }
         }
 
@@ -1447,6 +1480,7 @@ class RetrievalOutput:
             blended_similarity = self.cosine_sim_image
 
         return {
+            # Total wall-clock time from the start of retrieve() to completion.
             "overall_retrieval_time": self.total_latency_sec,
             "cosine_similarity": blended_similarity,
             "cosine_similarity_text": self.cosine_sim_text,
@@ -1460,7 +1494,10 @@ class RetrievalOutput:
                 "image_total_retrieval_time": round(self.image_latency_sec, 4)
             },
             "search_mode": self.search_mode,
-            "hybrid_stats": self.hybrid_stats
+            # Granular stage breakdown — enables per-phase benchmarking.
+            "latency_breakdown": self.latency_breakdown,
+            # Hybrid fusion diagnostics forwarded to metrics and export paths.
+            "hybrid_stats": self.hybrid_stats,
         }
 
     def to_legacy_dict(self) -> Dict:
@@ -1498,15 +1535,22 @@ class ContextFormatter:
     def __init__(self, max_text_chunks: int = cfg.max_text_chunks, max_images: int = cfg.max_images,
                  text_distance_threshold: float = cfg.text_distance_threshold,
                  image_distance_threshold: float = cfg.image_distance_threshold,
-                 use_percentile_filtering: bool = True,
-                 percentile_cutoff: int = cfg.percentile_cutoff):
+                 use_filtering: bool = cfg.use_filtering,
+                 use_percentile_filtering: bool = cfg.use_percentile_filtering,
+                 percentile_cutoff: int = cfg.percentile_cutoff,
+                 max_context_tokens: int = cfg.max_context_tokens):
 
         self.max_text_chunks = max_text_chunks
         self.max_images = max_images
         self.text_distance_threshold = text_distance_threshold
         self.image_distance_threshold = image_distance_threshold
+        self.use_filtering = use_filtering
         self.use_percentile_filtering = use_percentile_filtering
         self.percentile_cutoff = percentile_cutoff
+        # Character budget derived from the token limit (approximate 4 chars/token).
+        # Enforced in _format_text_context so the assembled context string never
+        # exceeds the LLM's effective context window.
+        self._max_context_chars: int = max_context_tokens * 4
 
     def _flatten_results(self, results: Dict) -> List[Dict]:
         if not results or not isinstance(results, dict):
@@ -1547,28 +1591,57 @@ class ContextFormatter:
                                                                                                      dict) else ""
         preserve_ranked_order = search_mode.startswith("hybrid") or search_mode == "semantic_fallback"
 
-        seen = set()
-        unique_items = []
-        for item in items:
-            text_hash = hashlib.md5(item["text"].encode()).hexdigest()[:16]
-            if text_hash not in seen:
-                seen.add(text_hash)
-                unique_items.append(item)
+        # Two-pass deduplication:
+        #   Pass 1 — exact match via MD5 of the full text.
+        #   Pass 2 — near-duplicate detection via 5-gram shingle fingerprints.
+        #            Two chunks whose shingle sets overlap by ≥70 % are
+        #            considered near-duplicates; only the higher-ranked one is kept.
+        def _shingle_set(text: str, n: int = 5) -> set:
+            words = text.lower().split()
+            return {" ".join(words[i:i + n]) for i in range(max(len(words) - n + 1, 1))}
 
-        if preserve_ranked_order:
+        seen_exact: set = set()
+        seen_shingles: List[set] = []
+        unique_items: List[Dict] = []
+
+        for item in items:
+            text = item["text"]
+            exact_hash = hashlib.md5(text.encode()).hexdigest()
+            if exact_hash in seen_exact:
+                continue
+
+            shingles = _shingle_set(text)
+            is_near_dup = False
+            for prev_shingles in seen_shingles:
+                if not prev_shingles or not shingles:
+                    continue
+                overlap = len(shingles & prev_shingles) / len(shingles | prev_shingles)
+                if overlap >= 0.70:
+                    is_near_dup = True
+                    break
+
+            if is_near_dup:
+                continue
+
+            seen_exact.add(exact_hash)
+            seen_shingles.append(shingles)
+            unique_items.append(item)
+
+        if not self.use_filtering:
             return unique_items[:self.max_text_chunks]
 
         distances = [i["distance"] for i in unique_items]
         if self.use_percentile_filtering and len(distances) > 2:
             threshold = np.percentile(distances, self.percentile_cutoff)
-            filtered = [i for i in unique_items if i["distance"] <= threshold * 0.9]
+            filtered = [i for i in unique_items if i["distance"] <= threshold]
         else:
             filtered = [i for i in unique_items if i["distance"] <= self.text_distance_threshold]
 
         if not filtered:
             filtered = sorted(unique_items, key=lambda x: x["distance"])[:self.max_text_chunks]
 
-        filtered.sort(key=lambda x: x["distance"])
+        if not preserve_ranked_order:
+            filtered.sort(key=lambda x: x["distance"])
         return filtered[:self.max_text_chunks]
 
     def _load_image(self, image_path: str) -> Optional[Image.Image]:
@@ -1587,6 +1660,7 @@ class ContextFormatter:
         if not text_items or not isinstance(text_items, list):
             return ""
         lines = []
+        accumulated_chars = 0
         for idx, item in enumerate(text_items, start=1):
             if not isinstance(item, dict):
                 continue
@@ -1596,18 +1670,33 @@ class ContextFormatter:
             text = item["text"].strip()
             if not text:
                 continue
-            lines.append(
+            entry = (
                 f"[{idx}] {text}\n"
                 f"(Source: {source}, page {page})"
             )
+            # Enforce the configured token budget (approximated as chars / 4).
+            # Chunks are already ranked by relevance; stopping here keeps the
+            # most relevant material and prevents silent LLM context overflow.
+            if accumulated_chars + len(entry) > self._max_context_chars:
+                remaining = self._max_context_chars - accumulated_chars
+                if remaining > 100:
+                    lines.append(entry[:remaining])
+                break
+            lines.append(entry)
+            accumulated_chars += len(entry) + 2  # +2 for the "\n\n" separator
         return "\n\n".join(lines)
 
     def _select_images(self, image_results: Dict) -> List[Dict]:
         items = self._flatten_results(image_results)
         if not items:
             return []
-        items = [i for i in items if i["distance"] <= self.image_distance_threshold]
-        items.sort(key=lambda x: x["distance"])
+        search_mode = image_results.get("retrieval_metrics", {}).get("search_mode", "") if isinstance(image_results,
+                                                                                                      dict) else ""
+        preserve_ranked_order = search_mode.startswith("hybrid") or any("fused_score" in i for i in items)
+        if self.use_filtering:
+            items = [i for i in items if i["distance"] <= self.image_distance_threshold]
+        if not preserve_ranked_order:
+            items.sort(key=lambda x: x["distance"])
         return items[:self.max_images]
 
     def _format_image_context(self, image_items: List[Dict]) -> List[Dict]:
@@ -1662,10 +1751,32 @@ try:
 except LookupError:
     pass
 
+# Expanded fallback used only when NLTK's stopword corpus is unavailable.
+# Matches the most commonly removed English function words to avoid inflating
+# faithfulness and coverage scores by counting trivial function words as content.
 FALLBACK_STOPWORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has",
-    "he", "in", "is", "it", "its", "of", "on", "that", "the", "to", "was",
-    "were", "will", "with"
+    "a", "about", "above", "after", "again", "against", "all", "am", "an",
+    "and", "any", "are", "aren't", "as", "at", "be", "because", "been",
+    "before", "being", "below", "between", "both", "but", "by", "can",
+    "cannot", "could", "couldn't", "did", "didn't", "do", "does", "doesn't",
+    "doing", "don't", "down", "during", "each", "few", "for", "from",
+    "further", "get", "got", "had", "hadn't", "has", "hasn't", "have",
+    "haven't", "having", "he", "he'd", "he'll", "he's", "her", "here",
+    "here's", "hers", "herself", "him", "himself", "his", "how", "how's",
+    "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't",
+    "it", "it's", "its", "itself", "let's", "me", "more", "most", "mustn't",
+    "my", "myself", "no", "nor", "not", "of", "off", "on", "once", "only",
+    "or", "other", "ought", "our", "ours", "ourselves", "out", "over", "own",
+    "same", "shan't", "she", "she'd", "she'll", "she's", "should",
+    "shouldn't", "so", "some", "such", "than", "that", "that's", "the",
+    "their", "theirs", "them", "themselves", "then", "there", "there's",
+    "these", "they", "they'd", "they'll", "they're", "they've", "this",
+    "those", "through", "to", "too", "under", "until", "up", "very", "was",
+    "wasn't", "we", "we'd", "we'll", "we're", "we've", "were", "weren't",
+    "what", "what's", "when", "when's", "where", "where's", "which", "while",
+    "who", "who's", "whom", "why", "why's", "will", "with", "won't", "would",
+    "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your",
+    "yours", "yourself", "yourselves",
 }
 
 
@@ -1746,8 +1857,17 @@ class BM25Index:
         scores = self.bm25.get_scores(tokenized_query)
         ranked_indices = np.argsort(scores)[::-1]
         positive_indices = [i for i in ranked_indices if scores[i] > 0]
-        top_indices = positive_indices[:k]
-        top_scores = [float(scores[i]) for i in top_indices]
+        if positive_indices:
+            top_indices = positive_indices[:k]
+            top_scores = [float(scores[i]) for i in top_indices]
+        else:
+            query_token_set = set(tokenized_query)
+            overlap_scores = np.array([
+                len(query_token_set.intersection(doc_tokens)) for doc_tokens in self.processed_docs
+            ], dtype=float)
+            overlap_ranked = np.argsort(overlap_scores)[::-1]
+            top_indices = [i for i in overlap_ranked if overlap_scores[i] > 0][:k]
+            top_scores = [float(overlap_scores[i]) for i in top_indices]
         stats = {
             "query_length_tokens": len(tokenized_query),
             "expanded_tokens": len(tokenized_query) if expand_query else 0,
@@ -1755,15 +1875,20 @@ class BM25Index:
             "mean_score": statistics.mean(top_scores) if top_scores else 0.0,
             "min_score": min(top_scores) if top_scores else 0.0,
             "std_score": statistics.stdev(top_scores) if len(top_scores) > 1 else 0.0,
-            "non_zero_docs": len([s for s in scores if s > 0]),
-            "corpus_coverage": len([s for s in scores if s > 0]) / len(scores) if len(scores) > 0 else 0.0
+            "non_zero_docs": len([s for s in scores if s > 0]) if positive_indices else len(top_indices),
+            "corpus_coverage": (
+                len([s for s in scores if s > 0]) / len(scores)
+                if positive_indices and len(scores) > 0
+                else len(top_indices) / len(scores) if len(scores) > 0 else 0.0
+            ),
+            "used_overlap_fallback": not bool(positive_indices)
         }
         self.query_stats_history.append(stats)
         return {
             "documents": [[self.documents[i] for i in top_indices]],
             "metadatas": [[self.metadatas[i] for i in top_indices]],
             "ids": [[self.doc_ids[i] for i in top_indices]],
-            "scores": [float(scores[i]) for i in top_indices],
+            "scores": top_scores,
             "query_tokens": tokenized_query,
             "bm25_stats": stats
         }
@@ -1775,16 +1900,87 @@ class BM25IndexBuilder:
     def from_vectorstore(vectorstore: 'VectorStore', enable_preprocessing: bool = True) -> 'BM25Index':
         if not vectorstore.collection:
             raise RuntimeError("VectorStore collection is not initialized.")
-
         all_data = vectorstore.collection.get(include=["documents", "metadatas"])
         documents = all_data.get("documents", [])
         metadatas = all_data.get("metadatas", [])
         doc_ids = all_data.get("ids", [])
-
         if not documents:
             raise RuntimeError("No documents found in VectorStore to build BM25 index.")
-
         LOGGER.info("Building BM25 index from %d documents.", len(documents))
+        return BM25Index(
+            documents=documents,
+            doc_ids=doc_ids,
+            metadatas=metadatas,
+            enable_preprocessing=enable_preprocessing
+        )
+
+    @staticmethod
+    def from_chunks(chunks: list, enable_preprocessing: bool = True) -> 'BM25Index':
+        """
+        Build a BM25 index directly from a list of Document objects (text chunks).
+        Used in BM25-only mode to avoid building the dense vector DB at all.
+        """
+        from langchain_core.documents import Document as LCDocument
+        documents, doc_ids, metadatas = [], [], []
+        for chunk in chunks:
+            if isinstance(chunk, LCDocument):
+                content = (chunk.page_content or "").strip()
+                if not content:
+                    continue
+                metadata = sanitize_metadata(chunk.metadata or {})
+                chunk_id = str(chunk.metadata.get("chunk_id") or stable_hash({
+                    "content": content,
+                    "source": metadata.get("source"),
+                    "page": metadata.get("page_num", ""),
+                    "chunk_id": metadata.get("chunk_id", "")
+                }))
+                documents.append(content)
+                doc_ids.append(chunk_id)
+                metadatas.append(metadata)
+        if not documents:
+            raise RuntimeError("No valid chunks to build BM25 index from.")
+        LOGGER.info("Building BM25 index from %d chunks (no vector DB).", len(documents))
+        return BM25Index(
+            documents=documents,
+            doc_ids=doc_ids,
+            metadatas=metadatas,
+            enable_preprocessing=enable_preprocessing
+        )
+
+    @staticmethod
+    def from_image_objects(image_objects: list, enable_preprocessing: bool = True) -> Optional['BM25Index']:
+        """
+        Build a BM25 image index directly from image object dicts.
+        Used in BM25-only mode.
+        """
+        if not image_objects:
+            LOGGER.info("Skipping image BM25 index: no image objects.")
+            return None
+        documents, doc_ids, metadatas = [], [], []
+        for img in image_objects:
+            caption = (img.get("caption_text") or img.get("image_id") or "").strip()
+            if not caption:
+                continue
+            image_id = str(img.get("image_id") or stable_hash({
+                "image_path": img.get("path", ""),
+                "source": img.get("source", ""),
+                "page_num": img.get("page_num", ""),
+            }))
+            metadata = sanitize_metadata({
+                "image_id": img.get("image_id", ""),
+                "source": img.get("source", ""),
+                "page_num": img.get("page_num", ""),
+                "image_path": img.get("path", ""),
+                "caption_text": caption,
+                "bbox": img.get("bbox") if img.get("bbox") is not None else "",
+            })
+            documents.append(caption)
+            doc_ids.append(image_id)
+            metadatas.append(metadata)
+        if not documents:
+            LOGGER.info("Skipping image BM25 index: no valid captions found.")
+            return None
+        LOGGER.info("Building image BM25 index from %d image objects (no vector DB).", len(documents))
         return BM25Index(
             documents=documents,
             doc_ids=doc_ids,
@@ -1799,14 +1995,44 @@ from typing import Tuple, Dict, List, Optional
 
 # %%
 class RetrievalRag:
-    def __init__(self, image_embedder: 'ImageEmbeddingModel', text_embedder: 'TextEmbeddingModel',
-                 image_vectordb: 'VectorStore', text_vectordb: 'VectorStore',
-                 use_reranker: bool = cfg.use_reranker, use_hybrid: bool = cfg.use_hybrid,
-                 bm25_weight: float = cfg.bm25_weight, semantic_weight: float = cfg.semantic_weight,
+    def __init__(self,
+                 image_embedder: 'ImageEmbeddingModel',
+                 text_embedder: 'TextEmbeddingModel',
+                 image_vectordb: 'VectorStore',
+                 text_vectordb: 'VectorStore',
+                 use_reranker: bool = cfg.use_reranker,
+                 bm25_weight: float = cfg.bm25_weight,
+                 semantic_weight: float = cfg.semantic_weight,
                  formatter: Optional['ContextFormatter'] = None,
                  adaptive_weighting: bool = cfg.adaptive_weighting,
-                 score_fusion: bool = cfg.score_fusion,
-                 retrieval_mode: str = cfg.retrieval_mode):
+                 score_fusion: bool = cfg.use_weighted_fusion,
+                 retrieval_mode: str = cfg.retrieval_mode,
+                 # Optional pre-built BM25 indexes for BM25-only mode
+                 # Provide these when retrieval_mode is 'bm25' to bypass vector store
+                 # population. When omitted, indexes are constructed from the vector store.
+                 _bm25_index: Optional['BM25Index'] = None,
+                 _image_bm25_index: Optional['BM25Index'] = None):
+        if retrieval_mode not in {"semantic", "bm25", "hybrid"}:
+            raise ValueError("retrieval_mode must be one of 'semantic', 'bm25', or 'hybrid'.")
+        if adaptive_weighting and retrieval_mode != "hybrid":
+            raise ValueError("adaptive_weighting requires retrieval_mode='hybrid'.")
+        if score_fusion and retrieval_mode != "hybrid":
+            raise ValueError("score_fusion requires retrieval_mode='hybrid'.")
+
+        # Flag-consolidation note:
+        #   retrieval_mode="hybrid" is the authoritative switch; the flags
+        #   adaptive_weighting and score_fusion are sub-mode controls that only
+        #   take effect when retrieval_mode == "hybrid".  Both duplicate the
+        #   information already carried by retrieval_mode for the common cases
+        #   (semantic-only, BM25-only) and exist solely for per-feature toggling
+        #   within hybrid mode.  Any caller that sets retrieval_mode != "hybrid"
+        #   should leave both flags False to avoid a misleading config state.
+        if retrieval_mode != "hybrid" and (adaptive_weighting or score_fusion):
+            LOGGER.warning(
+                "retrieval_mode='%s' but adaptive_weighting=%s or score_fusion=%s — "
+                "those flags have no effect outside hybrid mode.",
+                retrieval_mode, adaptive_weighting, score_fusion,
+            )
         self.image_embedder = image_embedder
         self.text_embedder = text_embedder
         self.image_vectordb = image_vectordb
@@ -1825,30 +2051,114 @@ class RetrievalRag:
         self.semantic_weight = semantic_weight
         self.hybrid_metrics_history = []
         if self.retrieval_mode in ("bm25", "hybrid"):
-            self.bm25_index = BM25IndexBuilder.from_vectorstore(text_vectordb, enable_preprocessing=True)
+            # ── Text BM25 index ───────────────────────────────────────────────
+            if _bm25_index is not None:
+                # Pre-built index injected by caller (BM25-only / bypass mode).
+                # Avoids calling from_vectorstore on an empty DB.
+                self.bm25_index = _bm25_index
+                LOGGER.info("BM25 text index injected externally (%d docs).",
+                            len(_bm25_index.documents))
+            else:
+                # Normal path: build from populated vector DB.
+                self.bm25_index = BM25IndexBuilder.from_vectorstore(
+                    text_vectordb, enable_preprocessing=True)
+
+            # ── Image BM25 index ─────────────────────────────────────────────
+            if _image_bm25_index is not None:
+                self.image_bm25_index = _image_bm25_index
+                LOGGER.info("BM25 image index injected externally (%d docs).",
+                            len(_image_bm25_index.documents))
+            else:
+                self.image_bm25_index = self._build_optional_bm25_index(image_vectordb, "image")
+
             if self.retrieval_mode == "hybrid":
                 LOGGER.info("Hybrid search enabled: %s with adaptive=%s",
-                            'Score-based fusion' if score_fusion else 'RRF', adaptive_weighting)
+                            'Weighted Sum' if score_fusion else 'RRF', adaptive_weighting)
             else:
                 LOGGER.info("BM25-only retrieval enabled.")
         else:
             self.bm25_index = None
+            self.image_bm25_index = None
             LOGGER.info("Semantic-only retrieval enabled.")
+
+    @staticmethod
+    def _build_optional_bm25_index(vectorstore: 'VectorStore', label: str) -> Optional['BM25Index']:
+        try:
+            if not vectorstore.collection or vectorstore.collection.count() <= 0:
+                LOGGER.info("Skipping %s BM25 index: collection is empty.", label)
+                return None
+            return BM25IndexBuilder.from_vectorstore(vectorstore, enable_preprocessing=True)
+        except Exception as exc:
+            LOGGER.warning("Skipping %s BM25 index: %s", label, exc)
+            return None
 
     @staticmethod
     def _clamp(value: float, lower: float, upper: float) -> float:
         return max(lower, min(upper, value))
 
     def _classify_query_type(self, query: str) -> str:
+        """
+        Classify the query as 'keyword', 'semantic', or 'balanced' to guide
+        per-query adaptive BM25 / semantic weight selection.
+
+        Checks are evaluated in strict priority order so that high-signal
+        patterns (numeric entities, short lookups) are never overridden by
+        lower-priority heuristics:
+
+          1. Numeric-entity queries  → 'keyword'
+             BM25 excels at exact-value matching (years, distances,
+             measurements).  Even a single number at a word-ratio ≥ 0.10
+             indicates the user wants a precise factual value.
+
+          2. Short queries           → 'keyword'
+             Six-word-or-fewer queries are typically exact lookups rather
+             than conceptual searches.
+
+          3. Explanatory queries     → 'semantic'
+             Dense retrieval handles intent and paraphrase better than
+             keyword matching for "why", "how", "explain", etc.
+             Note: 'what' is intentionally excluded — it appears in both
+             factual lookups ("What is the mirror diameter?") and conceptual
+             questions ("What causes star formation?") and is therefore too
+             ambiguous to be a reliable semantic indicator on its own.
+
+          4. Long queries            → 'balanced'
+             Without explicit explanatory markers, length alone suggests
+             multi-aspect intent that benefits from both retrievers.
+
+          5. Default                 → 'balanced'
+        """
         query_lower = query.lower().strip()
         words = query_lower.split()
         word_count = len(words)
         num_count = len(re.findall(r'\d+', query_lower))
-        explanatory_markers = ['why', 'how', 'explain', 'describe', 'what', 'compare', 'analyze']
-        if word_count <= 6 or (num_count > 0 and num_count / max(word_count, 1) > 0.18):
+        num_ratio = num_count / max(word_count, 1)
+
+        # Numeric-entity check takes the highest priority: a query mentioning
+        # specific values strongly benefits from BM25's exact token matching.
+        # Threshold lowered from 0.18 to 0.10 so that a single number in a
+        # ten-word question (ratio = 0.10) is still flagged as keyword-oriented.
+        if num_count >= 1 and num_ratio >= 0.10:
             return 'keyword'
-        elif word_count >= 14 or any(marker in query_lower for marker in explanatory_markers):
+
+        # Short queries are typical of targeted lookups rather than open-ended
+        # exploration.
+        if word_count <= 6:
+            return 'keyword'
+
+        # Explanatory and comparative queries benefit most from semantic
+        # retrieval, which handles intent and paraphrase better than BM25.
+        explanatory_markers = [
+            'why', 'how', 'explain', 'describe', 'compare', 'analyze', 'summarize'
+        ]
+        if any(marker in query_lower for marker in explanatory_markers):
             return 'semantic'
+
+        # Long queries without explicit explanatory markers carry multiple
+        # aspects; balanced retrieval handles them best.
+        if word_count >= 14:
+            return 'balanced'
+
         return 'balanced'
 
     def _normalize_scores(self, scores: List[float], method: str = 'minmax') -> List[float]:
@@ -1871,6 +2181,28 @@ class RetrievalRag:
             normalized = exp_scores / np.sum(exp_scores)
         return normalized.tolist()
 
+    @staticmethod
+    def _bm25_distances(scores: List[float]) -> List[List[float]]:
+        """Convert raw BM25 scores to pseudo-distances in [0, 1].
+
+        The naive ``score / max_score`` normalization guarantees the top result
+        always achieves distance = 0 (similarity = 1.0) regardless of its
+        absolute retrieval quality.  This inflates M4 BM25 Relevance and makes
+        it appear high even when the actual BM25 signal is weak.
+
+        A proportional ceiling of 1.20 × max_score is used as the denominator
+        so the best-matching document maps to at most 0.833 similarity.  This
+        preserves relative ranking while reporting an honest absolute estimate
+        that is commensurable with cosine distance values from the vector DB.
+        """
+        if not scores:
+            return [[]]
+        max_score = max(scores)
+        if max_score <= 0:
+            return [[1.0 for _ in scores]]
+        effective_ceiling = max_score * 1.20
+        return [[max(0.0, 1.0 - (float(score) / effective_ceiling)) for score in scores]]
+
     def _calculate_overlap(self, list1: List[str], list2: List[str]) -> Dict:
         set1, set2 = set(list1), set(list2)
         intersection = set1 & set2
@@ -1884,6 +2216,13 @@ class RetrievalRag:
         }
 
     def _fuse_scores(self, bm25_results: Dict, semantic_results: Dict) -> Tuple[Dict, Dict]:
+        """
+        Combine BM25 and semantic results using normalized weighted sum.
+
+        Both score distributions are min-max normalized to [0,1] before
+        applying the configured bm25_weight and semantic_weight. This
+        prevents scale mismatch between lexical scores and cosine distances.
+        """
         bm25_docs = bm25_results.get("documents", [[]])[0]
         bm25_ids = bm25_results.get("ids", [[]])[0]
         bm25_metas = bm25_results.get("metadatas", [[]])[0]
@@ -1916,7 +2255,7 @@ class RetrievalRag:
         for doc_id in combined:
             entry = combined[doc_id]
             entry["fused_score"] = (entry["bm25_norm"] * self.bm25_weight) + (
-                        entry["semantic_norm"] * self.semantic_weight)
+                    entry["semantic_norm"] * self.semantic_weight)
         sorted_docs = sorted(combined.items(), key=lambda x: x[1]["fused_score"], reverse=True)
         seen_hashes = set()
         unique_sorted = []
@@ -1944,36 +2283,90 @@ class RetrievalRag:
             "bm25_scores": [[entry["bm25_raw"] for _, entry in sorted_docs]]
         }, fusion_stats
 
-    def _rrf_fusion(self, bm25_results: Dict, semantic_results: Dict, k_rrf: int = cfg.rrf_k_constant) -> Tuple[
-        Dict, Dict]:
+    def _rrf_fusion(
+            self,
+            bm25_results: Dict,
+            semantic_results: Dict,
+            k_rrf: int = cfg.rrf_k_constant,
+            bm25_weight: Optional[float] = None,
+            semantic_weight: Optional[float] = None,
+    ) -> Tuple[Dict, Dict]:
+        """
+        Combine BM25 and semantic results using weighted Reciprocal Rank Fusion.
+
+        RRF operates on rank positions rather than raw scores, which makes it
+        robust to scale differences between lexical and vector retrievers.
+        Each document accumulates contributions from both lists; the contribution
+        from list l at rank r is:
+
+            weight_l * (1 / (k_rrf + r + 1))
+
+        When weights are equal (0.5 / 0.5) this reduces to the standard,
+        unweighted RRF formulation.  Passing per-query adaptive weights allows
+        the fusion to emphasise whichever retriever produced stronger signal for
+        that specific query.
+
+        Parameters
+        ----------
+        bm25_weight :
+            Weight applied to every BM25 rank contribution.  Defaults to the
+            instance's configured self.bm25_weight so callers that do not use
+            adaptive weighting need not pass this argument.
+        semantic_weight :
+            Weight applied to every semantic rank contribution.  Defaults to
+            self.semantic_weight for the same reason.
+        """
+        # Resolve weights: caller-supplied values (from adaptive logic) take
+        # precedence; fall back to the instance's configured static values.
+        effective_bm25_w = float(bm25_weight if bm25_weight is not None else self.bm25_weight)
+        effective_sem_w = float(semantic_weight if semantic_weight is not None else self.semantic_weight)
+
         scores = {}
         bm25_docs = bm25_results.get("documents", [[]])[0]
         bm25_ids = bm25_results.get("ids", [[]])[0]
         bm25_metas = bm25_results.get("metadatas", [[]])[0]
         bm25_scores = bm25_results.get("scores", [])
+        bm25_max = max(bm25_scores) if bm25_scores else 0.0
+        bm25_effective_ceiling = bm25_max * 1.20 if bm25_max > 0 else 1.0
+
+        def _bm25_dist(raw_score: float) -> float:
+            if bm25_max <= 0:
+                return 1.0
+            return max(0.0, 1.0 - (raw_score / bm25_effective_ceiling))
+
+        # Accumulate weighted BM25 rank contributions.
         for rank, doc_id in enumerate(bm25_ids):
-            rrf_score = self.bm25_weight * (1 / (k_rrf + rank + 1))
-            scores[doc_id] = {"rrf_score": rrf_score, "text": bm25_docs[rank], "metadata": bm25_metas[rank],
-                              "distance": 1.0, "bm25_raw": bm25_scores[rank] if rank < len(bm25_scores) else 0.0,
-                              "source": "bm25"}
+            raw = bm25_scores[rank] if rank < len(bm25_scores) else 0.0
+            rrf_score = effective_bm25_w * (1.0 / (k_rrf + rank + 1))
+            scores[doc_id] = {
+                "rrf_score": rrf_score, "text": bm25_docs[rank],
+                "metadata": bm25_metas[rank], "distance": _bm25_dist(raw),
+                "bm25_raw": raw, "source": "bm25",
+            }
+
+        # Accumulate weighted semantic rank contributions.
         sem_docs = semantic_results.get("documents", [[]])[0]
         sem_ids = semantic_results.get("ids", [[]])[0]
         sem_metas = semantic_results.get("metadatas", [[]])[0]
         sem_distances = semantic_results.get("distances", [[]])[0]
         for rank, doc_id in enumerate(sem_ids):
-            rrf_score = self.semantic_weight * (1 / (k_rrf + rank + 1))
+            rrf_score = effective_sem_w * (1.0 / (k_rrf + rank + 1))
             if doc_id in scores:
                 scores[doc_id]["rrf_score"] += rrf_score
                 scores[doc_id]["distance"] = float(sem_distances[rank])
                 scores[doc_id]["source"] = "both"
             else:
-                scores[doc_id] = {"rrf_score": rrf_score, "text": sem_docs[rank], "metadata": sem_metas[rank],
-                                  "distance": float(sem_distances[rank]), "bm25_raw": 0.0, "source": "semantic"}
+                scores[doc_id] = {
+                    "rrf_score": rrf_score, "text": sem_docs[rank],
+                    "metadata": sem_metas[rank], "distance": float(sem_distances[rank]),
+                    "bm25_raw": 0.0, "source": "semantic",
+                }
+
         sorted_docs = sorted(scores.items(), key=lambda x: x[1]["rrf_score"], reverse=True)
         stats = {
             "bm25_only_docs": len([s for s in scores.values() if s["source"] == "bm25"]),
             "semantic_only_docs": len([s for s in scores.values() if s["source"] == "semantic"]),
-            "both_signals_docs": len([s for s in scores.values() if s["source"] == "both"])
+            "both_signals_docs": len([s for s in scores.values() if s["source"] == "both"]),
         }
         return {
             "documents": [[entry["text"] for _, entry in sorted_docs]],
@@ -1981,7 +2374,7 @@ class RetrievalRag:
             "distances": [[entry["distance"] for _, entry in sorted_docs]],
             "ids": [[doc_id for doc_id, _ in sorted_docs]],
             "fused_scores": [[entry["rrf_score"] for _, entry in sorted_docs]],
-            "bm25_scores": [[entry["bm25_raw"] for _, entry in sorted_docs]]
+            "bm25_scores": [[entry["bm25_raw"] for _, entry in sorted_docs]],
         }, stats
 
     def _get_adaptive_weights(self, query: str, bm25_results: Dict) -> Tuple[float, float, Dict[str, Any]]:
@@ -2018,16 +2411,27 @@ class RetrievalRag:
             return 0.0, 1.0, {"query_type": query_type, "bm25_signal_strength": round(bm25_signal_strength, 4),
                               "lexical_query_signal": round(lexical_query_signal, 4), "fallback_to_semantic": True,
                               "fallback_reason": "no_positive_bm25_scores", "weight_adjusted": True}
-        base_weight = {"keyword": 0.55, "balanced": 0.40, "semantic": 0.25}.get(query_type, self.bm25_weight)
-        bm25_weight = base_weight + (0.35 * (bm25_signal_strength - 0.5))
-        if explanatory_signal > 0:
-            bm25_weight -= 0.05
-        if numeric_signal > 0.35:
-            bm25_weight += 0.05
-        lower_bound, upper_bound = {"keyword": (0.25, 0.85), "balanced": (0.20, 0.75), "semantic": (0.15, 0.60)}.get(
-            query_type, (0.15, 0.85))
-        bm25_weight = round(self._clamp(bm25_weight, lower_bound, upper_bound), 3)
-        semantic_weight = round(1.0 - bm25_weight, 3)
+        if query_type == "keyword":
+            preset = cfg.adaptive_weights_keyword
+        elif query_type == "semantic":
+            preset = cfg.adaptive_weights_semantic
+        elif (
+                max_score >= cfg.bm25_strong_max_score_threshold or
+                std_score >= cfg.bm25_strong_std_threshold or
+                bm25_signal_strength >= 0.55
+        ):
+            preset = cfg.adaptive_weights_balanced_strong_bm25
+        elif max_score <= cfg.bm25_weak_max_score_threshold or bm25_signal_strength <= 0.35:
+            preset = cfg.adaptive_weights_balanced_weak_bm25
+        else:
+            preset = (self.bm25_weight, self.semantic_weight)
+
+        bm25_weight = round(float(preset[0]), 3)
+        semantic_weight = round(float(preset[1]), 3)
+        if abs((bm25_weight + semantic_weight) - 1.0) > 1e-6:
+            total = max(bm25_weight + semantic_weight, 1e-6)
+            bm25_weight = round(bm25_weight / total, 3)
+            semantic_weight = round(1.0 - bm25_weight, 3)
         return bm25_weight, semantic_weight, {"query_type": query_type,
                                               "bm25_signal_strength": round(bm25_signal_strength, 4),
                                               "lexical_query_signal": round(lexical_query_signal, 4),
@@ -2047,6 +2451,8 @@ class RetrievalRag:
         search_mode = self.retrieval_mode
 
         start_search = perf_counter()
+        bm25_elapsed = 0.0
+        fusion_elapsed = 0.0
 
         if self.retrieval_mode in ("semantic", "hybrid"):
             start_embed = perf_counter()
@@ -2055,14 +2461,14 @@ class RetrievalRag:
             semantic_results = self.text_vectordb.query(query_embedding=query_embedding, k=k * 2)
 
         if self.retrieval_mode in ("bm25", "hybrid") and self.bm25_index:
+            _bm25_start = perf_counter()
             bm25_results = self.bm25_index.query(query=query, k=k * 2, expand_query=True)
+            bm25_elapsed = perf_counter() - _bm25_start
 
         if self.retrieval_mode == "bm25":
             results = bm25_results or {"documents": [[]], "metadatas": [[]], "ids": [[]], "scores": []}
             scores = results.get("scores", [])
-            max_score = max(scores) if scores else 1.0
-            distances = [[1.0 - (s / max_score) if max_score > 0 else 1.0 for s in scores]]
-            results["distances"] = distances
+            results["distances"] = self._bm25_distances(scores)
             results["bm25_scores"] = [scores]
             search_mode = "bm25_only"
 
@@ -2077,23 +2483,42 @@ class RetrievalRag:
             else:
                 adaptive_bm25_w, adaptive_sem_w, adaptive_info = self._get_adaptive_weights(query, bm25_results)
                 bm25_ids = bm25_results.get("ids", [[]])[0]
-                overlap_stats = self._calculate_overlap(bm25_ids, semantic_results.get("ids", [[]])[0]) if bm25_ids else {
+                overlap_stats = self._calculate_overlap(bm25_ids,
+                                                        semantic_results.get("ids", [[]])[0]) if bm25_ids else {
                     "intersection_size": 0, "union_size": 0, "jaccard_similarity": 0.0, "overlap_percentage": 0.0,
                     "intersection_ids": []}
                 if adaptive_info.get("fallback_to_semantic", False):
                     results = semantic_results
-                    fusion_stats = {"bm25_contribution_mean": 0.0, "semantic_contribution_mean": 1.0, "bm25_only_docs": 0,
-                                    "semantic_only_docs": len(semantic_results.get("ids", [[]])[0]), "both_signals_docs": 0}
+                    fusion_stats = {"bm25_contribution_mean": 0.0, "semantic_contribution_mean": 1.0,
+                                    "bm25_only_docs": 0,
+                                    "semantic_only_docs": len(semantic_results.get("ids", [[]])[0]),
+                                    "both_signals_docs": 0}
                     search_mode = "semantic_fallback"
                 else:
-                    orig_bm25_w, orig_sem_w = self.bm25_weight, self.semantic_weight
-                    self.bm25_weight, self.semantic_weight = adaptive_bm25_w, adaptive_sem_w
-                    try:
-                        results, fusion_stats = self._fuse_scores(bm25_results,
-                                                                  semantic_results) if self.score_fusion else self._rrf_fusion(
-                            bm25_results, semantic_results, k_rrf=cfg.rrf_k_constant)
-                    finally:
-                        self.bm25_weight, self.semantic_weight = orig_bm25_w, orig_sem_w
+                    _fusion_start = perf_counter()
+                    if self.score_fusion:
+                        # _fuse_scores reads self.bm25_weight / self.semantic_weight
+                        # internally, so the instance attributes must be temporarily
+                        # set to the per-query adaptive values before calling it.
+                        orig_bm25_w, orig_sem_w = self.bm25_weight, self.semantic_weight
+                        self.bm25_weight, self.semantic_weight = adaptive_bm25_w, adaptive_sem_w
+                        try:
+                            results, fusion_stats = self._fuse_scores(bm25_results, semantic_results)
+                        finally:
+                            self.bm25_weight, self.semantic_weight = orig_bm25_w, orig_sem_w
+                    else:
+                        # _rrf_fusion accepts weights as explicit parameters, so no
+                        # instance-attribute swap is required.  Passing the adaptive
+                        # weights directly ensures they genuinely influence the rank
+                        # contributions from each retriever rather than being tracked
+                        # but silently ignored.
+                        results, fusion_stats = self._rrf_fusion(
+                            bm25_results, semantic_results,
+                            k_rrf=cfg.rrf_k_constant,
+                            bm25_weight=adaptive_bm25_w,
+                            semantic_weight=adaptive_sem_w,
+                        )
+                    fusion_elapsed = perf_counter() - _fusion_start
                     search_mode = "hybrid_score_fusion" if self.score_fusion else "hybrid_rrf"
                 hybrid_stats = {
                     "query_type": adaptive_info["query_type"], "bm25_weight_used": adaptive_bm25_w,
@@ -2102,6 +2527,9 @@ class RetrievalRag:
                     "bm25_mean_score": bm25_results.get("bm25_stats", {}).get("mean_score", 0),
                     "bm25_std_score": bm25_results.get("bm25_stats", {}).get("std_score", 0),
                     "bm25_corpus_coverage": bm25_results.get("bm25_stats", {}).get("corpus_coverage", 0),
+                    "bm25_used_overlap_fallback": bm25_results.get("bm25_stats", {}).get("used_overlap_fallback",
+                                                                                         False),
+                    "fusion_type": cfg.fusion_type,
                     "bm25_signal_strength": adaptive_info.get("bm25_signal_strength", 0.0),
                     "lexical_query_signal": adaptive_info.get("lexical_query_signal", 0.0),
                     "weight_adjusted": adaptive_info.get("weight_adjusted", False),
@@ -2116,10 +2544,16 @@ class RetrievalRag:
                 results[key][0] = results[key][0][:k]
         search_time = perf_counter() - start_search
         total_time = perf_counter() - start_total
-        results["retrieval_metrics"] = {"text_embed_time": round(embed_time, 4),
-                                        "text_search_time": round(search_time, 4),
-                                        "text_total_retrieval_time": round(total_time, 4), "search_mode": search_mode,
-                                        "hybrid_stats": hybrid_stats}
+        results["retrieval_metrics"] = {
+            "text_embed_time": round(embed_time, 4),
+            "text_search_time": round(search_time, 4),
+            "text_total_retrieval_time": round(total_time, 4),
+            # Granular stage splits forwarded to RetrievalOutput.latency_breakdown.
+            "bm25_time": round(bm25_elapsed, 4),
+            "fusion_time": round(fusion_elapsed, 4),
+            "search_mode": search_mode,
+            "hybrid_stats": hybrid_stats,
+        }
         return results
 
     def retrieve_images(self, query: str, k: int = cfg.image_k) -> Dict:
@@ -2128,16 +2562,79 @@ class RetrievalRag:
         if not isinstance(k, int) or k <= 0:
             raise ValueError(f"k must be a positive integer, got {k}.")
         start_total = perf_counter()
-        start_embed = perf_counter()
-        query_embedding = self.image_embedder.embed_query(query)
-        embed_time = perf_counter() - start_embed
+        embed_time = 0.0
+        bm25_elapsed = 0.0
+        fusion_elapsed = 0.0
+        semantic_results = None
+        bm25_results = None
+        search_mode = self.retrieval_mode
+
         start_query = perf_counter()
-        results = self.image_vectordb.query(query_embedding=query_embedding, k=k)
+        if self.retrieval_mode in ("semantic", "hybrid"):
+            start_embed = perf_counter()
+            query_embedding = self.image_embedder.embed_query(query)
+            embed_time = perf_counter() - start_embed
+            semantic_results = self.image_vectordb.query(query_embedding=query_embedding, k=k * 2)
+
+        if self.retrieval_mode in ("bm25", "hybrid") and self.image_bm25_index:
+            _bm25_start = perf_counter()
+            bm25_results = self.image_bm25_index.query(query=query, k=k * 2, expand_query=True)
+            bm25_elapsed = perf_counter() - _bm25_start
+
+        if self.retrieval_mode == "bm25":
+            results = bm25_results or {"documents": [[]], "metadatas": [[]], "ids": [[]], "scores": []}
+            scores = results.get("scores", [])
+            results["distances"] = self._bm25_distances(scores)
+            results["bm25_scores"] = [scores]
+            search_mode = "bm25_only"
+        elif self.retrieval_mode == "semantic" or not bm25_results:
+            results = semantic_results or {"documents": [[]], "metadatas": [[]], "distances": [[]], "ids": [[]]}
+            search_mode = "semantic_only" if self.retrieval_mode == "semantic" else "semantic_fallback"
+        elif not semantic_results:
+            results = bm25_results
+            scores = results.get("scores", [])
+            results["distances"] = self._bm25_distances(scores)
+            results["bm25_scores"] = [scores]
+            search_mode = "bm25_fallback"
+        else:
+            # Hybrid image fusion respects the same use_weighted_fusion flag as text
+            # retrieval so the two modalities remain configuration-consistent.
+            adaptive_bm25_w, adaptive_sem_w, _ = self._get_adaptive_weights(query, bm25_results)
+            _fusion_start = perf_counter()
+            if self.score_fusion:
+                # _fuse_scores reads instance weights, so set them temporarily.
+                orig_bm25_w, orig_sem_w = self.bm25_weight, self.semantic_weight
+                self.bm25_weight, self.semantic_weight = adaptive_bm25_w, adaptive_sem_w
+                try:
+                    results, _ = self._fuse_scores(bm25_results, semantic_results)
+                finally:
+                    self.bm25_weight, self.semantic_weight = orig_bm25_w, orig_sem_w
+            else:
+                # _rrf_fusion accepts weights explicitly; no instance-attribute
+                # swap is needed or appropriate here.
+                results, _ = self._rrf_fusion(
+                    bm25_results, semantic_results,
+                    k_rrf=cfg.rrf_k_constant,
+                    bm25_weight=adaptive_bm25_w,
+                    semantic_weight=adaptive_sem_w,
+                )
+            fusion_elapsed = perf_counter() - _fusion_start
+            search_mode = "hybrid_score_fusion" if self.score_fusion else "hybrid_rrf"
+
+        for key in ["documents", "metadatas", "distances", "ids", "fused_scores", "bm25_scores"]:
+            if key in results and results[key]:
+                results[key][0] = results[key][0][:k]
         query_time = perf_counter() - start_query
         total_time = perf_counter() - start_total
-        results["retrieval_metrics"] = {"image_embed_time": round(embed_time, 4),
-                                        "image_search_time": round(query_time, 4),
-                                        "image_total_retrieval_time": round(total_time, 4)}
+        results["retrieval_metrics"] = {
+            "image_embed_time": round(embed_time, 4),
+            "image_search_time": round(query_time, 4),
+            "image_total_retrieval_time": round(total_time, 4),
+            # Granular stage splits forwarded to RetrievalOutput.latency_breakdown.
+            "bm25_time": round(bm25_elapsed, 4),
+            "fusion_time": round(fusion_elapsed, 4),
+            "search_mode": search_mode,
+        }
         return results
 
     def retrieve(self, query: str, text_k: int = cfg.text_k, image_k: int = cfg.image_k,
@@ -2148,70 +2645,163 @@ class RetrievalRag:
             raise ValueError(f"text_k must be a positive integer, got {text_k}.")
         if not isinstance(image_k, int) or image_k <= 0:
             raise ValueError(f"image_k must be a positive integer, got {image_k}.")
+
         start_total = perf_counter()
+
         text_start = perf_counter()
         raw_text_results = self.retrieve_text(query=query, k=text_k)
         text_latency = perf_counter() - text_start
+
         image_start = perf_counter()
         raw_image_results = self.retrieve_images(query=query, k=image_k)
         image_latency = perf_counter() - image_start
+
+        # Pull per-stage timing from the sub-retrieval metrics dictionaries.
+        # retrieve_text and retrieve_images each emit a retrieval_metrics block
+        # containing their internal embed and search splits.
+        _text_rm = raw_text_results.get("retrieval_metrics", {})
+        _image_rm = raw_image_results.get("retrieval_metrics", {})
+
+        embed_time = (_text_rm.get("text_embed_time", 0.0)
+                      + _image_rm.get("image_embed_time", 0.0))
+        bm25_time = (_text_rm.get("bm25_time", 0.0)
+                     + _image_rm.get("bm25_time", 0.0))
+        fusion_time = (_text_rm.get("fusion_time", 0.0)
+                       + _image_rm.get("fusion_time", 0.0))
+
         text_items = self.formatter._flatten_results(raw_text_results)
         image_items = self.formatter._flatten_results(raw_image_results)
-        retrieved_image_refs = set()
-        for item in image_items:
-            meta = item["metadata"]
-            image_id = meta.get("image_id")
-            if image_id:
-                retrieved_image_refs.add(str(image_id))
-            image_path = meta.get("image_path", "")
-            if image_path:
-                normalized_path = image_path.replace("\\", "/")
-                retrieved_image_refs.add(normalized_path.split("/")[-1])
-                match = re.search(r"/([^/]+)/page_(\d+)_img_(\d+)\.png$", normalized_path)
-                if match:
-                    retrieved_image_refs.add(f"{match.group(1)}_p{int(match.group(2))}_i{int(match.group(3))}")
-        for item in text_items:
-            related_ids = item["metadata"].get("related_image_ids", [])
-            related_refs = set()
-            for related_id in related_ids:
-                related_str = str(related_id)
-                related_refs.add(related_str)
-                related_refs.add(related_str.replace("\\", "/").split("/")[-1])
-            overlap = related_refs & retrieved_image_refs
-            if overlap:
-                boost = min(cfg.cross_modal_max_boost, len(overlap) * cfg.cross_modal_boost_per_overlap)
-                item["distance"] = item["distance"] * (1.0 - boost)
-                item["cross_modal_boost"] = round(boost, 3)
+
+        # ── Cross-modal boost ──────────────────────────────────────────────
+        if cfg.use_cross_modal_boost:
+            retrieved_image_refs = set()
+            for item in image_items:
+                meta = item["metadata"]
+                image_id = meta.get("image_id")
+                if image_id:
+                    retrieved_image_refs.add(str(image_id))
+                image_path = meta.get("image_path", "")
+                if image_path:
+                    normalized_path = image_path.replace("\\", "/")
+                    retrieved_image_refs.add(normalized_path.split("/")[-1])
+                    match = re.search(r"/([^/]+)/page_(\d+)_img_(\d+)\.png$", normalized_path)
+                    if match:
+                        retrieved_image_refs.add(f"{match.group(1)}_p{int(match.group(2))}_i{int(match.group(3))}")
+
+            # Build reverse index: image IDs referenced by any retrieved text chunk.
+            retrieved_text_image_refs: set = set()
+            for item in text_items:
+                for rid in item["metadata"].get("related_image_ids", []):
+                    related_str = str(rid)
+                    retrieved_text_image_refs.add(related_str)
+                    retrieved_text_image_refs.add(
+                        related_str.replace("\\", "/").split("/")[-1]
+                    )
+
+            for item in text_items:
+                related_ids = item["metadata"].get("related_image_ids", [])
+                related_refs = set()
+                for related_id in related_ids:
+                    related_str = str(related_id)
+                    related_refs.add(related_str)
+                    related_refs.add(related_str.replace("\\", "/").split("/")[-1])
+                overlap = related_refs & retrieved_image_refs
+                if overlap:
+                    boost = min(cfg.cross_modal_max_boost, len(overlap) * cfg.cross_modal_boost_per_overlap)
+                    item["distance"] = item["distance"] * (1.0 - boost)
+                    item["cross_modal_boost"] = round(boost, 3)
+
+            # Symmetric boost: images co-occurring with retrieved text chunks.
+            for item in image_items:
+                meta = item["metadata"]
+                img_id = str(meta.get("image_id", ""))
+                img_filename = img_id.replace("\\", "/").split("/")[-1]
+                if img_id in retrieved_text_image_refs or img_filename in retrieved_text_image_refs:
+                    boost = min(cfg.cross_modal_max_boost, cfg.cross_modal_boost_per_overlap)
+                    item["distance"] = item["distance"] * (1.0 - boost)
+                    item["cross_modal_boost"] = round(boost, 3)
+
+        # ── Issue 10: related_image_ids ranking signal ─────────────────────
+        # Beyond the distance boost above, promote text chunks that explicitly
+        # reference one or more of the retrieved image IDs by improving their
+        # effective fused_score when a fused_score is already present.  This
+        # turns the spatial co-occurrence relationship into a visible ranking
+        # signal rather than a silent distance tweak only.
+        if cfg.use_cross_modal_boost:
+            for item in text_items:
+                if item.get("fused_score") is None:
+                    continue
+                related_refs = set()
+                for rid in item["metadata"].get("related_image_ids", []):
+                    related_refs.add(str(rid))
+                    related_refs.add(str(rid).replace("\\", "/").split("/")[-1])
+                match_count = len(related_refs & retrieved_image_refs)
+                if match_count > 0:
+                    # Scale the fused_score upward proportionally to the number
+                    # of co-located images, capped at a 10 % lift so that
+                    # cross-modal signal supplements rather than overrides
+                    # lexical and semantic relevance.
+                    scale = min(1.0 + match_count * 0.05, 1.10)
+                    item["fused_score"] = round(float(item["fused_score"]) * scale, 6)
+
+        # ── Reranking ──────────────────────────────────────────────────────
+        rerank_start = perf_counter()
         if self.reranker and text_items:
-            reranked_items = self.reranker.rerank(query=query, items=text_items, top_k=min(rerank_k, len(text_items)))
+            reranked_items = self.reranker.rerank(
+                query=query, items=text_items, top_k=min(rerank_k, len(text_items))
+            )
         elif any("fused_score" in item for item in text_items):
-            reranked_items = sorted(text_items, key=lambda item: item.get("fused_score", 0.0), reverse=True)[:rerank_k]
+            reranked_items = sorted(
+                text_items, key=lambda item: item.get("fused_score", 0.0), reverse=True
+            )[:rerank_k]
         else:
             reranked_items = sorted(text_items, key=lambda item: item["distance"])[:rerank_k]
+        rerank_time = perf_counter() - rerank_start
+
         text_result_items = [
-            RetrievalItem(doc_id=item.get("doc_id", ""), text=item.get("text", ""), metadata=item.get("metadata", {}),
-                          distance=float(item.get("distance", 1.0)),
-                          similarity=max(0.0, 1.0 - float(item.get("distance", 1.0))),
-                          fused_score=item.get("fused_score"), rank=rank, modality="text",
-                          retrieval_latency_sec=round(text_latency, 4)) for rank, item in
-            enumerate(reranked_items, start=1)]
+            RetrievalItem(
+                doc_id=item.get("doc_id", ""), text=item.get("text", ""),
+                metadata=item.get("metadata", {}),
+                distance=float(item.get("distance", 1.0)),
+                similarity=max(0.0, 1.0 - float(item.get("distance", 1.0))),
+                fused_score=item.get("fused_score"), rank=rank, modality="text",
+                retrieval_latency_sec=round(text_latency, 4)
+            )
+            for rank, item in enumerate(reranked_items, start=1)
+        ]
         image_result_items = [
-            RetrievalItem(doc_id=item.get("doc_id", ""), text=item.get("text", ""), metadata=item.get("metadata", {}),
-                          distance=float(item.get("distance", 1.0)),
-                          similarity=max(0.0, 1.0 - float(item.get("distance", 1.0))), fused_score=None, rank=rank,
-                          modality="image", retrieval_latency_sec=round(image_latency, 4)) for rank, item in
-            enumerate(image_items, start=1)]
-        cosine_sim_text = float(np.mean([item.similarity for item in text_result_items])) if text_result_items else 0.0
-        cosine_sim_image = float(
-            np.mean([item.similarity for item in image_result_items])) if image_result_items else 0.0
+            RetrievalItem(
+                doc_id=item.get("doc_id", ""), text=item.get("text", ""),
+                metadata=item.get("metadata", {}),
+                distance=float(item.get("distance", 1.0)),
+                similarity=max(0.0, 1.0 - float(item.get("distance", 1.0))),
+                fused_score=item.get("fused_score"), rank=rank,
+                modality="image", retrieval_latency_sec=round(image_latency, 4)
+            )
+            for rank, item in enumerate(image_items, start=1)
+        ]
+
+        cosine_sim_text = float(np.mean([i.similarity for i in text_result_items])) if text_result_items else 0.0
+        cosine_sim_image = float(np.mean([i.similarity for i in image_result_items])) if image_result_items else 0.0
         overall_time = perf_counter() - start_total
-        return RetrievalOutput(query=query, text_items=text_result_items, image_items=image_result_items,
-                               text_latency_sec=round(text_latency, 4), image_latency_sec=round(image_latency, 4),
-                               total_latency_sec=round(overall_time, 4), cosine_sim_text=round(cosine_sim_text, 4),
-                               cosine_sim_image=round(cosine_sim_image, 4),
-                               search_mode=raw_text_results.get("retrieval_metrics", {}).get("search_mode",
-                                                                                             "semantic_only"),
-                               hybrid_stats=raw_text_results.get("retrieval_metrics", {}).get("hybrid_stats", {}))
+
+        return RetrievalOutput(
+            query=query,
+            text_items=text_result_items,
+            image_items=image_result_items,
+            text_latency_sec=round(text_latency, 4),
+            image_latency_sec=round(image_latency, 4),
+            total_latency_sec=round(overall_time, 4),
+            cosine_sim_text=round(cosine_sim_text, 4),
+            cosine_sim_image=round(cosine_sim_image, 4),
+            search_mode=_text_rm.get("search_mode", "semantic_only"),
+            hybrid_stats=_text_rm.get("hybrid_stats", {}),
+            # Granular stage latencies exposed for benchmarking.
+            embed_time_sec=round(embed_time, 4),
+            bm25_time_sec=round(bm25_time, 4),
+            fusion_time_sec=round(fusion_time, 4),
+            rerank_time_sec=round(rerank_time, 4),
+        )
 
 
 # %%
@@ -2270,7 +2860,7 @@ class LocalLLM:
                 requests.get("http://localhost:11434/api/tags", timeout=1)
                 LOGGER.info("Ollama server already running.")
                 return "external"
-            except:
+            except Exception:
                 pass
             ollama_process = subprocess.Popen(
                 ["ollama", "serve"],
@@ -2283,7 +2873,7 @@ class LocalLLM:
                     requests.get("http://localhost:11434/api/tags", timeout=1)
                     LOGGER.info("Ollama server started.")
                     return ollama_process
-                except:
+                except Exception:
                     time.sleep(1)
             raise RuntimeError("Ollama failed to start")  # If server did not start after many tries, raise error.
 
@@ -2444,20 +3034,26 @@ class LocalLLM:
                             content = ""
                             try:
                                 if hasattr(chunk, "message") and hasattr(chunk.message, "content"):
+                                    # chunk.message.content may be None during think-mode reasoning
+                                    # tokens. Coerce to empty string to avoid concatenation errors.
                                     content = chunk.message.content or ""
                                 elif isinstance(chunk, dict):
                                     if "message" in chunk and isinstance(chunk["message"], dict):
-                                        content = chunk["message"].get("content", "")
+                                        content = chunk["message"].get("content") or ""
                                     elif "response" in chunk:
-                                        content = chunk.get("response", "")
+                                        content = chunk.get("response") or ""
                             except Exception:
                                 pass
 
+                            # Only append and print non-empty content tokens.
+                            # Think-mode models emit intermediate reasoning chunks
+                            # whose content field is None or empty; those are
+                            # intentionally skipped here.
                             if content:
                                 full_response += content
                                 print(content, end="", flush=True)
                     except Exception as e:
-                        # Streaming can fail mid-flight if the server restarts or disconnects.
+                        # Streaming can fail mid-flight if the server restarts.
                         # Treat this as retryable.
                         raise RuntimeError(f"Streaming interrupted: {e}") from e
 
@@ -2489,7 +3085,12 @@ class LocalLLM:
                     resp_snippet = (final_response or "")[:2000].strip()
                     if not resp_snippet:
                         raise ValueError("Empty response for FCD")
-                    ctx_snippet = context[:2000]
+                    # Limit the context snippet to the same token budget the
+                    # LLM actually consumed. Using the full context string would
+                    # include material the model never read, artificially
+                    # inflating embedding overlap and understating FCD.
+                    prompt_for_fcd = self.build_prompt(query, context)
+                    ctx_snippet = prompt_for_fcd[:2000]
                     resp_emb = self.text_embedder.embed_query(resp_snippet)
                     ctx_emb = self.text_embedder.embed_query(ctx_snippet)
                     sim = util.cos_sim(resp_emb, ctx_emb).item()
@@ -2530,6 +3131,8 @@ class LocalLLM:
                     "error": str(last_err),
                     "attempts": attempt + 1,
                 }
+
+
 # %% [markdown]
 # # Testing
 #
@@ -3060,16 +3663,28 @@ import time
 
 # %%
 def _ensure_nltk_resources():
-    """Download required NLTK data on first use."""
-    for resource, path in [
-        ("punkt_tab", "tokenizers/punkt_tab"),
-        ("wordnet", "corpora/wordnet"),
-        ("omw-1.4", "corpora/omw-1.4"),
-    ]:
-        try:
-            nltk.data.find(path)
-        except LookupError:
-            nltk.download(resource, quiet=True)
+    """Download required NLTK data on first use if not already present.
+
+    Downloads are guarded by a module-level lock so that parallel notebook
+    cells cannot race each other into concurrent nltk.download() calls,
+    which can corrupt the data directory on some platforms.
+    """
+    import threading as _threading
+    _nltk_lock = getattr(_ensure_nltk_resources, "_lock", None)
+    if _nltk_lock is None:
+        _ensure_nltk_resources._lock = _threading.Lock()
+        _nltk_lock = _ensure_nltk_resources._lock
+
+    with _nltk_lock:
+        for resource, path in [
+            ("punkt_tab", "tokenizers/punkt_tab"),
+            ("wordnet", "corpora/wordnet"),
+            ("omw-1.4", "corpora/omw-1.4"),
+        ]:
+            try:
+                nltk.data.find(path)
+            except LookupError:
+                nltk.download(resource, quiet=True)
 
 
 # %%
@@ -3080,10 +3695,62 @@ class ResourceMonitor:
         self.process.cpu_percent(interval=None)
 
     def get_snapshot(self):
-        """Non-blocking snapshot — CPU percent is delta since last call."""
+        """Non-blocking snapshot — CPU percent is delta since last call.
+
+        The raw value from psutil is divided by the logical core count so the
+        result is always in the conventional 0-100% single-process range.
+        """
+        raw_cpu = self.process.cpu_percent(interval=None)
         return {
-            "cpu_percent": self.process.cpu_percent(interval=None),
+            "cpu_percent": raw_cpu / _CPU_COUNT,
             "ram_gb": round(self.process.memory_info().rss / (1024 ** 3), 4),
+        }
+
+    def start_process_monitor(self, interval: float = 0.05) -> dict:
+        """
+        Sample process CPU and RSS while a query is running.
+
+        psutil's process.cpu_percent is a delta counter, so a single snapshot
+        after generation can miss short CPU spikes. Sampling gives a better
+        per-query average/peak profile.
+
+        Each raw cpu_percent reading is divided by the logical core count so
+        values stay within the conventional 0-100% single-process range rather
+        than potentially exceeding 100% on multi-core hosts.
+        """
+        results = {"cpu_samples": [], "ram_samples": [], "timestamps": [], "running": True}
+        self.process.cpu_percent(interval=None)
+
+        def _sample():
+            while results["running"]:
+                try:
+                    raw_cpu = float(self.process.cpu_percent(interval=None))
+                    results["cpu_samples"].append(raw_cpu / _CPU_COUNT)
+                    results["ram_samples"].append(self.process.memory_info().rss / (1024 ** 3))
+                    results["timestamps"].append(time.perf_counter())
+                except Exception:
+                    pass
+                time.sleep(interval)
+
+        t = threading.Thread(target=_sample, daemon=True)
+        t.start()
+        results["_thread"] = t
+        return results
+
+    def stop_process_monitor(self, results: dict) -> dict:
+        results["running"] = False
+        t = results.get("_thread")
+        if t:
+            t.join(timeout=2.0)
+        cpu_samples = results.get("cpu_samples", [])
+        ram_samples = results.get("ram_samples", [])
+        return {
+            "avg_cpu": statistics.mean(cpu_samples) if cpu_samples else 0.0,
+            "peak_cpu": max(cpu_samples) if cpu_samples else 0.0,
+            "avg_ram_gb": statistics.mean(ram_samples) if ram_samples else 0.0,
+            "peak_ram_gb": max(ram_samples) if ram_samples else 0.0,
+            "ram_delta_gb": (max(ram_samples) - min(ram_samples)) if len(ram_samples) > 1 else 0.0,
+            "sample_count": len(cpu_samples),
         }
 
     def start_gpu_monitor(self, gpu_handle, interval: float = 0.05):
@@ -3125,8 +3792,10 @@ class ResourceMonitor:
         return {
             "avg_gpu": statistics.mean(util_samples) if util_samples else 0.0,
             "peak_gpu": max(util_samples) if util_samples else 0.0,
-            "avg_gpu_active": statistics.mean([u for u in util_samples if u > 0]) if any(u > 0 for u in util_samples) else 0.0,
-            "gpu_duty_cycle": (sum(1 for u in util_samples if u > 0) / len(util_samples) * 100) if util_samples else 0.0,
+            "avg_gpu_active": statistics.mean([u for u in util_samples if u > 0]) if any(
+                u > 0 for u in util_samples) else 0.0,
+            "gpu_duty_cycle": (
+                    sum(1 for u in util_samples if u > 0) / len(util_samples) * 100) if util_samples else 0.0,
             "avg_vram_gb": statistics.mean(vram_samples) if vram_samples else 0.0,
             "peak_vram_gb": max(vram_samples) if vram_samples else 0.0,
             "vram_delta_gb": (max(vram_samples) - min(vram_samples)) if len(vram_samples) > 1 else 0.0,
@@ -3149,7 +3818,17 @@ def compute_embedding_time(text_time: float, image_time: float, verbose: bool = 
 
 # %%
 # M2 (Index Size)
-def compute_index_size(text_db: 'VectorStore', image_db: 'VectorStore', verbose: bool = False) -> int:
+def compute_index_size(text_db: 'VectorStore', image_db: 'VectorStore',
+                       verbose: bool = False,
+                       bm25_corpus_size: Optional[int] = None) -> int:
+    if bm25_corpus_size is not None:
+        # BM25-only mode: vector DB is not populated; report BM25 corpus size .
+        if verbose:
+            LOGGER.info("")
+            LOGGER.info("%s", "─" * 60)
+            LOGGER.info("  M2 Index Size (BM25 corpus): %s documents", bm25_corpus_size)
+            LOGGER.info("%s", "─" * 60)
+        return bm25_corpus_size
     text_count = text_db.get_collection_stats().get("count", 0)
     image_count = image_db.get_collection_stats().get("count", 0)
     total = text_count + image_count
@@ -3184,8 +3863,9 @@ def compute_retrieval_latency(times: List[float], verbose: bool = False) -> floa
 
 
 # %%
-# M4 (Cosine Similarity)
-def compute_cosine_similarity(values: List[float], label: str = "M4 Cosine Similarity", verbose: bool = False) -> float:
+# M4 (Retrieval similarity)
+def compute_retrieval_similarity(values: List[float], label: str = "M4 Retrieval Similarity",
+                                 verbose: bool = False) -> float:
     if not values:
         if verbose:
             LOGGER.info("")
@@ -3200,6 +3880,10 @@ def compute_cosine_similarity(values: List[float], label: str = "M4 Cosine Simil
         LOGGER.info("  %s: %.4f", label, avg)
         LOGGER.info("%s", "─" * 60)
     return avg
+
+
+# Backward-compatible alias for older notebook cells.
+compute_cosine_similarity = compute_retrieval_similarity
 
 
 # %%
@@ -3221,9 +3905,13 @@ def _get_reference_text(result_item: Dict, top_k_chunks: int = cfg.rouge_top_k_c
         return ""
 
     context_parts = context_text.split("\n\n")
+    # The context formatter already limits chunks to cfg.max_text_chunks
+    # before this function is called. Capping top_k_chunks to that same
+    # bound avoids silently requesting more chunks than exist.
+    effective_k = min(top_k_chunks, cfg.max_text_chunks)
     return (
-        "\n\n".join(context_parts[:top_k_chunks])
-        if len(context_parts) > top_k_chunks
+        "\n\n".join(context_parts[:effective_k])
+        if len(context_parts) > effective_k
         else context_text
     )
 
@@ -3540,9 +4228,17 @@ def compute_meteor(per_query_results: List[Dict], verbose: bool = False) -> floa
 def compute_bertscore(per_query_results: List[Dict], lang: str = "en", verbose: bool = False) -> float:
     """
     M12: BERTScore F1 between generated response and ground truth answer.
-    Uses contextual embeddings (roberta-large by default) for deep semantic similarity.
+    Uses contextual embeddings (roberta-large by default) for deep semantic
+    similarity to the reference text.
+
+    Reference target: ground_truth_answer field.
+    This is intentionally different from M13 (FCD), which compares the
+    response against the retrieved context rather than ground truth.
+    Both metrics appear in the same report — M12 measures answer quality
+    relative to the known correct answer; M13 measures how closely the
+    response stays grounded in what was retrieved.
+
     Install: pip install bert-score
-    Reference: ground_truth_answer field.
     """
     try:
         with suppress_output(enabled=not verbose):
@@ -3576,8 +4272,16 @@ def compute_bertscore(per_query_results: List[Dict], lang: str = "en", verbose: 
         return 0.0
 
     try:
+        import torch as _torch
+        # Explicitly pin BERTScore to the same device used for text
+        # embeddings. When both GPU and CPU models coexist in the same
+        # process, leaving BERTScore to auto-select can cause a device
+        # mismatch or an OOM if two large models simultaneously claim GPU.
+        _device = "cuda" if _torch.cuda.is_available() else "cpu"
         with suppress_output(enabled=not verbose):
-            _P, _R, F1 = _bert_score_fn(candidates, references, lang=lang, verbose=False)
+            _P, _R, F1 = _bert_score_fn(
+                candidates, references, lang=lang, verbose=False, device=_device
+            )
             avg_f1 = float(F1.mean().item())
     except Exception as e:
         if verbose:
@@ -3600,6 +4304,11 @@ def compute_fcd(per_query_results: List[Dict], verbose: bool = False) -> float:
     M13: Average Factual Consistency Distance across all queries.
     Reads the per-query FCD already computed in generate_response.
     Lower is better (response is more grounded in context).
+
+    Reference target: retrieved context (via the LLM prompt), NOT ground truth.
+    This differs from M12 (BERTScore), which compares against the ground truth
+    answer.  Both appear side-by-side in reports and measure complementary
+    properties: M12 checks answer correctness; M13 checks context grounding.
     """
     values = []
     for r in per_query_results:
@@ -3620,23 +4329,78 @@ def compute_fcd(per_query_results: List[Dict], verbose: bool = False) -> float:
 
 
 # %%
+def _split_sentences(text: str) -> List[str]:
+    """
+    Split text into non-empty sentences using punctuation boundaries.
+
+    Prefers NLTK's punkt tokenizer when available for better handling of
+    abbreviations (e.g. "NASA", "ca.") that should not split sentences.
+    Falls back to a simple regex split so the function is always usable.
+    """
+    try:
+        _ensure_nltk_resources()
+        sentences = nltk.sent_tokenize(text)
+    except Exception:
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+    return [s.strip() for s in sentences if s.strip()]
+
+
+def _faithfulness_term_overlap(
+        response_sentences: List[str],
+        context: str,
+        stop_words: set,
+        threshold: float = 0.30,
+) -> float:
+    """
+    Fallback faithfulness via bag-of-words term overlap.
+
+    Used only when the NLI cross-encoder cannot be loaded.  A sentence is
+    grounded when at least `threshold` fraction of its content terms appear
+    anywhere in the context vocabulary.
+    """
+    context_terms = {
+        tok for tok in re.findall(r'\b[A-Za-z]{3,}\b', context.lower())
+        if tok not in stop_words
+    }
+    if not context_terms:
+        return 0.0
+
+    grounded = 0
+    countable = 0
+    for sent in response_sentences:
+        sent_terms = {
+            tok for tok in re.findall(r'\b[A-Za-z]{3,}\b', sent.lower())
+            if tok not in stop_words
+        }
+        if not sent_terms:
+            continue
+        countable += 1
+        if len(sent_terms & context_terms) / len(sent_terms) >= threshold:
+            grounded += 1
+
+    return (grounded / countable) * 100.0 if countable > 0 else 0.0
+
+
 def compute_faithfulness(
         per_query_results: List[Dict],
-        used_threshold: float = 0.30,
         verbose: bool = False,
 ) -> float:
     """
-    M14: Faithfulness — fraction of response sentences whose key content
-    is grounded in the retrieved context.
+    M14: Faithfulness — percentage of response sentences supported by the
+    retrieved context, evaluated via term overlap.
 
-    A response sentence is considered 'grounded' when at least `used_threshold`
-    fraction of its non-stopword content terms appear anywhere in the context.
+    Each response sentence is tokenized into content terms (alphabetic tokens
+    of length ≥3, excluding stopwords). A sentence is considered grounded when
+    at least 30% of its content terms appear in the retrieved context
+    vocabulary. The metric aggregates the grounded-sentence ratio across all
+    queries.
 
     Formula: (grounded_sentences / total_sentences) * 100
-    Higher = more faithful to retrieved context (less hallucination risk).
+    Higher values indicate stronger grounding to retrieved context and lower
+    hallucination risk. Reference target is the retrieved context.
     """
     stop_words = get_stopword_set()
-    all_scores = []
+    all_scores: List[float] = []
     skipped = 0
 
     for item in per_query_results:
@@ -3647,69 +4411,122 @@ def compute_faithfulness(
             skipped += 1
             continue
 
-        # Build context term set (the ground truth for grounding checks)
-        context_terms = {
-            tok for tok in re.findall(r'\b[A-Za-z]{3,}\b', context.lower())
-            if tok not in stop_words
-        }
-        if not context_terms:
-            skipped += 1
-            continue
-
-        # Split response into sentences
-        sentences = [s.strip() for s in re.split(r'[.!?]+', response) if s.strip()]
+        sentences = _split_sentences(response)
         if not sentences:
             skipped += 1
             continue
 
-        grounded = 0
-        countable = 0
-        for sent in sentences:
-            sent_terms = {
-                tok for tok in re.findall(r'\b[A-Za-z]{3,}\b', sent.lower())
-                if tok not in stop_words
-            }
-            if not sent_terms:
-                continue  # skip sentences that are only stopwords / punctuation
-            countable += 1
-            overlap_ratio = len(sent_terms & context_terms) / len(sent_terms)
-            if overlap_ratio >= used_threshold:
-                grounded += 1
-
-        if countable == 0:
-            skipped += 1
-            continue
-
-        all_scores.append((grounded / countable) * 100)
+        score = _faithfulness_term_overlap(sentences, context, stop_words)
+        all_scores.append(score)
 
     avg_score = statistics.mean(all_scores) if all_scores else 0.0
 
     if verbose:
-        LOGGER.info("")
-        LOGGER.info("%s", "─" * 60)
-        LOGGER.info("  M14 Faithfulness: %.2f%%", avg_score)
-        LOGGER.info("       Evaluated: %s, Skipped: %s", len(all_scores), skipped)
-        LOGGER.info("%s", "─" * 60)
+        LOGGER.info("Faithfulness (term-overlap): %.2f%% (n=%d, skipped=%d)", avg_score, len(all_scores), skipped)
+
     return avg_score
 
 
-# %%
-def compute_gt_coverage(per_query_results: List[Dict], verbose: bool = False) -> float:
+def _gt_coverage_semantic(
+        gt_sentences: List[str],
+        response_sentences: List[str],
+        embedder,
+        sim_threshold: float = 0.60,
+) -> float:
     """
-    M15: GT Coverage — term-frequency-aware coverage of ground truth content
-    in the LLM response.
+    Compute GT Coverage by checking whether each ground-truth sentence is
+    semantically matched by at least one response sentence.
 
-    Uses multiset (Counter) intersection so repeated key terms are counted
-    correctly, not just presence/absence.
+    Uses the shared text embedder so no additional model download is required.
+    A GT sentence is 'covered' when its maximum cosine similarity to any
+    response sentence meets or exceeds `sim_threshold`.
 
-    Formula: sum(min(gt_count, resp_count)) / sum(gt_count) * 100
+    Embedding-based coverage catches paraphrases that pure BoW misses:
+    "spacecraft" and "probe" are synonyms that share zero word-overlap but
+    will have high cosine similarity in a well-trained embedding space.
 
-    Falls back to context-vs-response overlap if no ground truth is present.
+    Returns:
+        float in [0, 100] — percentage of GT sentences that are covered.
+    """
+    from sentence_transformers import util as _st_util
+
+    if not gt_sentences or not response_sentences:
+        return 0.0
+
+    try:
+        gt_embs = np.array([embedder.encode_text(s) for s in gt_sentences])
+        resp_embs = np.array([embedder.encode_text(s) for s in response_sentences])
+    except Exception as e:
+        LOGGER.warning("GT Coverage embedding failed: %s", e)
+        return 0.0
+
+    # sim_matrix shape: (n_gt, n_resp)
+    gt_tensor = _st_util.pytorch_cos_sim(gt_embs, resp_embs)
+    max_sims = gt_tensor.max(dim=1).values.cpu().numpy()
+    covered = int(np.sum(max_sims >= sim_threshold))
+    return (covered / len(gt_sentences)) * 100.0
+
+
+def _gt_coverage_term_frequency(
+        reference_text: str,
+        response_text: str,
+        stop_words: set,
+) -> float:
+    """
+    Fallback GT Coverage via multiset (Counter) term-frequency intersection.
+
+    Used only when no text embedder is available.  Multiset intersection
+    gives credit proportional to how many times each term appears in the
+    ground truth, preventing single rare terms from dominating the score.
+    """
+    gt_tokens = [
+        tok for tok in re.findall(r'\b[A-Za-z]{3,}\b', reference_text.lower())
+        if tok not in stop_words
+    ]
+    resp_tokens = [
+        tok for tok in re.findall(r'\b[A-Za-z]{3,}\b', response_text.lower())
+        if tok not in stop_words
+    ]
+    if not gt_tokens:
+        return 0.0
+
+    gt_counter = Counter(gt_tokens)
+    resp_counter = Counter(resp_tokens)
+    matched = sum((gt_counter & resp_counter).values())
+    return (matched / sum(gt_counter.values())) * 100.0
+
+
+def compute_gt_coverage(
+        per_query_results: List[Dict],
+        text_embedder=None,
+        sim_threshold: float = 0.60,
+        verbose: bool = False,
+) -> float:
+    """
+    M15: GT Coverage — fraction of ground-truth sentences whose semantic
+    content is present in the LLM response.
+
+    Evaluated sentence-by-sentence using cosine similarity between
+    sentence embeddings, so paraphrases and synonyms (e.g. "spacecraft" vs
+    "probe") are correctly credited unlike a pure bag-of-words approach.
+
+    A ground-truth sentence is considered 'covered' when its maximum cosine
+    similarity to any response sentence reaches `sim_threshold` (default 0.60).
+    This threshold was chosen to accept clear paraphrases while rejecting
+    only vaguely topically related statements.
+
+    When `text_embedder` is None the function falls back to multiset
+    term-frequency intersection (the original BoW approach) so the pipeline
+    can still run without an embedder reference.
+
+    Reference target: ground_truth_answer field (falls back to context when
+    ground truth is absent, e.g. during retrieval-only evaluation).
     """
     stop_words = get_stopword_set()
-    coverage_scores = []
+    coverage_scores: List[float] = []
     skipped = 0
     gt_available_count = 0
+    method = "semantic-embedding" if text_embedder is not None else "term-frequency"
 
     for item in per_query_results:
         reference_text = item.get("reference_text", "").strip()
@@ -3725,39 +4542,26 @@ def compute_gt_coverage(per_query_results: List[Dict], verbose: bool = False) ->
             skipped += 1
             continue
 
-        # Token extraction — 3-char minimum to preserve short scientific terms
-        gt_tokens = [
-            tok for tok in re.findall(r'\b[A-Za-z]{3,}\b', reference_text.lower())
-            if tok not in stop_words
-        ]
-        resp_tokens = [
-            tok for tok in re.findall(r'\b[A-Za-z]{3,}\b', response.lower())
-            if tok not in stop_words
-        ]
+        if text_embedder is not None:
+            gt_sents = _split_sentences(reference_text)
+            resp_sents = _split_sentences(response)
+            if not gt_sents or not resp_sents:
+                skipped += 1
+                continue
+            score = _gt_coverage_semantic(gt_sents, resp_sents, text_embedder, sim_threshold)
+        else:
+            score = _gt_coverage_term_frequency(reference_text, response, stop_words)
 
-        if not gt_tokens:
-            skipped += 1
-            continue
-
-        gt_counter = Counter(gt_tokens)
-        resp_counter = Counter(resp_tokens)
-
-        # Multiset intersection: credit capped at GT frequency per term
-        matched = sum((gt_counter & resp_counter).values())
-        total = sum(gt_counter.values())
-
-        coverage_scores.append((matched / total) * 100)
+        coverage_scores.append(score)
 
     avg_coverage = statistics.mean(coverage_scores) if coverage_scores else 0.0
-
-    # Label reflects majority of items
     majority_had_gt = gt_available_count > (len(per_query_results) // 2)
     label = "GT Coverage" if majority_had_gt else "Context Utilization (fallback)"
 
     if verbose:
         LOGGER.info("")
         LOGGER.info("%s", "─" * 60)
-        LOGGER.info("  M15 %s: %.2f%%", label, avg_coverage)
+        LOGGER.info("  M15 %s [%s]: %.2f%%", label, method, avg_coverage)
         LOGGER.info("       Evaluated: %s, Skipped: %s", len(coverage_scores), skipped)
         LOGGER.info("%s", "─" * 60)
     return avg_coverage
@@ -3797,14 +4601,16 @@ def compute_throughput(per_query_results: List[Dict], verbose: bool = False) -> 
 # %%
 # M18 (CPU usage)
 def compute_cpu_usage(per_query_results: List[Dict], verbose: bool = False) -> float:
-    values = [r.get("avg_cpu_percent", 0.0) for r in per_query_results]
+    values = [float(r.get("avg_cpu_percent", 0.0) or 0.0) for r in per_query_results]
     avg = statistics.mean(values) if values else 0.0
     if verbose:
         LOGGER.info("")
         LOGGER.info("%s", "─" * 60)
         LOGGER.info("  M18 CPU Usage: %.2f%%", avg)
         if values:
-            LOGGER.info("     └─ Min: %.1f%%, Max: %.1f%%", min(values), max(values))
+            peak_values = [float(r.get("peak_cpu_percent", 0.0) or 0.0) for r in per_query_results]
+            LOGGER.info("     └─ Avg range: %.1f%% - %.1f%% | Peak max: %.1f%%",
+                        min(values), max(values), max(peak_values) if peak_values else 0.0)
         LOGGER.info("%s", "─" * 60)
     return avg
 
@@ -3812,14 +4618,18 @@ def compute_cpu_usage(per_query_results: List[Dict], verbose: bool = False) -> f
 # %%
 # M19 (RAM usage)
 def compute_ram_usage(per_query_results: List[Dict], verbose: bool = False) -> float:
-    values = [r.get("avg_ram_gb", 0.0) for r in per_query_results]
+    values = [float(r.get("avg_ram_gb", 0.0) or 0.0) for r in per_query_results]
     avg = statistics.mean(values) if values else 0.0
     if verbose:
         LOGGER.info("")
         LOGGER.info("%s", "─" * 60)
         LOGGER.info("  M19 RAM Usage: %.3f GB", avg)
         if values:
-            LOGGER.info("     └─ Min: %.3fGB, Max: %.3fGB", min(values), max(values))
+            peak_values = [float(r.get("peak_ram_gb", 0.0) or 0.0) for r in per_query_results]
+            delta_values = [float(r.get("ram_delta_gb", 0.0) or 0.0) for r in per_query_results]
+            LOGGER.info("     └─ Avg range: %.3fGB - %.3fGB | Peak max: %.3fGB | Avg Δ: %.3fGB",
+                        min(values), max(values), max(peak_values) if peak_values else 0.0,
+                        statistics.mean(delta_values) if delta_values else 0.0)
         LOGGER.info("%s", "─" * 60)
     return avg
 
@@ -3954,11 +4764,21 @@ def compute_fusion_effectiveness(per_query_results: List[Dict]) -> Dict:
 # %%
 try:
     import pynvml as pynvml
+
     _PYNVML_AVAILABLE = True
 except ImportError:
-    pynvml = None          # type: ignore
+    pynvml = None  # type: ignore
     _PYNVML_AVAILABLE = False
     print("  Note: pynvml not found — GPU monitoring disabled. Install with: pip install pynvml")
+
+# psutil.Process.cpu_percent() accumulates usage across all logical cores,
+# so on a 16-core machine a single fully-utilised core returns 100/16 ≈ 6.25%
+# while two fully-utilised cores return ~12.5%, and so on up to a theoretical
+# maximum of cpu_count × 100%. Dividing by cpu_count normalises the value to
+# the conventional 0-100% single-process scale used in system monitors.
+_CPU_COUNT: int = max(os.cpu_count() or 1, 1)
+
+
 # %%
 def llm_response(llm, formatted_output, test_questions, stream: bool = True):
     response_output = []
@@ -3974,16 +4794,20 @@ def llm_response(llm, formatted_output, test_questions, stream: bool = True):
         except Exception as e:
             LOGGER.warning("Unexpected GPU monitor initialisation error: %s", e)
 
-    # Build a fast id→ground_truth lookup from test_questions
+    # Build lookup tables that survive any reordering of formatted_output.
+    # Keying by question text avoids positional assumptions between the two lists.
     gt_map = {
         q.get("id"): q.get("ground_truth_answer", "")
         for q in test_questions
         if q.get("id") is not None
     }
+    query_to_question: Dict[str, Dict] = {
+        q.get("question", ""): q for q in test_questions if q.get("question")
+    }
 
-    print(f"\n{'='*100}")
+    print(f"\n{'=' * 100}")
     print(f"  RUNNING MODEL: {llm.model_name}")
-    print(f"{'='*100}")
+    print(f"{'=' * 100}")
 
     for idx, output in enumerate(formatted_output, 1):
         query = output.get("query", "")
@@ -3991,24 +4815,26 @@ def llm_response(llm, formatted_output, test_questions, stream: bool = True):
         images = output.get("images", [])
 
         if images:
-            captions = [f"[Image {i+1} Caption] {img.get('caption','')}"
-                       for i, img in enumerate(images) if img.get('caption')]
+            captions = [f"[Image {i + 1} Caption] {img.get('caption', '')}"
+                        for i, img in enumerate(images) if img.get('caption')]
             if captions:
                 text_context += "\n\n[Image Captions]\n" + "\n".join(captions)
 
-        q_data = test_questions[idx - 1] if idx <= len(test_questions) else {}
+        # Resolve the matching test question by query text; fall back to the
+        # positional index only when the query string is absent or unrecognised.
+        q_data = query_to_question.get(query)
+        if q_data is None:
+            q_data = test_questions[idx - 1] if idx <= len(test_questions) else {}
         qid = q_data.get("id")
         ground_truth = gt_map.get(qid, "")
 
         print(f"\n  QUERY #{idx}/{len(formatted_output)}")
-        print(f"  {'─'*96}")
+        print(f"  {'─' * 96}")
         print(f"  Context: {len(text_context):,} chars | Images: {len(images)}")
         if ground_truth:
             print(f"  Ground Truth: available ({len(ground_truth)} chars)")
 
-        monitor.get_snapshot()
-        ram_before = monitor.process.memory_info().rss / (1024 ** 3)
-
+        proc_mon = monitor.start_process_monitor(interval=0.05)
         gpu_mon = monitor.start_gpu_monitor(gpu_handle, interval=0.05)
         start_total = time.perf_counter()
 
@@ -4021,13 +4847,15 @@ def llm_response(llm, formatted_output, test_questions, stream: bool = True):
             temperature=cfg.llm_temperature
         )
 
+        proc_stats = monitor.stop_process_monitor(proc_mon)
         gpu_stats = monitor.stop_gpu_monitor(gpu_mon)
-        end_snap = monitor.get_snapshot()
-        ram_after = monitor.process.memory_info().rss / (1024 ** 3)
         e2e_latency = round(time.perf_counter() - start_total, 4)
 
-        cpu_usage = end_snap["cpu_percent"]
-        ram_usage = round((ram_before + ram_after) / 2, 4)
+        cpu_usage = proc_stats["avg_cpu"]
+        peak_cpu = proc_stats["peak_cpu"]
+        ram_usage = proc_stats["avg_ram_gb"]
+        peak_ram = proc_stats["peak_ram_gb"]
+        ram_delta = proc_stats["ram_delta_gb"]
         avg_gpu = gpu_stats["avg_gpu"]
         peak_gpu = gpu_stats["peak_gpu"]
         avg_gpu_active = gpu_stats["avg_gpu_active"]
@@ -4041,8 +4869,8 @@ def llm_response(llm, formatted_output, test_questions, stream: bool = True):
         print(f"  METRICS:")
         print(f"       Inference Time : {response_dict.get('generation_time_sec', 0):.4f} s")
         print(f"       E2E Latency    : {e2e_latency:.4f} s")
-        print(f"       CPU Usage      : {cpu_usage:.1f}%")
-        print(f"       RAM Usage      : {ram_usage:.3f} GB")
+        print(f"       CPU Usage      : {cpu_usage:.1f}%   Peak: {peak_cpu:.1f}%")
+        print(f"       RAM Usage      : {ram_usage:.3f} GB  Peak: {peak_ram:.3f} GB  Δ: {ram_delta:.3f} GB")
         print(f"       GPU Util Avg   : {avg_gpu:.1f}%   Peak: {peak_gpu:.1f}%")
         print(f"       GPU Active Avg : {avg_gpu_active:.1f}%   Duty: {duty_cycle:.1f}%")
         print(f"       VRAM Used      : {avg_vram:.2f} GB  Peak: {peak_vram:.2f} GB")
@@ -4060,7 +4888,11 @@ def llm_response(llm, formatted_output, test_questions, stream: bool = True):
             "inference_time_sec": response_dict.get("generation_time_sec", 0),
             "e2e_latency_sec": e2e_latency,
             "avg_cpu_percent": round(cpu_usage, 2),
-            "avg_ram_gb": ram_usage,
+            "peak_cpu_percent": round(peak_cpu, 2),
+            "avg_ram_gb": round(ram_usage, 4),
+            "peak_ram_gb": round(peak_ram, 4),
+            "ram_delta_gb": round(ram_delta, 4),
+            "process_sample_count": proc_stats["sample_count"],
             "avg_gpu_percent": round(avg_gpu, 2),
             "peak_gpu_percent": round(peak_gpu, 2),
             "avg_gpu_active_percent": round(avg_gpu_active, 2),
@@ -4070,9 +4902,9 @@ def llm_response(llm, formatted_output, test_questions, stream: bool = True):
             "num_images": len(images),
         })
 
-    print(f"\n{'='*100}")
+    print(f"\n{'=' * 100}")
     print(f"  COMPLETED MODEL: {llm.model_name}")
-    print(f"{'='*100}")
+    print(f"{'=' * 100}")
 
     if gpu_handle is not None and _PYNVML_AVAILABLE:
         try:
@@ -4081,6 +4913,8 @@ def llm_response(llm, formatted_output, test_questions, stream: bool = True):
             pass
 
     return response_output
+
+
 # %%
 import io
 import os
@@ -4097,7 +4931,9 @@ from reportlab.platypus import (
     PageBreak,
     Image as RLImage,
     KeepTogether,
-    HRFlowable
+    HRFlowable,
+    Table,
+    TableStyle,
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
@@ -4106,388 +4942,732 @@ from reportlab.lib.units import inch
 
 
 # %%
+def active_retrieval_config_summary(html: bool = False) -> str:
+    """Return a report-safe summary that only shows active retrieval features."""
+    retrieval = getattr(cfg, "retrieval_mode", "semantic")
+    parts = [
+        f"Retrieval: {retrieval}",
+        f"Reranker: {'ON' if cfg.use_reranker else 'OFF'}",
+        f"Adaptive: {'ON' if cfg.adaptive_weighting else 'OFF'}",
+    ]
+
+    if retrieval == "hybrid":
+        parts.append(f"Fusion: {'Weighted Sum' if cfg.use_weighted_fusion else 'RRF'}")
+        # When adaptive weighting is active the per-query weights vary;
+        # showing the static base weights alongside an ADAPTIVE marker
+        # avoids the misleading impression that fusion always uses 0.4/0.6.
+        if cfg.adaptive_weighting:
+            parts.append(
+                f"Weights: {cfg.bm25_weight}/{cfg.semantic_weight} (ADAPTIVE)"
+            )
+        else:
+            parts.append(f"Weights: {cfg.bm25_weight}/{cfg.semantic_weight}")
+    else:
+        parts.append("Fusion: N/A")
+        parts.append("Weights: N/A")
+
+    parts.append(f"Filtering: {'ON' if cfg.use_filtering else 'OFF'}")
+    if cfg.use_filtering:
+        percentile = f", percentile={cfg.percentile_cutoff}" if cfg.use_percentile_filtering else ""
+        # Use explicit format spec to guarantee a leading zero is always
+        # printed (e.g. 1.00 not .0) so PDF font rendering cannot clip
+        # the integer part at narrow column widths.
+        parts.append(
+            f"Thresholds: text={cfg.text_distance_threshold:.2f},"
+            f" image={cfg.image_distance_threshold:.2f}{percentile}"
+        )
+
+    parts.append(f"Cross-modal boost: {'ON' if cfg.use_cross_modal_boost else 'OFF'}")
+    parts.append(f"text_k={cfg.text_k}, rerank_k={cfg.rerank_k}, image_k={cfg.image_k}")
+
+    separator = "<br/>" if html else " | "
+    return separator.join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Shared PDF design constants & helpers
+# ---------------------------------------------------------------------------
+_PDF_ACCENT      = colors.HexColor("#1a3f6f")   # dark navy — titles / section bars
+_PDF_ACCENT_LIGHT= colors.HexColor("#dce8f5")   # pale blue  — header fills
+_PDF_SEP         = colors.HexColor("#b0b8c8")   # muted steel — grid lines / rules
+_PDF_GREEN       = colors.HexColor("#1a6b3c")   # metric value colour
+_PDF_SECTION_BG  = colors.HexColor("#f0f4fa")   # section-header row background
+_PDF_ROW_ALT     = colors.HexColor("#f7f9fc")   # alternating row tint
+
+def _pdf_styles():
+    """Return a dict of named ParagraphStyles used across all export functions."""
+    base = getSampleStyleSheet()
+    def _make(name, **kw):
+        return ParagraphStyle(name, parent=base["Normal"], **kw)
+
+    return {
+        "title":   _make("rTitle",   fontSize=18, leading=22, textColor=_PDF_ACCENT,
+                         spaceAfter=4, fontName="Helvetica-Bold"),
+        "subtitle":_make("rSubtitle",fontSize=10, leading=13, textColor=colors.HexColor("#444444"),
+                         spaceAfter=2),
+        "h2":      _make("rH2",      fontSize=12, leading=15, textColor=_PDF_ACCENT,
+                         fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=4),
+        "h3":      _make("rH3",      fontSize=10, leading=13, textColor=_PDF_ACCENT,
+                         fontName="Helvetica-Bold", spaceBefore=6, spaceAfter=3),
+        "body":    _make("rBody",    fontSize=9.5, leading=14, spaceAfter=6, wordWrap="CJK"),
+        "caption": _make("rCaption", fontSize=8.5, leading=11, textColor=colors.grey,
+                         alignment=1, spaceAfter=8),
+        "metric":  _make("rMetric",  fontSize=9, leading=12, textColor=_PDF_GREEN,
+                         spaceAfter=3, wordWrap="CJK"),
+        "mono":    _make("rMono",    fontSize=8.5, leading=12, fontName="Courier",
+                         spaceAfter=3, wordWrap="CJK"),
+    }
+
+
+def _config_table(styles: dict) -> Table:
+    """
+    Build a two-column Table that shows the active pipeline configuration.
+    Reads directly from the global cfg object so it is always current.
+    """
+    retrieval = getattr(cfg, "retrieval_mode", "semantic")
+
+    rows = [
+        [Paragraph("<b>Configuration</b>", styles["h3"]), ""],
+        ["Retrieval mode",    retrieval],
+        ["Reranker",          "ON" if cfg.use_reranker else "OFF"],
+        ["Adaptive weights",  "ON" if cfg.adaptive_weighting else "OFF"],
+        ["Fusion strategy",   ("Weighted Sum" if cfg.use_weighted_fusion else "RRF")
+                               if retrieval == "hybrid" else "N/A"],
+        ["BM25 / Sem weights",
+         f"{cfg.bm25_weight} / {cfg.semantic_weight} {'(ADAPTIVE)' if cfg.adaptive_weighting else ''}"
+         if retrieval == "hybrid" else "N/A"],
+        ["Filtering",         "ON" if cfg.use_filtering else "OFF"],
+    ]
+    if cfg.use_filtering:
+        pct = f", percentile={cfg.percentile_cutoff}" if cfg.use_percentile_filtering else ""
+        rows.append(["  Distance thresholds",
+                      f"text={cfg.text_distance_threshold:.2f}  "
+                      f"image={cfg.image_distance_threshold:.2f}{pct}"])
+    rows += [
+        ["Cross-modal boost",  "ON" if cfg.use_cross_modal_boost else "OFF"],
+        ["text_k / rerank_k / image_k",
+         f"{cfg.text_k} / {cfg.rerank_k} / {cfg.image_k}"],
+        ["Embed model",        cfg.text_embed_model],
+        ["Image embed model",  f"{cfg.image_embed_model} ({cfg.image_embed_pretrained})"],
+        ["LLM model(s)",       ", ".join(cfg.llm_models)],
+        ["Chunk tokens / overlap",
+         f"{cfg.chunk_max_tokens} / {cfg.chunk_overlap_tokens}"],
+    ]
+
+    label_style = ParagraphStyle("cfgLabel", parent=styles["body"],
+                                 fontName="Helvetica-Bold", fontSize=8.5)
+    value_style = ParagraphStyle("cfgValue", parent=styles["body"], fontSize=8.5)
+
+    tdata = []
+    for label, value in rows:
+        if isinstance(label, Paragraph):          # section heading spanning both columns
+            tdata.append([label, ""])
+        else:
+            tdata.append([
+                Paragraph(str(label), label_style),
+                Paragraph(str(value), value_style),
+            ])
+
+    col_w = [160, 310]
+    t = Table(tdata, colWidths=col_w)
+    # Build per-row style commands
+    style_cmds = [
+        ("BACKGROUND",   (0, 0), (-1, 0),  _PDF_ACCENT_LIGHT),
+        ("SPAN",         (0, 0), (-1, 0)),
+        ("TOPPADDING",   (0, 0), (-1, 0),  4),
+        ("BOTTOMPADDING",(0, 0), (-1, 0),  4),
+        ("LINEBELOW",    (0, 0), (-1, 0),  0.5, _PDF_SEP),
+        ("GRID",         (0, 1), (-1, -1), 0.25, _PDF_SEP),
+        ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",   (0, 1), (-1, -1), 3),
+        ("BOTTOMPADDING",(0, 1), (-1, -1), 3),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+    ]
+    for i in range(1, len(tdata)):
+        if i % 2 == 0:
+            style_cmds.append(("BACKGROUND", (0, i), (-1, i), _PDF_ROW_ALT))
+    t.setStyle(TableStyle(style_cmds))
+    return t
+
+
+def _metrics_table(rows_spec: list, styles: dict) -> Table:
+    """
+    Build a labelled metrics Table from a list of (section_label | (label, value, unit)) tuples.
+
+    rows_spec entries:
+      str                        → full-width section-header row
+      (label, value, unit)       → metric row; value already formatted as string
+    """
+    label_style = ParagraphStyle("mLabel", parent=styles["body"],
+                                 fontName="Helvetica-Bold", fontSize=8.5)
+    value_style = ParagraphStyle("mValue", parent=styles["metric"], fontSize=8.5,
+                                 alignment=2)   # right-align values
+    unit_style  = ParagraphStyle("mUnit",  parent=styles["body"],
+                                 textColor=colors.HexColor("#666666"), fontSize=8)
+    sec_style   = ParagraphStyle("mSec",   parent=styles["body"],
+                                 fontName="Helvetica-Bold", fontSize=9,
+                                 textColor=_PDF_ACCENT)
+
+    tdata = []
+    for entry in rows_spec:
+        if isinstance(entry, str):
+            tdata.append([Paragraph(entry, sec_style), "", ""])
+        else:
+            label, value, unit = entry
+            tdata.append([
+                Paragraph(str(label), label_style),
+                Paragraph(str(value), value_style),
+                Paragraph(str(unit),  unit_style),
+            ])
+
+    col_w = [210, 100, 70]
+    t = Table(tdata, colWidths=col_w)
+
+    style_cmds = [
+        ("VALIGN",       (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",   (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING",(0, 0), (-1, -1), 3),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("LINEBELOW",    (0, -1), (-1, -1), 0.25, _PDF_SEP),
+    ]
+    section_rows = [i for i, e in enumerate(rows_spec) if isinstance(e, str)]
+    for i in section_rows:
+        style_cmds += [
+            ("BACKGROUND", (0, i), (-1, i), _PDF_ACCENT_LIGHT),
+            ("SPAN",       (0, i), (-1, i)),
+            ("LINEABOVE",  (0, i), (-1, i), 0.5, _PDF_SEP),
+            ("LINEBELOW",  (0, i), (-1, i), 0.5, _PDF_SEP),
+            ("TOPPADDING", (0, i), (-1, i), 4),
+            ("BOTTOMPADDING", (0, i), (-1, i), 4),
+        ]
+    # Alternating tint on non-section rows
+    non_sec = [i for i in range(len(rows_spec)) if i not in section_rows]
+    for j, i in enumerate(non_sec):
+        if j % 2 == 1:
+            style_cmds.append(("BACKGROUND", (0, i), (-1, i), _PDF_ROW_ALT))
+    t.setStyle(TableStyle(style_cmds))
+    return t
+
+
+def _add_page_number(canvas_obj, doc):
+    canvas_obj.saveState()
+    canvas_obj.setFont("Helvetica", 8)
+    canvas_obj.setFillColor(colors.HexColor("#888888"))
+    canvas_obj.drawRightString(A4[0] - 36, 18, f"Page {doc.page}")
+    canvas_obj.restoreState()
+
+
+def _add_header_footer(canvas_obj, doc, title: str = "RAG Pipeline Report"):
+    """Draw a thin accent rule under the header text on every page."""
+    _add_page_number(canvas_obj, doc)
+    canvas_obj.saveState()
+    canvas_obj.setFont("Helvetica", 8)
+    canvas_obj.setFillColor(colors.HexColor("#888888"))
+    canvas_obj.drawString(36, A4[1] - 24, title)
+    canvas_obj.setStrokeColor(_PDF_SEP)
+    canvas_obj.setLineWidth(0.5)
+    canvas_obj.line(36, A4[1] - 28, A4[0] - 36, A4[1] - 28)
+    canvas_obj.restoreState()
+
+
+def _image_flowable(pil_img, max_w: float = 4.8 * inch,
+                    max_h: float = 3.5 * inch) -> RLImage:
+    scale = min(max_w / pil_img.size[0], max_h / pil_img.size[1], 1.0)
+    buf = io.BytesIO()
+    pil_img.save(buf, format="PNG")
+    buf.seek(0)
+    rl = RLImage(buf)
+    rl.drawWidth  = pil_img.size[0] * scale
+    rl.drawHeight = pil_img.size[1] * scale
+    rl.hAlign = "CENTER"
+    return rl
+
+
+# %%
 def export_retrieved_results_to_pdf(formatted_output, output_dir=cfg.retrieval_results_dir):
+    """
+    Export per-query retrieval results (text context + images) to a formatted PDF.
+    Each query gets its own page showing the query, retrieved text context, and any
+    retrieved images with captions. A config panel on the cover page records the
+    exact pipeline settings used.
+    """
+    if not formatted_output:
+        LOGGER.warning("export_retrieved_results_to_pdf: no output to export.")
+        return
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = output_dir / f"retrieval_results_{timestamp}.pdf"
 
-    doc = SimpleDocTemplate(str(filename), pagesize=A4, rightMargin=45, leftMargin=45,
-                            topMargin=60, bottomMargin=50)
+    doc = SimpleDocTemplate(
+        str(filename), pagesize=A4,
+        rightMargin=45, leftMargin=45, topMargin=52, bottomMargin=45,
+    )
+    S = _pdf_styles()
     elements = []
-    styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle("TitleStyle", parent=styles["Heading1"], fontSize=20, spaceAfter=20,
-                                 textColor=colors.darkblue)
-    section_style = ParagraphStyle("SectionStyle", parent=styles["Heading3"], fontSize=12, spaceAfter=6)
-    body_style = ParagraphStyle("BodyStyle", parent=styles["Normal"], fontSize=10.5, leading=15, spaceAfter=8,
-                                wordWrap="CJK")
-    caption_style = ParagraphStyle("CaptionStyle", parent=styles["Normal"], fontSize=9, textColor=colors.grey,
-                                   leading=12, spaceAfter=10, alignment=1)
+    # ── Cover page ────────────────────────────────────────────────────────
+    elements.append(Spacer(1, 0.3 * inch))
+    elements.append(Paragraph("RAG Pipeline", S["subtitle"]))
+    elements.append(Paragraph("Retrieval Results Report", S["title"]))
+    elements.append(Spacer(1, 4))
+    elements.append(Paragraph(
+        f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}  ·  "
+        f"Total queries: {len(formatted_output)}",
+        S["subtitle"],
+    ))
+    elements.append(Spacer(1, 0.25 * inch))
+    elements.append(HRFlowable(width="100%", thickness=1.5, color=_PDF_ACCENT))
+    elements.append(Spacer(1, 0.2 * inch))
 
-    elements.append(Paragraph("Retrieved Results Report", title_style))
-    elements.append(Paragraph(f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}", body_style))
-    elements.append(Paragraph(f"Total Queries: {len(formatted_output)}", body_style))
-    config_info = f"Retrieval: {cfg.retrieval_mode} | Reranker: {'ON' if cfg.use_reranker else 'OFF'} | Adaptive: {'ON' if cfg.adaptive_weighting else 'OFF'}"
-    elements.append(Paragraph(config_info, body_style))
-    elements.append(Spacer(1, 0.4 * inch))
-    elements.append(HRFlowable(width="100%", thickness=1, color=colors.grey))
-    elements.append(Spacer(1, 0.5 * inch))
+    # Config panel
+    elements.append(Paragraph("Pipeline Configuration", S["h2"]))
+    elements.append(Spacer(1, 4))
+    elements.append(_config_table(S))
     elements.append(PageBreak())
 
+    # ── Per-query pages ───────────────────────────────────────────────────
     for idx, item in enumerate(formatted_output, 1):
-        query = _xml_escape(item.get("query", "") or "")
+        query        = _xml_escape(item.get("query", "") or "")
         text_context = _xml_escape(item.get("text_context", "") or "").replace("\n", "<br/>")
-        images = item.get("images", [])
+        images       = item.get("images", [])
 
-        elements.append(Paragraph(f"Query {idx}", styles["Heading2"]))
-        elements.append(Spacer(1, 0.2 * inch))
-        elements.append(Paragraph("User Query", section_style))
-        elements.append(Paragraph(query, body_style))
-        elements.append(Paragraph("Retrieved Context", section_style))
-        elements.append(Paragraph(text_context, body_style))
+        elements.append(Paragraph(f"Query {idx} of {len(formatted_output)}", S["h2"]))
+        elements.append(HRFlowable(width="100%", thickness=0.5, color=_PDF_SEP))
+        elements.append(Spacer(1, 6))
+
+        elements.append(Paragraph("User Query", S["h3"]))
+        elements.append(Paragraph(query, S["body"]))
+        elements.append(Spacer(1, 6))
+
+        elements.append(Paragraph("Retrieved Text Context", S["h3"]))
+        elements.append(Paragraph(text_context or "<i>(none)</i>", S["body"]))
 
         if images:
-            image_section = [Spacer(1, 0.3 * inch), Paragraph("Retrieved Image(s)", section_style),
-                             Spacer(1, 0.2 * inch)]
+            img_section = [
+                Spacer(1, 0.25 * inch),
+                Paragraph("Retrieved Images", S["h3"]),
+                Spacer(1, 4),
+            ]
             for img_obj in images:
                 pil_img = img_obj.get("image")
                 caption = _xml_escape(img_obj.get("caption", "") or "")
                 if pil_img is None:
                     continue
-                img_buffer = io.BytesIO()
-                pil_img.save(img_buffer, format="PNG")
-                img_buffer.seek(0)
-                rl_img = RLImage(img_buffer)
-                scale = min(4.8 * inch / pil_img.size[0], 3.5 * inch / pil_img.size[1])
-                rl_img.drawWidth = pil_img.size[0] * scale
-                rl_img.drawHeight = pil_img.size[1] * scale
-                rl_img.hAlign = "CENTER"
-                image_section.append(rl_img)
+                img_section.append(_image_flowable(pil_img))
                 if caption:
-                    image_section.append(Paragraph(f"<i>{caption}</i>", caption_style))
-                image_section.append(Spacer(1, 0.35 * inch))
-            elements.append(KeepTogether(image_section))
+                    img_section.append(Paragraph(f"<i>{caption}</i>", S["caption"]))
+                img_section.append(Spacer(1, 0.25 * inch))
+            elements.append(KeepTogether(img_section))
 
         if idx != len(formatted_output):
             elements.append(PageBreak())
 
-    def add_page_number(canvas_obj, doc):
-        canvas_obj.setFont("Helvetica", 9)
-        canvas_obj.drawRightString(A4[0] - 40, 20, f"Page {doc.page}")
-
-    doc.build(elements, onLaterPages=add_page_number)
+    _title = "RAG Pipeline — Retrieval Results"
+    doc.build(
+        elements,
+        onFirstPage=lambda c, d: _add_header_footer(c, d, _title),
+        onLaterPages=lambda c, d: _add_header_footer(c, d, _title),
+    )
     LOGGER.info("  [OK] Saved retrieval report: %s", filename)
 
 
 # %%
 def export_results_to_pdf(results, model_name: str, metrics_summary: dict, output_dir=cfg.results_dir):
+    """
+    Export the per-model evaluation report: config panel, structured metrics table,
+    and per-query question / context / answer / image pages.
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    safe_name = re.sub(r"[^\w\-]", "_", model_name)
-    filename = output_dir / f"{safe_name}_rag_results_{timestamp}.pdf"
+    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name  = re.sub(r"[^\w\-]", "_", model_name)
+    filename   = output_dir / f"{safe_name}_rag_results_{timestamp}.pdf"
 
-    doc = SimpleDocTemplate(str(filename), pagesize=A4, rightMargin=45, leftMargin=45,
-                            topMargin=60, bottomMargin=50)
+    doc = SimpleDocTemplate(
+        str(filename), pagesize=A4,
+        rightMargin=45, leftMargin=45, topMargin=52, bottomMargin=45,
+    )
+    S = _pdf_styles()
     elements = []
-    styles = getSampleStyleSheet()
 
-    title_style = ParagraphStyle("TitleStyle", parent=styles["Heading1"], fontSize=20, spaceAfter=20,
-                                 textColor=colors.darkblue)
-    section_style = ParagraphStyle("SectionStyle", parent=styles["Heading3"], fontSize=12, spaceAfter=6)
-    body_style = ParagraphStyle("BodyStyle", parent=styles["Normal"], fontSize=10.5, leading=15, spaceAfter=8,
-                                wordWrap="CJK")
-    metrics_style = ParagraphStyle("MetricsStyle", parent=styles["Normal"], fontSize=9.5, textColor=colors.darkgreen,
-                                   spaceAfter=6, wordWrap="CJK")
-    table_style = ParagraphStyle("TableStyle", parent=styles["Normal"], fontSize=9, fontName="Courier", leading=13,
-                                 spaceAfter=4)
-
-    elements.append(Paragraph("RAG Evaluation Report", title_style))
-    elements.append(Paragraph(f"Model: <b>{model_name}</b>", body_style))
-    elements.append(Paragraph(f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}", body_style))
-    elements.append(Spacer(1, 0.2 * inch))
-    config_info = f"Retrieval Mode: <b>{cfg.retrieval_mode}</b> | Reranker: <b>{'ON' if cfg.use_reranker else 'OFF'}</b> | Adaptive: <b>{'ON' if cfg.adaptive_weighting else 'OFF'}</b> | Fusion: <b>{'Score' if cfg.score_fusion else 'RRF'}</b><br/>BM25/Semantic: {cfg.bm25_weight}/{cfg.semantic_weight} | text_k={cfg.text_k}, rerank_k={cfg.rerank_k}, image_k={cfg.image_k}"
-    elements.append(Paragraph(config_info, body_style))
-    elements.append(Spacer(1, 0.4 * inch))
-    elements.append(HRFlowable(width="100%", thickness=1, color=colors.grey))
+    # ── Cover / metrics page ──────────────────────────────────────────────
     elements.append(Spacer(1, 0.3 * inch))
-
-    # ── Metrics summary table ─────────────────────────────────────────────
-    elements.append(Paragraph("Metrics Summary", styles["Heading2"]))
+    elements.append(Paragraph("RAG Pipeline", S["subtitle"]))
+    elements.append(Paragraph("Evaluation Report", S["title"]))
+    elements.append(Spacer(1, 4))
+    elements.append(Paragraph(
+        f"Model: <b>{_xml_escape(model_name)}</b>  ·  "
+        f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}",
+        S["subtitle"],
+    ))
+    elements.append(Spacer(1, 0.2 * inch))
+    elements.append(HRFlowable(width="100%", thickness=1.5, color=_PDF_ACCENT))
     elements.append(Spacer(1, 0.15 * inch))
 
+    # Config panel
+    elements.append(Paragraph("Pipeline Configuration", S["h2"]))
+    elements.append(Spacer(1, 4))
+    elements.append(_config_table(S))
+    elements.append(Spacer(1, 0.2 * inch))
+
+    # Metrics table
+    elements.append(Paragraph("Metrics Summary", S["h2"]))
+    elements.append(Spacer(1, 4))
+
     gt_available = int(metrics_summary.get("gt_available_count", 0) or 0)
-    gt_total = int(metrics_summary.get("gt_total", 0) or 0)
-    gen_label = "Generation Quality  (vs ground truth)" if gt_available > 0 else "Generation Quality  (vs context)"
+    gt_total     = int(metrics_summary.get("gt_total", 0) or 0)
+    gen_label    = (
+        f"Generation Quality  (vs ground truth — {gt_available}/{gt_total} available)"
+        if gt_available > 0
+        else "Generation Quality  (vs retrieved context)"
+    )
+    m2_val = (f"{metrics_summary.get('m2_index_size', 0)}"
+              f" {metrics_summary.get('m2_unit', 'vectors')}")
 
-    summary = f"""
-<b>Retrieval Quality</b><br/>
-M1  Embedding Time       : {metrics_summary.get('m1_embedding_time', 0):.4f} s<br/>
-M2  Index Size           : {metrics_summary.get('m2_index_size', 0)} vectors<br/>
-M3  Retrieval Latency    : {metrics_summary.get('m3_retrieval_latency', 0):.4f} s<br/>
-M4  Cosine Sim (Text)    : {metrics_summary.get('m4_cosine_similarity', 0):.4f}<br/>
-M4  Cosine Sim (Image)   : {metrics_summary.get('m4_cosine_similarity_image', 0):.4f}<br/>
-M5  Page Coverage@k      : {metrics_summary.get('m5_top_k_accuracy', 0):.2f} %<br/>
-M9  Context Length       : {metrics_summary.get('m9_context_length', 0):.0f} chars<br/><br/>
+    rows_spec = [
+        "Retrieval Quality",
+        ("M1   Embedding time ↓",
+         f"{metrics_summary.get('m1_embedding_time', 0):.4f}", "s"),
+        ("M2   Index size",      m2_val, ""),
+        ("M3   Retrieval latency ↓",
+         f"{metrics_summary.get('m3_retrieval_latency', 0):.4f}", "s"),
+        ("      └ embed",
+         f"{metrics_summary.get('embed_time_sec', 0):.4f}", "s"),
+        ("      └ BM25",
+         f"{metrics_summary.get('bm25_time_sec', 0):.4f}", "s"),
+        ("      └ fusion",
+         f"{metrics_summary.get('fusion_time_sec', 0):.4f}", "s"),
+        ("      └ rerank",
+         f"{metrics_summary.get('rerank_time_sec', 0):.4f}", "s"),
+        (metrics_summary.get('m4_text_label',  'M4   Cosine sim (Text) ↑'),
+         f"{metrics_summary.get('m4_cosine_similarity', 0):.4f}", ""),
+        (metrics_summary.get('m4_image_label', 'M4   Cosine sim (Image) ↑'),
+         f"{metrics_summary.get('m4_cosine_similarity_image', 0):.4f}", ""),
+        ("M5   Page Coverage@k ↑",
+         f"{metrics_summary.get('m5_top_k_accuracy', 0):.2f}", "%"),
+        ("M9   Context length",
+         f"{metrics_summary.get('m9_context_length', 0):.0f}", "chars"),
 
-<b>{gen_label}</b><br/>
-GT available            : {gt_available}/{gt_total}<br/>
-M6  ROUGE-1              : {metrics_summary.get('m6_rouge1', 0):.4f}<br/>
-M7  ROUGE-2              : {metrics_summary.get('m7_rouge2', 0):.4f}<br/>
-M8  ROUGE-L              : {metrics_summary.get('m8_rougeL', 0):.4f}<br/>
-M10 BLEU                 : {metrics_summary.get('m10_bleu', 0):.4f}<br/>
-M11 METEOR               : {metrics_summary.get('m11_meteor', 0):.4f}<br/>
-M12 BERTScore (F1)       : {metrics_summary.get('m12_bertscore', 0):.4f}<br/>
-M13 FCD (lower=better)   : {metrics_summary.get('m13_fcd', 0):.2f}<br/>
-M14 Faithfulness         : {metrics_summary.get('m14_faithfulness', 0):.2f} %<br/>
-M15 GT Coverage          : {metrics_summary.get('m15_gt_coverage', 0):.2f} %<br/><br/>
+        gen_label,
+        ("M6   ROUGE-1 ↑",       f"{metrics_summary.get('m6_rouge1', 0):.4f}",     ""),
+        ("M7   ROUGE-2 ↑",       f"{metrics_summary.get('m7_rouge2', 0):.4f}",     ""),
+        ("M8   ROUGE-L ↑",       f"{metrics_summary.get('m8_rougeL', 0):.4f}",     ""),
+        ("M10  BLEU ↑",          f"{metrics_summary.get('m10_bleu', 0):.4f}",      ""),
+        ("M11  METEOR ↑",        f"{metrics_summary.get('m11_meteor', 0):.4f}",    ""),
+        ("M12  BERTScore F1 ↑",  f"{metrics_summary.get('m12_bertscore', 0):.4f}", ""),
+        ("M13  FCD ↓",           f"{metrics_summary.get('m13_fcd', 0):.2f}",       ""),
+        ("M14  Faithfulness ↑",  f"{metrics_summary.get('m14_faithfulness', 0):.2f}", "%"),
+        ("M15  GT Coverage ↑",   f"{metrics_summary.get('m15_gt_coverage', 0):.2f}",  "%"),
 
-<b>Performance</b><br/>
-M16 E2E Latency          : {metrics_summary.get('m16_e2e_latency', 0):.4f} s<br/>
-M17 Throughput           : {metrics_summary.get('m17_throughput', 0):.3f} q/s<br/>
-M18 CPU Usage            : {metrics_summary.get('m18_cpu_usage', 0):.2f} %<br/>
-M19 RAM Usage            : {metrics_summary.get('m19_ram_usage', 0):.3f} GB<br/>
-    GPU Usage            : {metrics_summary.get('gpu_usage', 0):.2f} %
-"""
-    elements.append(Paragraph(summary, metrics_style))
+        "Performance",
+        ("M16  E2E Latency ↓",   f"{metrics_summary.get('m16_e2e_latency', 0):.4f}",  "s"),
+        ("M17  Throughput ↑",    f"{metrics_summary.get('m17_throughput', 0):.3f}",   "q/s"),
+        ("M18  CPU Usage ↓",     f"{metrics_summary.get('m18_cpu_usage', 0):.2f}",    "%"),
+        ("M19  RAM Usage ↓",     f"{metrics_summary.get('m19_ram_usage', 0):.3f}",    "GB"),
+        ("     GPU avg",         f"{metrics_summary.get('gpu_usage', 0):.2f}",        "%"),
+        ("     GPU peak",        f"{metrics_summary.get('peak_gpu_usage', 0):.2f}",   "%"),
+    ]
+    elements.append(_metrics_table(rows_spec, S))
     elements.append(PageBreak())
 
     # ── Per-query results ─────────────────────────────────────────────────
     for idx, item in enumerate(results, 1):
-        query = _xml_escape(item.get("query", "") or "")
-        context = _xml_escape(item.get("context", "") or "").replace("\n", "<br/>")
+        query          = _xml_escape(item.get("query", "") or "")
+        context        = _xml_escape(item.get("context", "") or "").replace("\n", "<br/>")
         reference_text = _xml_escape(item.get("reference_text", "") or "").replace("\n", "<br/>")
-        response_text = _xml_escape(item.get("response_text", "") or "").replace("\n", "<br/>")
-        resp_dict = item.get("response", {})
-        fcd_val = resp_dict.get("factual_consistency_distance") if isinstance(resp_dict, dict) else None
+        response_text  = _xml_escape(item.get("response_text", "") or "").replace("\n", "<br/>")
+        resp_dict      = item.get("response", {})
+        fcd_val        = resp_dict.get("factual_consistency_distance") if isinstance(resp_dict, dict) else None
 
-        elements.append(Paragraph(f"Query {idx}", styles["Heading2"]))
-        elements.append(Spacer(1, 0.15 * inch))
+        elements.append(Paragraph(f"Query {idx} of {len(results)}", S["h2"]))
+        elements.append(HRFlowable(width="100%", thickness=0.5, color=_PDF_SEP))
+        elements.append(Spacer(1, 6))
 
-        elements.append(Paragraph("Question", section_style))
-        elements.append(Paragraph(query, body_style))
+        elements.append(Paragraph("Question", S["h3"]))
+        elements.append(Paragraph(query, S["body"]))
 
-        elements.append(Paragraph("Retrieved Context", section_style))
-        elements.append(Paragraph(context, body_style))
+        elements.append(Paragraph("Retrieved Context", S["h3"]))
+        elements.append(Paragraph(context or "<i>(none)</i>", S["body"]))
 
         if reference_text:
-            elements.append(Paragraph("Ground Truth Answer", section_style))
-            elements.append(Paragraph(reference_text, body_style))
+            elements.append(Paragraph("Ground Truth Answer", S["h3"]))
+            elements.append(Paragraph(reference_text, S["body"]))
 
-        elements.append(Paragraph("Model Answer", section_style))
-        elements.append(Paragraph(response_text, body_style))
+        elements.append(Paragraph("Model Answer", S["h3"]))
+        elements.append(Paragraph(response_text or "<i>(no response)</i>", S["body"]))
 
-        per_q_metrics = (
-            f"Inference: {item.get('inference_time_sec', 0):.4f} s  |  "
-            f"E2E: {item.get('e2e_latency_sec', 0):.4f} s  |  "
-            f"CPU: {item.get('avg_cpu_percent', 0):.1f}%  |  "
-            f"RAM: {item.get('avg_ram_gb', 0):.3f} GB  |  "
-            f"GPU: {item.get('avg_gpu_percent', 0):.1f}%  |  "
-            f"Images: {item.get('num_images', 0)}"
-        )
+        # Per-query performance strip
+        perf_parts = [
+            f"Inference: {item.get('inference_time_sec', 0):.4f} s",
+            f"E2E: {item.get('e2e_latency_sec', 0):.4f} s",
+            f"CPU: {item.get('avg_cpu_percent', 0):.1f}%",
+            f"RAM: {item.get('avg_ram_gb', 0):.3f} GB",
+            f"GPU: {item.get('avg_gpu_percent', 0):.1f}%",
+            f"Images: {item.get('num_images', 0)}",
+        ]
         if fcd_val is not None:
-            per_q_metrics += f"  |  FCD: {fcd_val:.2f}"
-        elements.append(Paragraph(per_q_metrics, metrics_style))
+            perf_parts.append(f"FCD: {fcd_val:.2f}")
+        elements.append(Paragraph("  ·  ".join(perf_parts), S["metric"]))
 
         if item.get("images"):
-            image_section = [Spacer(1, 0.2 * inch), Paragraph("Retrieved Image(s)", section_style)]
+            img_section = [
+                Spacer(1, 0.2 * inch),
+                Paragraph("Retrieved Images", S["h3"]),
+            ]
             for img_obj in item["images"]:
                 pil_img = img_obj.get("image")
                 caption = _xml_escape(img_obj.get("caption", "") or "")
                 if pil_img is None:
                     continue
-                img_buffer = io.BytesIO()
-                pil_img.save(img_buffer, format="PNG")
-                img_buffer.seek(0)
-                rl_img = RLImage(img_buffer)
-                scale = min(4.8 * inch / pil_img.size[0], 3.5 * inch / pil_img.size[1])
-                rl_img.drawWidth = pil_img.size[0] * scale
-                rl_img.drawHeight = pil_img.size[1] * scale
-                rl_img.hAlign = "CENTER"
-                image_section.append(rl_img)
+                img_section.append(_image_flowable(pil_img))
                 if caption:
-                    image_section.append(Paragraph(
-                        f"<i>{caption}</i>",
-                        ParagraphStyle("CaptionStyle", parent=styles["Normal"],
-                                       fontSize=9, textColor=colors.grey, alignment=1)
-                    ))
-                image_section.append(Spacer(1, 0.25 * inch))
-            elements.append(KeepTogether(image_section))
+                    img_section.append(Paragraph(f"<i>{caption}</i>", S["caption"]))
+                img_section.append(Spacer(1, 0.2 * inch))
+            elements.append(KeepTogether(img_section))
 
         if idx != len(results):
             elements.append(PageBreak())
 
-    def add_page_number(canvas_obj, doc):
-        canvas_obj.setFont("Helvetica", 9)
-        canvas_obj.drawRightString(A4[0] - 40, 20, f"Page {doc.page}")
-
-    doc.build(elements, onLaterPages=add_page_number)
+    _title = f"RAG Pipeline — Evaluation Report  ({model_name})"
+    doc.build(
+        elements,
+        onFirstPage=lambda c, d: _add_header_footer(c, d, _title),
+        onLaterPages=lambda c, d: _add_header_footer(c, d, _title),
+    )
     LOGGER.info("  [OK] Saved evaluation report: %s", filename)
 
 
 # %%
 def export_comparison_to_pdf(all_model_metrics: Dict[str, Dict], shared_metrics: Dict,
                              output_dir: str = cfg.model_comparison_results_dir):
-    """Export a single PDF comparing all evaluated models side-by-side."""
+    """
+    Export a side-by-side comparison table for all evaluated models / ablation configs.
+
+    Layout:
+      Page 1 — title, pipeline configuration panel, run metadata
+      Page 2+ — full metric comparison table (M1–M19 + GPU, all three groups)
+
+    Retrieval metrics live in shared_metrics (computed once for all models).
+    Generation and performance metrics live in all_model_metrics keyed by model name.
+    """
     if not all_model_metrics:
         return
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    filename = output_dir / f"model_comparison_{timestamp}.pdf"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename  = output_dir / f"model_comparison_{timestamp}.pdf"
 
-    doc = SimpleDocTemplate(str(filename), pagesize=A4,
-                            rightMargin=40, leftMargin=40,
-                            topMargin=55, bottomMargin=45)
-    elements = []
-    styles = getSampleStyleSheet()
-
-    title_style = ParagraphStyle("T", parent=styles["Heading1"], fontSize=18,
-                                 spaceAfter=14, textColor=colors.darkblue)
-    sub_style = ParagraphStyle("S", parent=styles["Normal"], fontSize=10.5, spaceAfter=6)
-    section_style = ParagraphStyle("H", parent=styles["Heading2"], fontSize=13,
-                                   spaceAfter=8, textColor=colors.darkslategray)
-
-    from reportlab.platypus import Table, TableStyle as RLTableStyle
-    from reportlab.lib import colors as rl_colors
-
-    models = list(all_model_metrics.keys())
-    gt_available = int(shared_metrics.get("gt_available_count", 0) or 0)
-    gt_total = int(shared_metrics.get("gt_total", 0) or 0)
-    gen_title = (
-        "Generation Quality Metrics  (per model, vs ground truth)"
-        if gt_available > 0
-        else "Generation Quality Metrics  (per model, vs context)"
+    doc = SimpleDocTemplate(
+        str(filename), pagesize=A4,
+        rightMargin=36, leftMargin=36, topMargin=52, bottomMargin=40,
     )
+    S = _pdf_styles()
+    elements = []
 
-    elements.append(Paragraph("RAG Pipeline — Model Comparison Report", title_style))
+    configs = list(all_model_metrics.keys())
+
+    # ── Cover page ────────────────────────────────────────────────────────
+    elements.append(Spacer(1, 0.3 * inch))
+    elements.append(Paragraph("RAG Pipeline", S["subtitle"]))
+    elements.append(Paragraph("Model Comparison Report", S["title"]))
+    elements.append(Spacer(1, 4))
     elements.append(Paragraph(
-        f"Models evaluated: {', '.join(models)}  |  "
-        f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}",
-        sub_style))
-    config_info = f"Retrieval: {cfg.retrieval_mode} | Reranker: {'ON' if cfg.use_reranker else 'OFF'} | Adaptive: {'ON' if cfg.adaptive_weighting else 'OFF'} | Fusion: {'Score' if cfg.score_fusion else 'RRF'} | Weights: {cfg.bm25_weight}/{cfg.semantic_weight}"
-    elements.append(Paragraph(config_info, sub_style))
-    elements.append(Spacer(1, 0.3 * inch))
-    elements.append(HRFlowable(width="100%", thickness=1, color=colors.grey))
-    elements.append(Spacer(1, 0.3 * inch))
+        f"Generated: {datetime.now().strftime('%d %B %Y, %I:%M %p')}  ·  "
+        f"Models evaluated: {len(configs)}",
+        S["subtitle"],
+    ))
+    elements.append(Spacer(1, 0.2 * inch))
+    elements.append(HRFlowable(width="100%", thickness=1.5, color=_PDF_ACCENT))
+    elements.append(Spacer(1, 0.15 * inch))
 
-    def build_table_data(rows_def):
-        header = ["Metric"] + [m[:16] for m in models]   # shorter headers
-        data = [header]
-        for label, values in rows_def:
-            if values is None:                              # section header
-                data.append([f"  {label}"] + [""] * len(models))
-            elif isinstance(values, str):                   # shared value
-                data.append([label, values] + [""] * (len(models) - 1))
-            else:
-                data.append([label] + list(values))
-        return data
+    # Config panel (shared across all models in this run)
+    elements.append(Paragraph("Pipeline Configuration", S["h2"]))
+    elements.append(Spacer(1, 4))
+    elements.append(_config_table(S))
+    elements.append(PageBreak())
 
-    def style_table(data, shared_row_indices, header_section_indices):
-        # === NEW WIDTH CALCULATION ===
-        first_col_width = 165
-        usable_width = 515                                      # A4 usable area
-        remaining = usable_width - first_col_width
-        model_col_width = max(65, int(remaining / max(len(models), 1)))
+    # ── Comparison table ──────────────────────────────────────────────────
+    elements.append(Paragraph("Metric Comparison — All Models", S["h2"]))
+    elements.append(Spacer(1, 6))
 
-        col_widths = [first_col_width] + [model_col_width] * len(models)
+    # Helper: read a value from shared_metrics first, then per-model metrics.
+    def _shared(key: str) -> Optional[float]:
+        v = shared_metrics.get(key)
+        if v is None and configs:
+            v = all_model_metrics.get(configs[0], {}).get(key)
+        return v
 
-        tbl = Table(data, colWidths=col_widths, repeatRows=1)
+    def _fmt_shared(key: str, fmt: str) -> str:
+        v = _shared(key)
+        return fmt.format(v) if v is not None else "—"
 
-        base = [
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("BACKGROUND", (0, 0), (-1, 0), rl_colors.HexColor("#2c3e50")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
-            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-            ("ALIGN", (0, 0), (0, -1), "LEFT"),
-            ("GRID", (0, 0), (-1, -1), 0.5, rl_colors.lightgrey),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [rl_colors.white, rl_colors.HexColor("#f8f9fa")]),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    def _fmt_per(model: str, key: str, fmt: str) -> str:
+        v = all_model_metrics.get(model, {}).get(key)
+        return fmt.format(v) if v is not None else "—"
+
+    # ── Column widths: label col + one col per model ─────────────────────
+    usable_w = A4[0] - 36 - 36    # page width minus margins
+    label_w  = 160
+    n_models = max(len(configs), 1)
+    model_w  = max(55, int((usable_w - label_w) / n_models))
+    col_widths = [label_w] + [model_w] * n_models
+
+    # Abbreviate long model names for the header row
+    def _abbrev(name: str, max_len: int = 14) -> str:
+        return name if len(name) <= max_len else name[:max_len - 1] + "…"
+
+    label_hdr  = ParagraphStyle("cHdrL", parent=S["body"],
+                                fontName="Helvetica-Bold", fontSize=8, textColor=_PDF_ACCENT)
+    model_hdr  = ParagraphStyle("cHdrM", parent=S["body"],
+                                fontName="Helvetica-Bold", fontSize=8,
+                                textColor=_PDF_ACCENT, alignment=1)
+    label_cell = ParagraphStyle("cLabel", parent=S["body"], fontSize=8)
+    value_cell = ParagraphStyle("cValue", parent=S["metric"],  fontSize=8, alignment=1)
+    sec_cell   = ParagraphStyle("cSec",   parent=S["body"],
+                                fontName="Helvetica-Bold", fontSize=8.5,
+                                textColor=_PDF_ACCENT)
+
+    def _hdr_p(text): return Paragraph(text, label_hdr)
+    def _mhdr_p(text): return Paragraph(_abbrev(text), model_hdr)
+    def _lbl(text):   return Paragraph(str(text), label_cell)
+    def _val(text):   return Paragraph(str(text), value_cell)
+    def _sec(text):   return Paragraph(str(text), sec_cell)
+
+    # ── Section: retrieval (shared) ───────────────────────────────────────
+    # Note: retrieval metrics are shared across all models in a single run.
+    # They are shown once per column (same value repeated) to keep the table
+    # self-contained; a note below the table explains this.
+    m2_str = (f"{shared_metrics.get('m2_index_size', '—')} "
+              f"{shared_metrics.get('m2_unit', 'vectors')}")
+
+    _RETRIEVAL = [
+        ("M1  Embedding time ↓",        "m1_embedding_time",         "{:.4f} s",  True),
+        ("M2  Index size",               None,                        m2_str,      True),
+        ("M3  Retrieval latency ↓",      "m3_retrieval_latency",      "{:.4f} s",  True),
+        (shared_metrics.get("m4_text_label",  "M4  Sim (Text) ↑"),
+                                         "m4_cosine_similarity",      "{:.4f}",    True),
+        (shared_metrics.get("m4_image_label", "M4  Sim (Image) ↑"),
+                                         "m4_cosine_similarity_image","{:.4f}",    True),
+        ("M5  Page Coverage@k ↑",        "m5_top_k_accuracy",        "{:.2f} %",  True),
+        ("M9  Context length",            "m9_context_length",        "{:.0f} ch", True),
+    ]
+    _GENERATION = [
+        ("M6   ROUGE-1 ↑",    "m6_rouge1",       "{:.4f}"),
+        ("M7   ROUGE-2 ↑",    "m7_rouge2",       "{:.4f}"),
+        ("M8   ROUGE-L ↑",    "m8_rougeL",       "{:.4f}"),
+        ("M10  BLEU ↑",       "m10_bleu",        "{:.4f}"),
+        ("M11  METEOR ↑",     "m11_meteor",      "{:.4f}"),
+        ("M12  BERTScore ↑",  "m12_bertscore",   "{:.4f}"),
+        ("M13  FCD ↓",        "m13_fcd",         "{:.2f}"),
+        ("M14  Faithfulness ↑","m14_faithfulness","{:.2f} %"),
+        ("M15  GT Coverage ↑","m15_gt_coverage",  "{:.2f} %"),
+    ]
+    _PERFORMANCE = [
+        ("M16  E2E Latency ↓", "m16_e2e_latency","{:.4f} s"),
+        ("M17  Throughput ↑",  "m17_throughput",  "{:.3f} q/s"),
+        ("M18  CPU Usage ↓",   "m18_cpu_usage",   "{:.2f} %"),
+        ("M19  RAM Usage ↓",   "m19_ram_usage",   "{:.3f} GB"),
+        ("     GPU avg",       "gpu_usage",       "{:.2f} %"),
+        ("     GPU peak",      "peak_gpu_usage",  "{:.2f} %"),
+    ]
+
+    tdata = []
+    # Header row
+    tdata.append([_hdr_p("Metric")] + [_mhdr_p(m) for m in configs])
+
+    def _sec_row(label):
+        return [_sec(label)] + [Paragraph("", value_cell)] * n_models
+
+    # Retrieval section
+    tdata.append(_sec_row("── RETRIEVAL  (shared across all models) ──"))
+    for label, key, fmt, _shared_flag in _RETRIEVAL:
+        if key is None:
+            # M2: pre-formatted string, same for all models
+            tdata.append([_lbl(label)] + [_val(fmt)] * n_models)
+        else:
+            raw = shared_metrics.get(key)
+            cell_str = fmt.format(raw) if raw is not None else "—"
+            tdata.append([_lbl(label)] + [_val(cell_str)] * n_models)
+
+    # Generation section
+    tdata.append(_sec_row("── GENERATION QUALITY  (per model, vs ground truth) ──"))
+    for label, key, fmt in _GENERATION:
+        tdata.append(
+            [_lbl(label)] + [_val(_fmt_per(m, key, fmt)) for m in configs]
+        )
+
+    # Performance section
+    tdata.append(_sec_row("── PERFORMANCE  (per model) ──"))
+    for label, key, fmt in _PERFORMANCE:
+        tdata.append(
+            [_lbl(label)] + [_val(_fmt_per(m, key, fmt)) for m in configs]
+        )
+
+    # Build section-row index set for styling
+    section_indices = [
+        1,
+        1 + 1 + len(_RETRIEVAL),
+        1 + 1 + len(_RETRIEVAL) + 1 + len(_GENERATION),
+    ]
+
+    style_cmds = [
+        # Header
+        ("BACKGROUND",    (0, 0), (-1, 0),  _PDF_ACCENT),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, 0),  8),
+        ("ALIGN",         (0, 0), (-1, 0),  "CENTER"),
+        ("TOPPADDING",    (0, 0), (-1, 0),  5),
+        ("BOTTOMPADDING", (0, 0), (-1, 0),  5),
+        # All rows
+        ("FONTSIZE",      (0, 1), (-1, -1), 8),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 1), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 5),
+        ("GRID",          (0, 0), (-1, -1), 0.25, _PDF_SEP),
+        ("ALIGN",         (1, 1), (-1, -1), "CENTER"),
+    ]
+    # Section header rows
+    for si in section_indices:
+        style_cmds += [
+            ("BACKGROUND",    (0, si), (-1, si), _PDF_ACCENT_LIGHT),
+            ("SPAN",          (0, si), (-1, si)),
+            ("LINEABOVE",     (0, si), (-1, si), 0.75, _PDF_ACCENT),
+            ("TOPPADDING",    (0, si), (-1, si), 4),
+            ("BOTTOMPADDING", (0, si), (-1, si), 4),
         ]
+    # Alternating tint on data rows
+    data_rows = [i for i in range(1, len(tdata)) if i not in section_indices]
+    for j, i in enumerate(data_rows):
+        if j % 2 == 1:
+            style_cmds.append(("BACKGROUND", (0, i), (-1, i), _PDF_ROW_ALT))
 
-        for ri in shared_row_indices:
-            base.extend([
-                ("SPAN", (1, ri), (-1, ri)),
-                ("BACKGROUND", (0, ri), (-1, ri), rl_colors.HexColor("#eaf4fb")),
-                ("ALIGN", (1, ri), (-1, ri), "CENTER"),
-            ])
-        for ri in header_section_indices:
-            base.extend([
-                ("BACKGROUND", (0, ri), (-1, ri), rl_colors.HexColor("#34495e")),
-                ("TEXTCOLOR", (0, ri), (-1, ri), rl_colors.white),
-                ("FONTNAME", (0, ri), (-1, ri), "Helvetica-Bold"),
-                ("SPAN", (0, ri), (-1, ri)),
-            ])
+    comp_table = Table(tdata, colWidths=col_widths, repeatRows=1)
+    comp_table.setStyle(TableStyle(style_cmds))
+    elements.append(comp_table)
+    elements.append(Spacer(1, 8))
+    elements.append(Paragraph(
+        "<i>* Retrieval metrics are computed once and are identical across model columns "
+        "because retrieval runs before any LLM is invoked.</i>",
+        S["caption"],
+    ))
 
-        tbl.setStyle(RLTableStyle(base))
-        return tbl
-
-    # Table 1: Retrieval (shared)
-    elements.append(Paragraph("Retrieval Metrics  (shared — model-independent)", section_style))
-    retrieval_rows = [
-        ("RETRIEVAL", None),
-        ("M1  Embedding Time ↓", f"{shared_metrics.get('m1_embedding_time', 0):.4f} s"),
-        ("M2  Index Size ↑", f"{shared_metrics.get('m2_index_size', 0)} vectors"),
-        ("M3  Retrieval Latency ↓", f"{shared_metrics.get('m3_retrieval_latency', 0):.4f} s"),
-        ("M4  Cosine Sim (Text) ↑", f"{shared_metrics.get('m4_cosine_similarity', 0):.4f}"),
-        ("M4  Cosine Sim (Image) ↑", f"{shared_metrics.get('m4_cosine_similarity_image', 0):.4f}"),
-        ("M5  Page Coverage@k ↑", f"{shared_metrics.get('m5_top_k_accuracy', 0):.2f} %"),
-        ("M9  Context Length ↑", f"{shared_metrics.get('m9_context_length', 0):.0f} chars"),
-    ]
-    data = build_table_data(retrieval_rows)
-    shared_idxs = [i + 1 for i, (_, v) in enumerate(retrieval_rows) if isinstance(v, str)]
-    section_idxs = [i + 1 for i, (_, v) in enumerate(retrieval_rows) if v is None]
-    elements.append(style_table(data, shared_idxs, section_idxs))
-    elements.append(Spacer(1, 0.3 * inch))
-
-    # Table 2: Generation Quality
-    elements.append(Paragraph(gen_title, section_style))
-    if gt_total > 0:
-        elements.append(Paragraph(f"GT available: {gt_available}/{gt_total}", sub_style))
-    gen_rows = [
-        ("GENERATION QUALITY", None),
-        ("M6  ROUGE-1 ↑", [f"{all_model_metrics[m].get('m6_rouge1', 0):.4f}" for m in models]),
-        ("M7  ROUGE-2 ↑", [f"{all_model_metrics[m].get('m7_rouge2', 0):.4f}" for m in models]),
-        ("M8  ROUGE-L ↑", [f"{all_model_metrics[m].get('m8_rougeL', 0):.4f}" for m in models]),
-        ("M10 BLEU ↑", [f"{all_model_metrics[m].get('m10_bleu', 0):.4f}" for m in models]),
-        ("M11 METEOR ↑", [f"{all_model_metrics[m].get('m11_meteor', 0):.4f}" for m in models]),
-        ("M12 BERTScore (F1) ↑", [f"{all_model_metrics[m].get('m12_bertscore', 0):.4f}" for m in models]),
-        ("M13 FCD ↓", [f"{all_model_metrics[m].get('m13_fcd', 0):.2f}" for m in models]),
-        ("M14 Faithfulness ↑", [f"{all_model_metrics[m].get('m14_faithfulness', 0):.2f} %" for m in models]),
-        ("M15 GT Coverage ↑", [f"{all_model_metrics[m].get('m15_gt_coverage', 0):.2f} %" for m in models]),
-    ]
-    data = build_table_data(gen_rows)
-    section_idxs = [i + 1 for i, (_, v) in enumerate(gen_rows) if v is None]
-    elements.append(style_table(data, [], section_idxs))
-    elements.append(Spacer(1, 0.3 * inch))
-
-    # Table 3: Performance
-    elements.append(Paragraph("Performance Metrics  (per model)", section_style))
-    perf_rows = [
-        ("PERFORMANCE", None),
-        ("M16 E2E Latency ↓", [f"{all_model_metrics[m].get('m16_e2e_latency', 0):.4f} s" for m in models]),
-        ("M17 Throughput ↑", [f"{all_model_metrics[m].get('m17_throughput', 0):.3f} q/s" for m in models]),
-        ("M18 CPU Usage ↓", [f"{all_model_metrics[m].get('m18_cpu_usage', 0):.2f} %" for m in models]),
-        ("M19 RAM Usage ↓", [f"{all_model_metrics[m].get('m19_ram_usage', 0):.3f} GB" for m in models]),
-        ("GPU Usage", [f"{all_model_metrics[m].get('gpu_usage', 0):.2f} %" for m in models]),
-    ]
-    data = build_table_data(perf_rows)
-    section_idxs = [i + 1 for i, (_, v) in enumerate(perf_rows) if v is None]
-    elements.append(style_table(data, [], section_idxs))
-
-    def add_page_number(canvas_obj, doc):
-        canvas_obj.setFont("Helvetica", 9)
-        canvas_obj.drawRightString(A4[0] - 40, 20, f"Page {doc.page}")
-
-    doc.build(elements, onLaterPages=add_page_number)
-    LOGGER.info("  [OK] Saved comparison report: %s", filename)
+    _title = "RAG Pipeline — Model Comparison"
+    doc.build(
+        elements,
+        onFirstPage=lambda c, d: _add_header_footer(c, d, _title),
+        onLaterPages=lambda c, d: _add_header_footer(c, d, _title),
+    )
+    LOGGER.info("Comparison PDF written to %s", filename)
 
 
-# %%
 def print_model_comparison_table(all_model_metrics: Dict[str, Dict], shared_metrics: Dict, is_hybrid: bool = False):
     """
     Print a side-by-side comparison table of all evaluated models in the terminal.
@@ -4513,7 +5693,7 @@ def print_model_comparison_table(all_model_metrics: Dict[str, Dict], shared_metr
     max_table_w = min(term_w, 120)
 
     # Reserve space for borders and allocate remaining width
-    label_w = max(32, min(38, int(max_table_w * 0.34)))   # slightly wider for arrows
+    label_w = max(32, min(38, int(max_table_w * 0.34)))  # slightly wider for arrows
     remaining = max_table_w - label_w - 3
     remaining -= max(n - 1, 0)
     col_w = max(10, int(remaining / max(n, 1)))
@@ -4536,7 +5716,7 @@ def print_model_comparison_table(all_model_metrics: Dict[str, Dict], shared_metr
     print("=" * 100)
     print(f"  PHASE 6: MODEL COMPARISON TABLE  ({n} model{'s' if n > 1 else ''})")
     print("=" * 100)
-    print(f"  Config: retrieval={cfg.retrieval_mode} | reranker={'ON' if cfg.use_reranker else 'OFF'} | adaptive={'ON' if cfg.adaptive_weighting else 'OFF'} | fusion={'score' if cfg.score_fusion else 'rrf'}")
+    print(f"  Config: {active_retrieval_config_summary(html=False)}")
     print("-" * 100)
 
     headers = [abbrev(m) for m in models]
@@ -4549,13 +5729,17 @@ def print_model_comparison_table(all_model_metrics: Dict[str, Dict], shared_metr
     print(f"  │{'  ── RETRIEVAL (1 for all) ──':<{label_w}}│" +
           "│".join([" " * col_w] * n) + "│")
 
-    print(shared_row("M1 Embedding Time (s) ↓", f"{shared_metrics.get('m1_embedding_time', 0):.4f} s"))
-    print(shared_row("M2 Index Size ↑", f"{shared_metrics.get('m2_index_size', 0)} vectors"))
-    print(shared_row("M3 Retrieval Latency (s) ↓", f"{shared_metrics.get('m3_retrieval_latency', 0):.4f} s"))
-    print(shared_row("M4 Cosine Sim (Text) ↑", f"{shared_metrics.get('m4_cosine_similarity', 0):.4f}"))
-    print(shared_row("M4 Cosine Sim (Image) ↑", f"{shared_metrics.get('m4_cosine_similarity_image', 0):.4f}"))
-    print(shared_row("M5 Page Coverage@k (%) ↑", f"{shared_metrics.get('m5_top_k_accuracy', 0):.2f} %"))
-    print(shared_row("M9 Context Length (chars) ↑", f"{shared_metrics.get('m9_context_length', 0):.0f} ch"))
+    print(shared_row("M1 Embedding Time (s, lower better)", f"{shared_metrics.get('m1_embedding_time', 0):.4f} s"))
+    print(shared_row("M2 Index Size",
+                     f"{shared_metrics.get('m2_index_size', 0)} {shared_metrics.get('m2_unit', 'vectors')}"))
+    print(
+        shared_row("M3 Retrieval Latency (s, lower better)", f"{shared_metrics.get('m3_retrieval_latency', 0):.4f} s"))
+    print(shared_row(f"{shared_metrics.get('m4_text_label', 'M4 Retrieval Sim (Text)')} (higher better)",
+                     f"{shared_metrics.get('m4_cosine_similarity', 0):.4f}"))
+    print(shared_row(f"{shared_metrics.get('m4_image_label', 'M4 Retrieval Sim (Image)')} (higher better)",
+                     f"{shared_metrics.get('m4_cosine_similarity_image', 0):.4f}"))
+    print(shared_row("M5 Page Coverage@k (%)", f"{shared_metrics.get('m5_top_k_accuracy', 0):.2f} %"))
+    print(shared_row("M9 Context Length (chars)", f"{shared_metrics.get('m9_context_length', 0):.0f} ch"))
     print(mid_sep)
 
     # ── Generation Quality ─────────────────────────────────────────────
@@ -4571,15 +5755,15 @@ def print_model_comparison_table(all_model_metrics: Dict[str, Dict], shared_metr
         vals = [f"{all_model_metrics[m].get(key, 0.0):.2f} %" for m in models]
         return model_val_row(label, vals)
 
-    print(mrow("M6 ROUGE-1 ↑", "m6_rouge1"))
-    print(mrow("M7 ROUGE-2 ↑", "m7_rouge2"))
-    print(mrow("M8 ROUGE-L ↑", "m8_rougeL"))
-    print(mrow("M10 BLEU ↑", "m10_bleu"))
-    print(mrow("M11 METEOR ↑", "m11_meteor"))
-    print(mrow("M12 BERTScore (F1) ↑", "m12_bertscore"))
-    print(mrow("M13 FCD ↓", "m13_fcd", ".2f"))
-    print(mrow_pct("M14 Faithfulness (%) ↑", "m14_faithfulness"))
-    print(mrow_pct("M15 GT Coverage (%) ↑", "m15_gt_coverage"))
+    print(mrow("M6 ROUGE-1", "m6_rouge1"))
+    print(mrow("M7 ROUGE-2", "m7_rouge2"))
+    print(mrow("M8 ROUGE-L", "m8_rougeL"))
+    print(mrow("M10 BLEU", "m10_bleu"))
+    print(mrow("M11 METEOR", "m11_meteor"))
+    print(mrow("M12 BERTScore (F1)", "m12_bertscore"))
+    print(mrow("M13 FCD (lower better)", "m13_fcd", ".2f"))
+    print(mrow_pct("M14 Faithfulness (%)", "m14_faithfulness"))
+    print(mrow_pct("M15 GT Coverage (%)", "m15_gt_coverage"))
     print(mid_sep)
 
     # ── Performance Metrics ────────────────────────────────────────────
@@ -4590,14 +5774,14 @@ def print_model_comparison_table(all_model_metrics: Dict[str, Dict], shared_metr
         vals = [f"{all_model_metrics[m].get(key, 0.0):.4f} s" for m in models]
         return model_val_row(label, vals)
 
-    print(mrow_s("M16 E2E Latency (s) ↓", "m16_e2e_latency"))
+    print(mrow_s("M16 E2E Latency (s)", "m16_e2e_latency"))
     vals_tp = [f"{all_model_metrics[m].get('m17_throughput', 0.0):.3f} q/s" for m in models]
-    print(model_val_row("M17 Throughput (q/s) ↑", vals_tp))
-    print(mrow_pct("M18 CPU Usage (%) ↓", "m18_cpu_usage"))
+    print(model_val_row("M17 Throughput (q/s)", vals_tp))
+    print(mrow_pct("M18 CPU Usage (%)", "m18_cpu_usage"))
     vals_ram = [f"{all_model_metrics[m].get('m19_ram_usage', 0.0):.3f} GB" for m in models]
-    print(model_val_row("M19 RAM Usage (GB) ↓", vals_ram))
+    print(model_val_row("M19 RAM Usage (GB)", vals_ram))
     vals_gpu = [f"{all_model_metrics[m].get('gpu_usage', 0.0):.2f} %" for m in models]
-    print(model_val_row("GPU Usage (%)", vals_gpu))   # neutral
+    print(model_val_row("GPU Usage (%)", vals_gpu))  # neutral
 
     print(bot_row)
 
@@ -4617,12 +5801,13 @@ def main(test_questions):
 
     # ── PHASE 2 ───────────────────────────────────────────────────────────
     log_section("PHASE 2 — Embedding & vector store initialization")
+    needs_dense = cfg.retrieval_mode in ("semantic", "hybrid")
+
     text_embedder = TextEmbeddingModel(model_name=cfg.text_embed_model, batch_size=cfg.text_embed_batch_size)
     image_embedder = ImageEmbeddingModel(model_name=cfg.image_embed_model, pretrained=cfg.image_embed_pretrained,
                                          caption_image_weight=cfg.image_caption_image_weight,
                                          batch_size=cfg.image_embed_batch_size)
-    text_embeddings, text_time, text_stats = text_embedder.embed_documents(chunks)
-    image_embeddings, image_time, image_stats = image_embedder.embed_image(image_objects)
+
     text_db = VectorStore(
         collection_name=cfg.text_collection_name,
         directory=cfg.database_dir,
@@ -4635,45 +5820,102 @@ def main(test_questions):
         silent=True,
         reset_collection=bool(getattr(cfg, "reset_collections_on_start", False)),
     )
-    text_db.add_documents(chunks, text_embeddings)
-    if getattr(image_embeddings, "shape", (0,))[0] > 0:
-        image_db.add_documents(image_objects, image_embeddings)
+
+    bm25_corpus_size = None  # only set in BM25-only mode .
+
+    if needs_dense:
+        text_embeddings, text_time, text_stats = text_embedder.embed_documents(chunks)
+        image_embeddings, image_time, image_stats = image_embedder.embed_image(image_objects)
+        text_db.add_documents(chunks, text_embeddings)
+        if getattr(image_embeddings, "shape", (0,))[0] > 0:
+            image_db.add_documents(image_objects, image_embeddings)
+        else:
+            LOGGER.warning("No image embeddings to index; skipping image vector store insert.")
     else:
-        LOGGER.warning("No image embeddings to index; skipping image vector store insert.")
+        # BM25-only: skip dense embedding entirely so M1 correctly reports 0 .
+        LOGGER.info("  BM25-only mode: skipping dense embedding and vector DB population.")
+        text_time, image_time = 0.0, 0.0
+        text_stats, image_stats = {}, {}
+        bm25_corpus_size = len(chunks)  # report BM25 corpus size for M2 .
 
     # ── PHASE 3 ───────────────────────────────────────────────────────────
     log_section("PHASE 3 — Retrieval (runs once; shared across all models)")
-    retriever = RetrievalRag(
-        image_embedder=image_embedder, text_embedder=text_embedder,
-        image_vectordb=image_db, text_vectordb=text_db,
-        use_hybrid=cfg.use_hybrid, adaptive_weighting=cfg.adaptive_weighting,
-        score_fusion=cfg.score_fusion, use_reranker=cfg.use_reranker,
-        bm25_weight=cfg.bm25_weight, semantic_weight=cfg.semantic_weight,
-        retrieval_mode=cfg.retrieval_mode
-    )
+
+    if needs_dense:
+        # Normal path: BM25 index (if hybrid) is built from vector DB .
+        retriever = RetrievalRag(
+            image_embedder=image_embedder, text_embedder=text_embedder,
+            image_vectordb=image_db, text_vectordb=text_db,
+            adaptive_weighting=cfg.adaptive_weighting,
+            score_fusion=cfg.use_weighted_fusion, use_reranker=cfg.use_reranker,
+            bm25_weight=cfg.bm25_weight, semantic_weight=cfg.semantic_weight,
+            retrieval_mode=cfg.retrieval_mode
+        )
+    else:
+        # BM25-only: build BM25 indexes from raw chunks BEFORE constructing
+        # RetrievalRag so the constructor never calls from_vectorstore on the
+        # empty (unpopulated) DB — that was the root cause of the crash.
+        LOGGER.info("  BM25-only: building indexes directly from chunks...")
+        bm25_text_idx = BM25IndexBuilder.from_chunks(chunks, enable_preprocessing=True)
+        bm25_image_idx = BM25IndexBuilder.from_image_objects(image_objects, enable_preprocessing=True)
+        LOGGER.info("  BM25-only: text index=%d docs, image index=%s docs.",
+                    len(bm25_text_idx.documents) if bm25_text_idx else 0,
+                    len(bm25_image_idx.documents) if bm25_image_idx else 0)
+        retriever = RetrievalRag(
+            image_embedder=image_embedder, text_embedder=text_embedder,
+            image_vectordb=image_db, text_vectordb=text_db,
+            adaptive_weighting=cfg.adaptive_weighting,
+            score_fusion=cfg.use_weighted_fusion, use_reranker=cfg.use_reranker,
+            bm25_weight=cfg.bm25_weight, semantic_weight=cfg.semantic_weight,
+            retrieval_mode=cfg.retrieval_mode,
+            # Pass pre-built indexes — constructor will use these directly
+            # instead of querying the empty VectorStore.
+            _bm25_index=bm25_text_idx,
+            _image_bm25_index=bm25_image_idx,
+        )
+        LOGGER.info("  BM25-only: indexes built from chunks directly (vector DB bypassed).")
+
     is_hybrid = retriever.retrieval_mode == "hybrid"
     formatter = ContextFormatter(
         max_text_chunks=cfg.max_text_chunks, max_images=cfg.max_images,
         text_distance_threshold=cfg.text_distance_threshold,
         image_distance_threshold=cfg.image_distance_threshold,
-        use_percentile_filtering=True, percentile_cutoff=cfg.percentile_cutoff
+        use_filtering=cfg.use_filtering,
+        use_percentile_filtering=cfg.use_percentile_filtering,
+        percentile_cutoff=cfg.percentile_cutoff,
+        max_context_tokens=cfg.max_context_tokens,
     )
 
     # Run retrieval once for all questions
     formatted_output = []
     retrieval_times = []
+    text_latencies = []
+    image_latencies = []
     cosine_sims_text = []
     cosine_sims_image = []
     retrieval_for_m5 = []
     raw_retrieval_results = []
 
     LOGGER.info("  Retrieving context for %s question(s)...", len(test_questions))
+    _stage_embed: List[float] = []
+    _stage_bm25: List[float] = []
+    _stage_fusion: List[float] = []
+    _stage_rerank: List[float] = []
+
     for q in test_questions:
         start = time.perf_counter()
         out = retriever.retrieve(q["question"], text_k=cfg.text_k, image_k=cfg.image_k, rerank_k=cfg.rerank_k)
         retrieval_times.append(time.perf_counter() - start)
+        text_latencies.append(out.text_latency_sec)
+        image_latencies.append(out.image_latency_sec)
         cosine_sims_text.append(out.cosine_sim_text)
         cosine_sims_image.append(out.cosine_sim_image)
+        # Collect granular stage latencies for aggregate reporting.
+        _stage_embed.append(out.embed_time_sec)
+        _stage_bm25.append(out.bm25_time_sec)
+        _stage_fusion.append(out.fusion_time_sec)
+        _stage_rerank.append(out.rerank_time_sec)
+
         legacy_result = out.to_legacy_dict()
         formatted = formatter.format(legacy_result)
         formatted["query"] = q["question"]
@@ -4684,21 +5926,88 @@ def main(test_questions):
     # ── Shared retrieval metrics (computed once) ───────────────────────────
     shared_metrics = {}
     shared_metrics["m1_embedding_time"] = compute_embedding_time(text_time, image_time)
-    shared_metrics["m2_index_size"] = compute_index_size(text_db, image_db)
+    # Assign the unit label before compute_index_size() so the export
+    # functions always have a consistent value available in shared_metrics.
+    shared_metrics["m2_unit"] = "documents" if cfg.retrieval_mode == "bm25" else "vectors"
+    shared_metrics["m2_index_size"] = compute_index_size(
+        text_db, image_db,
+        bm25_corpus_size=bm25_corpus_size  # None for semantic/hybrid, int for BM25-only .
+    )
     shared_metrics["m3_retrieval_latency"] = compute_retrieval_latency(retrieval_times)
-    shared_metrics["m4_cosine_similarity"] = compute_cosine_similarity(cosine_sims_text,
-                                                                       label="M4 Cosine Similarity (Text)")
-    shared_metrics["m4_cosine_similarity_image"] = compute_cosine_similarity(cosine_sims_image,
-                                                                             label="M4 Cosine Similarity (Image)")
+    shared_metrics["text_search_latency"] = round(float(np.mean(text_latencies)), 4) if text_latencies else 0.0
+    shared_metrics["image_search_latency"] = round(float(np.mean(image_latencies)), 4) if image_latencies else 0.0
+    shared_metrics["embedding_time"] = text_time + image_time
+    if retriever.retrieval_mode == "semantic":
+        m4_text_label = "M4 Cosine Sim (Text)"
+        m4_image_label = "M4 Cosine Sim (Image)"
+    elif retriever.retrieval_mode == "bm25":
+        m4_text_label = "M4 BM25 Relevance (Text)"
+        m4_image_label = "M4 BM25 Relevance (Image)"
+    else:
+        m4_text_label = "M4 Fused Relevance (Text)"
+        m4_image_label = "M4 Fused Relevance (Image)"
+    shared_metrics["m4_text_label"] = m4_text_label
+    shared_metrics["m4_image_label"] = m4_image_label
+    shared_metrics["m4_cosine_similarity"] = compute_retrieval_similarity(cosine_sims_text,
+                                                                          label=m4_text_label)
+    shared_metrics["m4_cosine_similarity_image"] = compute_retrieval_similarity(cosine_sims_image,
+                                                                                label=m4_image_label)
     shared_metrics["m5_top_k_accuracy"] = compute_top_k_accuracy(retrieval_for_m5, test_questions,
                                                                  k=cfg.top_k_accuracy_k)
     shared_metrics["m9_context_length"] = compute_context_length(formatted_output)
     shared_metrics["gt_available_count"] = gt_available_count
     shared_metrics["gt_total"] = gt_total
 
+    # Aggregate per-query stage latencies so the PDF export can render the
+    # latency breakdown row without additional computation.
+    _all_breakdown_keys = ("embed_time_sec", "bm25_time_sec", "fusion_time_sec", "rerank_time_sec")
+    for _bk in _all_breakdown_keys:
+        shared_metrics[_bk] = 0.0  # default; overwritten below when data exists
+
+    if _stage_embed:
+        shared_metrics["embed_time_sec"] = round(statistics.mean(_stage_embed), 4)
+        shared_metrics["bm25_time_sec"] = round(statistics.mean(_stage_bm25), 4)
+        shared_metrics["fusion_time_sec"] = round(statistics.mean(_stage_fusion), 4)
+        shared_metrics["rerank_time_sec"] = round(statistics.mean(_stage_rerank), 4)
+        LOGGER.info(
+            "  Latency breakdown (avg per query) — embed: %.4fs | bm25: %.4fs | "
+            "fusion: %.4fs | rerank: %.4fs",
+            shared_metrics["embed_time_sec"], shared_metrics["bm25_time_sec"],
+            shared_metrics["fusion_time_sec"], shared_metrics["rerank_time_sec"],
+        )
+
+    # Image failure rate — surfaces silent image loading failures in metrics
+    if image_stats:
+        _img_total = image_stats.get("count", 0)
+        _img_failed = image_stats.get("failed_loads", 0)
+        shared_metrics["image_fail_rate"] = round(_img_failed / max(_img_total, 1), 4)
+        if shared_metrics["image_fail_rate"] > 0:
+            LOGGER.warning("  Image fail rate: %.1f%% (%d/%d)",
+                           shared_metrics["image_fail_rate"] * 100, _img_failed, _img_total)
+    else:
+        shared_metrics["image_fail_rate"] = 0.0
+
+    # Config snapshot for reproducibility
+    import json as _json
+    try:
+        import uuid as _uuid
+        _run_id = _uuid.uuid4().hex[:8]
+        _snap_path = Path(cfg.results_dir) / f"config_snapshot_{_run_id}.json"
+        _snap_path.parent.mkdir(parents=True, exist_ok=True)
+        _cfg_dict = {k: str(v) if not isinstance(v, (int, float, bool, str, list, type(None))) else v
+                     for k, v in cfg.__dict__.items()}
+        _snap_path.write_text(_json.dumps(_cfg_dict, indent=2))
+    except Exception as _e:
+        LOGGER.warning("Config snapshot could not be saved: %s", _e)
+
     if is_hybrid:
         hybrid_stats = compute_hybrid_stats(raw_retrieval_results)
         fusion_signal = compute_fusion_effectiveness(raw_retrieval_results)
+        log_kv("Hybrid Stats", str(hybrid_stats))
+        # Persist into shared_metrics so the comparison PDF export can surface
+        # the diagnostics without requiring a separate function argument.
+        shared_metrics["hybrid_stats"] = hybrid_stats
+        shared_metrics["fusion_signal"] = fusion_signal
     else:
         hybrid_stats = None
         fusion_signal = None
@@ -4735,12 +6044,18 @@ def main(test_questions):
             ms["m12_bertscore"] = compute_bertscore(per_query_results, verbose=metrics_verbose)
             ms["m13_fcd"] = compute_fcd(per_query_results, verbose=metrics_verbose)
             ms["m14_faithfulness"] = compute_faithfulness(per_query_results, verbose=metrics_verbose)
-            ms["m15_gt_coverage"] = compute_gt_coverage(per_query_results, verbose=metrics_verbose)
+            ms["m15_gt_coverage"] = compute_gt_coverage(per_query_results, text_embedder=text_embedder,
+                                                        verbose=metrics_verbose)
             ms["m16_e2e_latency"] = compute_e2e_latency(per_query_results, verbose=metrics_verbose)
             ms["m17_throughput"] = compute_throughput(per_query_results, verbose=metrics_verbose)
             ms["m18_cpu_usage"] = compute_cpu_usage(per_query_results, verbose=metrics_verbose)
             ms["m19_ram_usage"] = compute_ram_usage(per_query_results, verbose=metrics_verbose)
             ms["gpu_usage"] = compute_gpu_usage(per_query_results, verbose=metrics_verbose)
+            # Also store peak GPU so the PDF export can surface it alongside avg.
+            peak_gpu_vals = [r.get("peak_gpu_percent", 0.0) for r in per_query_results]
+            ms["peak_gpu_usage"] = (
+                max(peak_gpu_vals) if peak_gpu_vals else 0.0
+            )
 
         if is_hybrid:
             ms["hybrid"] = hybrid_stats
@@ -4773,6 +6088,140 @@ def main(test_questions):
         export_comparison_to_pdf(all_model_metrics, shared_metrics, output_dir=cfg.model_comparison_results_dir)
 
     log_section("Pipeline completed successfully")
+
+
+# %%
+# ===========================================================================
+# Caption selection helper for image retrieval quality
+# ===========================================================================
+def _select_best_caption(block_caption: str, section_heading: str,
+                         fallback_id: str) -> str:
+    """
+    Return the most descriptive caption for an image.
+
+    Priority:
+      1. block_caption  — text immediately adjacent to the image in the PDF
+                          (e.g. "Left: galaxy M84 ...  Right: spectrograph …")
+      2. section_heading — the nearest section heading only when no specific
+                           block caption is available
+      3. fallback_id    — image file name / hash
+
+    A block caption must be >12 chars to exclude spurious single-word matches.
+    Without this priority, section titles like "Realizing Monster Black Holes
+    Are Everywhere" end up as the caption for the M84 spectrograph image,
+    causing the wrong image to be retrieved for that query.
+    """
+    if block_caption and len(block_caption.strip()) > 12:
+        return block_caption.strip()
+    if section_heading and len(section_heading.strip()) > 0:
+        return section_heading.strip()
+    return fallback_id
+
+
+# %%
+# ===========================================================================
+# Six-configuration ablation harness for systematic evaluation
+# Run:  python rag_pipeline.py --ablation
+# ===========================================================================
+_ABLATION_CONFIGS = [
+    (
+        "1_Dense_only",
+        dict(retrieval_mode="semantic", use_reranker=False,
+             adaptive_weighting=False, use_weighted_fusion=False, use_filtering=False,
+             use_percentile_filtering=False),
+    ),
+    (
+        "2_BM25_only",
+        dict(retrieval_mode="bm25", use_reranker=False,
+             adaptive_weighting=False, use_weighted_fusion=False, use_filtering=False,
+             use_percentile_filtering=False),
+    ),
+    (
+        "3_Hybrid_static",
+        dict(retrieval_mode="hybrid", adaptive_weighting=False,
+             use_weighted_fusion=False, use_reranker=False, use_filtering=False,
+             use_percentile_filtering=False),
+    ),
+    (
+        "4_Hybrid_adaptive",
+        dict(retrieval_mode="hybrid", adaptive_weighting=True,
+             use_weighted_fusion=False, use_reranker=False, use_filtering=False,
+             use_percentile_filtering=False),
+    ),
+    (
+        "5_Hybrid_reranker",
+        dict(retrieval_mode="hybrid", adaptive_weighting=False,
+             use_weighted_fusion=False, use_reranker=True, use_filtering=False,
+             use_percentile_filtering=False),
+    ),
+    (
+        "6_Full_pipeline",
+        dict(retrieval_mode="hybrid", adaptive_weighting=True,
+             use_weighted_fusion=False, use_reranker=True, use_filtering=True,
+             use_percentile_filtering=True, percentile_cutoff=80),
+    ),
+]
+
+
+def _apply_cfg_overrides(overrides: dict) -> None:
+    """Apply a dict of attribute overrides to the global cfg object."""
+    for k, v in overrides.items():
+        setattr(cfg, k, v)
+
+
+def run_ablation(test_questions: list) -> None:
+    """
+    Execute all six retrieval configurations in sequence.
+    Each config writes its PDFs into a labeled subdirectory so results
+    never overwrite each other.
+    """
+    import os as _os
+
+    original_results_dir = cfg.results_dir
+    original_retrieval_dir = cfg.retrieval_results_dir
+    original_comparison_dir = cfg.model_comparison_results_dir
+
+    for label, overrides in _ABLATION_CONFIGS:
+        print("\n" + "=" * 78)
+        print(f"  ABLATION CONFIG: {label}")
+        print("=" * 78)
+
+        _apply_cfg_overrides(overrides)
+
+        # Route each config's output to its own subdirectory.
+        cfg.results_dir = str(Path(original_results_dir) / label)
+        cfg.retrieval_results_dir = str(Path(original_retrieval_dir) / label)
+        cfg.model_comparison_results_dir = str(Path(original_comparison_dir) / label)
+
+        for d in (cfg.results_dir, cfg.retrieval_results_dir,
+                  cfg.model_comparison_results_dir):
+            _os.makedirs(d, exist_ok=True)
+
+        try:
+            cfg.validate()
+        except Exception as e:
+            print(f"  [SKIP] Config validation failed for {label}: {e}")
+            continue
+
+        try:
+            main(test_questions)
+        except Exception as e:
+            import traceback as _tb
+            print(f"  [ERROR] {label} failed: {e}")
+            _tb.print_exc()
+
+    # Restore original output dirs.
+    cfg.results_dir = original_results_dir
+    cfg.retrieval_results_dir = original_retrieval_dir
+    cfg.model_comparison_results_dir = original_comparison_dir
+    print("\nAblation run complete — results written to labelled subdirectories.")
+
+
 # %%
 if __name__ == "__main__":
-    main(TEST_QUESTIONS)
+    import sys as _sys
+
+    if "--ablation" in _sys.argv:
+        run_ablation(TEST_QUESTIONS)
+    else:
+        main(TEST_QUESTIONS)
