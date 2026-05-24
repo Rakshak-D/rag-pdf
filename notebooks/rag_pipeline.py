@@ -3637,6 +3637,255 @@ TEST_QUESTIONS = [
             )
         }
     },
+    {
+        "id": 15,
+        "type": "hybrid",
+        "source_document": "Voyager Grand Tour PDF.pdf",
+        "difficulty": "very hard",
+        "question": (
+            "The Golden Record carried by both Voyager spacecraft is described in the text, and the image "
+            "shows both the record face and its engraved instruction cover. Using the image of the record "
+            "and the text description of its contents and purpose, explain what specific categories of "
+            "information were encoded on the record, what physical provision was made to ensure an "
+            "extraterrestrial finder could play it, and why the record was considered a scientifically "
+            "motivated decision rather than merely a symbolic gesture given the trajectory constraints "
+            "of the Voyager Interstellar Mission."
+        ),
+        "ground_truth_answer": (
+            "The image shows the Golden Record's grooved face and an engraved cover with schematic "
+            "instructions for playback. The text lists the record's contents as recordings of sounds "
+            "from Earth including music, greetings in multiple languages, and whale songs, as well as "
+            "photographs of various Earthly activities. The physical provision for playback was a stylus "
+            "included with the record along with engraved instructions on how to play it — the text notes "
+            "this with the aside that the alien finder would need a turntable. The scientific motivation "
+            "is tied directly to the Voyager Interstellar Mission context: the text states neither Voyager "
+            "will come within less than a light-year of any star for the next tens of thousands of years, "
+            "and both spacecraft will have ceased communicating with Earth long before any stellar encounter. "
+            "In that context the record is not a communications device in the operational sense but a "
+            "passive data archive designed to survive independently of ground contact — the only information "
+            "payload that remains functional indefinitely once all instruments are powered down. The coded "
+            "information about the spacecraft and its makers also serves the scientific function of "
+            "documenting origin, consistent with the mission's broader role as humanity's first intentional "
+            "message to interstellar space."
+        ),
+        "expected_images": True,
+        "required_context": {
+            "pages": [5],
+            "focus": (
+                "Golden Record music greetings whale songs photographs stylus instructions turntable, "
+                "Voyager Interstellar Mission light-year thousands of years passive data archive "
+                "coded information spacecraft makers"
+            )
+        }
+    },
+    {
+        "id": 16,
+        "type": "hybrid",
+        "source_document": "mars-science-laboratory.pdf",
+        "difficulty": "very hard",
+        "question": (
+            "Curiosity's radioisotope power system is described in detail in the text, and the rover's "
+            "operational scale is visible in its self-portrait and the Gale Crater site image. Using "
+            "the power system description alongside the mission timeline and data volume figures given "
+            "in the text, construct a precise argument for why a nuclear RTG was the only viable power "
+            "architecture for this mission — addressing operating lifespan, power budget at launch versus "
+            "two years post-landing, terrain capability, and the communication data throughput achieved "
+            "in the first two years."
+        ),
+        "ground_truth_answer": (
+            "The text specifies that the multi-mission radioisotope thermoelectric generator produces "
+            "electricity from plutonium-238 radioactive decay and provided approximately 110 watts at "
+            "launch, with the total declining over the mission but still exceeding 100 watts two years "
+            "after landing. This long-lived power supply gives the mission an operating lifespan of a "
+            "full Mars year — 687 Earth days — or more. The terrain capability text states Curiosity was "
+            "engineered to roll over obstacles up to 65 centimeters high and travel up to 200 meters per "
+            "day. Solar power would be inadequate on three grounds: Mars receives less solar irradiance "
+            "than Earth, dust storms can reduce insolation to near zero for weeks, and the Gale Crater "
+            "site's proximity to the crater wall and Mount Sharp creates shadowing that would interrupt "
+            "solar charging unpredictably. Nuclear RTG power is continuous, weather-independent, and "
+            "thermally self-sustaining — the text notes that warm fluids from the generator's excess heat "
+            "are plumbed throughout the rover to maintain electronics at acceptable temperatures, a "
+            "thermal management function solar panels cannot provide. The data throughput figure confirms "
+            "the system sustained intensive operations: orbiters downlinked 48 gigabytes of Curiosity "
+            "data in the first two years, a volume only achievable with continuously powered instruments "
+            "and radio systems running across day-night cycles."
+        ),
+        "expected_images": True,
+        "required_context": {
+            "pages": [1, 2, 3],
+            "focus": (
+                "RTG plutonium-238 110 watts 100 watts two years 687 Earth days 65cm obstacles 200m/day, "
+                "warm fluids thermal management 48 gigabytes two years solar inadequate dust storms"
+            )
+        }
+    },
+    {
+        "id": 17,
+        "type": "hybrid",
+        "source_document": "highlights_of_hubbles_exploration_of_the_universe.pdf",
+        "difficulty": "very hard",
+        "question": (
+            "The multi-panel mosaic of planetary nebulas on the death-of-stars page shows at least a dozen "
+            "distinct morphologies — pinwheels, hourglasses, butterflies, rings, and asymmetric lobes. "
+            "Using the image grid and the text describing planetary nebula formation physics, explain why "
+            "ground-based astronomy predicted simple spherical shells while Hubble revealed this diversity, "
+            "what specific physical processes the non-spherical morphologies imply about the dying star's "
+            "interior dynamics, and why this discovery is scientifically connected to Hubble's later "
+            "observations of Supernova 1987A's three-ring structure."
+        ),
+        "ground_truth_answer": (
+            "The planetary nebula mosaic shows objects ranging from near-perfect rings to bipolar butterfly "
+            "shapes to complex multi-lobed asymmetric structures. The text states ground-based images "
+            "suggested these objects have simple spherical shapes, but Hubble showed their shapes are much "
+            "more varied and complex. The reason ground observations failed is angular resolution: "
+            "atmospheric blurring smears the fine structure of these spatially small objects into featureless "
+            "blobs that appear roughly circular. Hubble's space-based resolution resolves the actual "
+            "morphology. Non-spherical planetary nebulas — hourglasses, bipolars, pinwheels — imply the "
+            "mass loss from the dying star was not isotropic: the text states these images yield insights "
+            "into the complex dynamics accompanying a star's release of its outer gaseous layers before it "
+            "collapses to form a white dwarf. Asymmetric ejection can result from binary companion "
+            "interactions, magnetic field shaping, or differential rotation. The connection to SN 1987A "
+            "is that its three-ring structure also represents asymmetric, structured pre-death mass loss "
+            "from the progenitor — a more massive star's equivalent of the planetary nebula ejection phase. "
+            "Both phenomena demonstrate that stellar mass loss in the terminal phase is inherently "
+            "three-dimensional and shaped by dynamics that only high-resolution imaging can resolve."
+        ),
+        "expected_images": True,
+        "required_context": {
+            "pages": [14, 15],
+            "focus": (
+                "planetary nebula mosaic spherical ground-based Hubble resolution bipolar hourglass "
+                "asymmetric mass loss white dwarf dynamics SN 1987A three rings progenitor mass ejection"
+            )
+        }
+    },
+    {
+        "id": 18,
+        "type": "semantic",
+        "source_document": "Voyager Grand Tour PDF.pdf",
+        "difficulty": "hard",
+        "question": (
+            "The Voyager family portrait taken on February 14, 1990, is described as a mosaic of 60 images "
+            "capturing six solar system planets. Using the image of the portrait mosaic and the surrounding "
+            "text, explain the specific operational conditions that made this imaging session both uniquely "
+            "possible and permanently terminal, what the phrase 'pale blue dot' refers to and which planet "
+            "it identifies, and why the text describes these as the last pictures from either Voyager."
+        ),
+        "ground_truth_answer": (
+            "The family portrait mosaic image shows a sweeping arc of individual frames assembled into a "
+            "composite, with labeled insets identifying Jupiter, Earth, Venus, Saturn, Uranus, and Neptune "
+            "as faint specks of light. The text states this was taken on February 14, 1990, more than "
+            "12 years after Voyager 1 began its journey, when the spacecraft was 6 billion kilometers from "
+            "Earth. The phrase 'pale blue dot' refers to Earth as it appears in the portrait — a tiny, "
+            "faint blue point of light amid the darkness of space, one of six planets visible in the mosaic. "
+            "The session was uniquely possible because Voyager 1 had already completed all planetary "
+            "encounters and was on its outward trajectory, providing the angular geometry needed to look "
+            "back inward across the solar system and frame multiple planets simultaneously. It was "
+            "permanently terminal because the cameras were turned off shortly after, as stated in the text, "
+            "to conserve power — an irreversible decision required to extend the spacecraft's operational "
+            "lifetime for the Voyager Interstellar Mission. Once powered down for conservation, the imaging "
+            "systems could not be reactivated without drawing power the mission could not spare, making "
+            "this mosaic both the culmination and the conclusion of Voyager 1's photographic record."
+        ),
+        "expected_images": True,
+        "required_context": {
+            "pages": [4],
+            "focus": (
+                "family portrait February 14 1990 60 images 6 planets pale blue dot Earth 6 billion km, "
+                "cameras permanently turned off conserve power Voyager Interstellar Mission terminal"
+            )
+        }
+    },
+{
+        "id": 19,
+        "type": "semantic",
+        "source_document": "mars-science-laboratory.pdf",
+        "difficulty": "very hard",
+        "question": (
+            "The image of the Link rock outcrop and the image of the first drill hole at John Klein together "
+            "form a two-stage visual argument for habitability. Using both images alongside the text "
+            "describing what each sample revealed, explain what morphological features visible in the Link "
+            "image constitute evidence for past water flow, why that visual evidence was scientifically "
+            "necessary but not sufficient for a habitability claim, and how the drill hole image at John "
+            "Klein represents the specific instrumental step that closed the evidentiary gap — including "
+            "the two numerical results that no surface image could have produced."
+        ),
+        "ground_truth_answer": (
+            "The Link outcrop image shows rounded pebbles embedded in hardened sand within conglomerate "
+            "rock. The morphological feature that constitutes evidence for past water is the rounding of "
+            "the pebbles: angular fragments become rounded only through sustained transport in a fluid "
+            "medium, and the sorting and mixing with hardened sand indicates deposition from a vigorous "
+            "flow event. The text confirms this, identifying the rounded pebbles as evidence that water "
+            "once coursed vigorously over the surface. However, visual evidence of ancient stream flow "
+            "establishes only that water was present and mobile — it cannot constrain water chemistry, "
+            "pH, salinity, or the presence of chemical energy sources, all of which are required to "
+            "support a habitability conclusion. The John Klein drill hole image shows the first borehole "
+            "ever made in Martian rock, with powdered interior material collected from below the "
+            "weathered surface layer. The text explains that analysis of this drilled sample provided "
+            "the complete habitability package: sustained liquid water, key elemental ingredients for "
+            "life, a chemical energy source, and water neither too acidic nor too salty. The two "
+            "numerical results that images alone could never produce are the rock age of 4.2 billion "
+            "years — placing the habitable environment in Mars' early history — and the 80-million-year "
+            "surface exposure duration, which reveals that the material was shielded from cosmic "
+            "radiation and surface weathering for most of its existence, preserving the chemical "
+            "record that made the habitability determination possible."
+        ),
+        "expected_images": True,
+        "required_context": {
+            "pages": [2, 3],
+            "focus": (
+                "Link rounded pebbles conglomerate fluvial transport morphological evidence, "
+                "John Klein drill hole first borehole 4.2 billion years 80 million years surface exposure "
+                "habitability pH salinity chemical energy source interior powdered sample"
+            )
+        }
+    },
+    {
+        "id": 20,
+        "type": "semantic",
+        "source_document": "highlights_of_hubbles_exploration_of_the_universe.pdf",
+        "difficulty": "very hard",
+        "question": (
+            "The introduction page shows two images: the Pillars of Creation in M16 and astronaut Mike Good "
+            "repairing the Space Telescope Imaging Spectrograph during the final servicing mission in 2009. "
+            "Using both images alongside the introduction text citing Hubble's productivity metrics — over "
+            "one million observations, more than 17,000 peer-reviewed publications, 900,000 citations "
+            "growing at over 150 per day — explain how the Pillars image and the servicing image each "
+            "represent a structurally distinct prerequisite for achieving that level of scientific output, "
+            "and why neither prerequisite alone would have been sufficient without the two specific "
+            "observational properties of Hubble's orbital position described in the text."
+        ),
+        "ground_truth_answer": (
+            "The Pillars of Creation image represents the science product prerequisite: an image of such "
+            "resolution and wavelength coverage that it became a cultural icon and a direct demonstration "
+            "of what Hubble's vantage point uniquely enables. The text states Hubble orbits 340 miles above "
+            "Earth's surface, beyond the distorting effects of the atmosphere which blurs starlight and "
+            "blocks some important wavelengths of light from reaching the ground. Without those two "
+            "properties — resolution free from atmospheric blurring and access to blocked wavelength regimes "
+            "including ultraviolet — the Pillars image would have been unresolvable from the ground and "
+            "certain spectral features invisible entirely, eliminating the data quality that drives "
+            "downstream publications and citations. The astronaut servicing image represents the operational "
+            "continuity prerequisite: Hubble's 17,000 publications span more than three decades, and the "
+            "text states periodic upgrades through six space shuttle servicing missions kept the telescope "
+            "equipped with state-of-the-art instruments, giving astronomers increasingly better views of "
+            "the cosmos. Without servicing, instruments degrade and detectors age out — the citation "
+            "compound rate of 150 per day is only achievable because each upgraded instrument generation "
+            "produced new foundational datasets that subsequent researchers continued to mine. Science "
+            "product quality without operational continuity would have produced a single discovery peak "
+            "followed by declining output; operational continuity without the orbital observational "
+            "properties would have sustained a functioning telescope producing ground-equivalent data. "
+            "Both were necessary jointly."
+        ),
+        "expected_images": True,
+        "required_context": {
+            "pages": [2],
+            "focus": (
+                "Pillars of Creation M16 Eagle Nebula, astronaut Mike Good servicing 2009 STIS, "
+                "340 miles atmosphere blurs blocks wavelengths 17000 publications 900000 citations "
+                "150 per day six servicing missions state-of-the-art instruments orbital prerequisites"
+            )
+        }
+    },
 ]
 
 # %% [markdown]
