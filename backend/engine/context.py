@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
@@ -13,10 +13,10 @@ from typing import Any
 
 from backend.config.paths import PathContainmentError, resolve_owned_path
 from backend.experiments.run_plan import RunPlan
-from backend.engine.retrieval import HybridHit, HybridRetrievalResult
+from backend.engine.retrieval import HybridHit, HybridRetrievalResult, Modality, query_id_for
 
 
-CONTEXT_SCHEMA_VERSION = "1"
+CONTEXT_SCHEMA_VERSION = "2"
 
 
 class ContextError(ValueError):
@@ -78,6 +78,9 @@ class EvidenceContext:
     warnings: tuple[str, ...]
     elapsed_seconds: float
     query_text: str = ""
+    modalities: tuple[Modality, ...] = ()
+    text_k: int | None = None
+    image_k: int | None = None
 
 
 _HEADER_VALUE_LIMIT = 120
@@ -112,6 +115,69 @@ def _source_name(value: Any) -> str:
         return "unknown"
     parts = [part for part in value.replace("\\", "/").split("/") if part]
     return _sanitize_header_value(parts[-1] if parts else "", fallback="unknown")
+
+
+def _text_header(item: SelectedTextEvidence) -> str:
+    record_display = _sanitize_header_value(item.record_id, fallback="unknown")
+    return f"[{item.label}] Source: {_sanitize_header_value(item.source, fallback='unknown')}, page {_sanitize_header_value(item.page, fallback='N/A')} (ID: {record_display})\n"
+
+
+def expected_text_context(selected_text: Sequence[SelectedTextEvidence]) -> str:
+    """Recreate the formatter's exact text serialization for integrity checks."""
+
+    blocks: list[str] = []
+    for index, item in enumerate(selected_text, 1):
+        if not isinstance(item, SelectedTextEvidence) or item.label != f"T{index}" or not isinstance(item.text, str) or not item.text.strip():
+            raise ContextInputError("selected text evidence labels or content are inconsistent")
+        blocks.append(_text_header(item) + item.text)
+    return "\n\n".join(blocks)
+
+
+def _relative_image_identity(path: Path, config: Any) -> str:
+    try:
+        root = Path(config.images_dir).expanduser().resolve(strict=False)
+        resolved = resolve_owned_path(root, path)
+        return resolved.relative_to(root).as_posix()
+    except (PathContainmentError, ValueError) as exc:
+        raise ContextInputError("selected image path is outside the owned image root") from exc
+
+
+def build_context_fingerprint(context: EvidenceContext, config: Any) -> str:
+    """Build the canonical, versioned consistency fingerprint for a context."""
+
+    selected_text = []
+    for item in context.selected_text:
+        if not isinstance(item, SelectedTextEvidence):
+            raise ContextInputError("selected text evidence has an invalid type")
+        selected_text.append({"label": item.label, "record_id": item.record_id, "source": item.source, "page": item.page, "text": item.text, "truncated": item.truncated})
+    selected_images = []
+    for item in context.selected_images:
+        if not isinstance(item, SelectedImageEvidence):
+            raise ContextInputError("selected image evidence has an invalid type")
+        selected_images.append({"label": item.label, "record_id": item.record_id, "source": item.source, "page": item.page, "caption": item.caption, "path": _relative_image_identity(item.resolved_path, config)})
+    payload = {
+        "schema": CONTEXT_SCHEMA_VERSION,
+        "query_id": context.query_id,
+        "query_text": context.query_text,
+        "index_fingerprint": context.index_fingerprint,
+        "document_manifest_hash": context.document_manifest_hash,
+        "run_fingerprint": context.run_fingerprint,
+        "modalities": context.modalities,
+        "text_k": context.text_k,
+        "image_k": context.image_k,
+        "text_context": context.text_context,
+        "selected_text": selected_text,
+        "selected_images": selected_images,
+    }
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def verify_context_fingerprint(context: EvidenceContext, config: Any) -> None:
+    if not isinstance(context.context_fingerprint, str) or not all(char in "0123456789abcdefABCDEF" for char in context.context_fingerprint) or len(context.context_fingerprint) != 64:
+        raise ContextInputError("evidence context fingerprint is invalid")
+    expected = build_context_fingerprint(context, config)
+    if expected != context.context_fingerprint.lower():
+        raise ContextInputError("evidence context fingerprint does not match its contents")
 
 
 def _distance_state(hit: HybridHit) -> _DistanceState:
@@ -185,6 +251,13 @@ class ContextFormatter:
             raise ContextInputError("retrieval index fingerprint does not match the RunPlan")
         if result.document_manifest_hash != plan.document_manifest_hash:
             raise ContextInputError("retrieval document manifest does not match the RunPlan")
+        if not isinstance(result.query_text, str) or not result.query_text.strip():
+            raise ContextInputError("retrieval query_text must be non-empty")
+        if not isinstance(result.modalities, tuple) or not result.modalities:
+            raise ContextInputError("retrieval modalities are required for query identity verification")
+        expected_query_id = query_id_for(result.query_text, plan, result.modalities, result.effective_text_k, result.effective_image_k)
+        if result.query_id != expected_query_id:
+            raise ContextInputError("retrieval query_id does not match its query identity")
         return result, plan, plan.resolved_config()
 
     def _select_text(self, hits: Sequence[HybridHit], config: Any, warnings: list[str]) -> tuple[list[HybridHit], dict[str, Any]]:
@@ -334,8 +407,7 @@ class ContextFormatter:
         text_context, selected_text, budget_diag = self._format_text(text_hits, config, warnings)
         selected_images, image_diag = self._select_images(result.image_hits, config, warnings)
         diagnostics = {"input_text_candidates": len(result.text_hits), "input_image_candidates": len(result.image_hits), "selected_text_count": len(selected_text), "selected_image_count": len(selected_images), **text_diag, **budget_diag, **image_diag, "max_context_tokens": config.max_context_tokens, "max_images": config.max_images}
-        fingerprint_payload = {"schema": CONTEXT_SCHEMA_VERSION, "query_id": result.query_id, "index_fingerprint": result.index_fingerprint, "document_manifest_hash": result.document_manifest_hash, "run_fingerprint": plan.run_fingerprint, "text": text_context, "text_ids": [item.record_id for item in selected_text], "image_ids": [item.record_id for item in selected_images]}
-        context_fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
-        if not isinstance(result.query_text, str):
-            raise ContextInputError("retrieval query_text must be a string")
-        return EvidenceContext(result.query_id, result.index_fingerprint, result.document_manifest_hash, plan.run_fingerprint, context_fingerprint, text_context, budget_diag["text_context_tokens"], selected_text, selected_images, diagnostics, tuple(warnings), max(0.0, perf_counter() - started), result.query_text)
+        if expected_text_context(selected_text) != text_context:
+            raise ContextInputError("formatted text context does not match selected text evidence")
+        candidate = EvidenceContext(result.query_id, result.index_fingerprint, result.document_manifest_hash, plan.run_fingerprint, "", text_context, budget_diag["text_context_tokens"], selected_text, selected_images, diagnostics, tuple(warnings), max(0.0, perf_counter() - started), result.query_text, result.modalities, result.effective_text_k, result.effective_image_k)
+        return replace(candidate, context_fingerprint=build_context_fingerprint(candidate, config))

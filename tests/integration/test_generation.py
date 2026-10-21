@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.config import ResolvedRunConfig
-from backend.engine.context import EvidenceContext, SelectedTextEvidence
+from dataclasses import replace
+
+from backend.engine.context import EvidenceContext, SelectedTextEvidence, build_context_fingerprint
 from backend.engine.generation import LocalGenerationAdapter
-from backend.engine.retrieval import HybridHit
+from backend.engine.retrieval import HybridHit, query_id_for
 from backend.experiments import build_run_plan
 from notebooks.config import Config
 
@@ -22,7 +24,10 @@ def test_local_generation_uses_only_supplied_evidence(tmp_path: Path):
     plan = build_run_plan(config, "a" * 64)
     hit = HybridHit("chunk", 1, 0.1, {"source": "doc.pdf", "page_num": 2}, document="Only supplied evidence.")
     context_text = "[T1] Source: doc.pdf, page 2 (ID: chunk)\nOnly supplied evidence."
-    context = EvidenceContext("query", plan.index_fingerprint, plan.document_manifest_hash, plan.run_fingerprint, "c" * 64, context_text, len(context_text), (SelectedTextEvidence("T1", "chunk", "doc.pdf", "2", "Only supplied evidence.", hit),), (), {}, (), 0.0, "What does it say?")
+    query = "What does it say?"
+    modalities = ("text",)
+    context = EvidenceContext(query_id_for(query, plan, modalities, 5, None), plan.index_fingerprint, plan.document_manifest_hash, plan.run_fingerprint, "", context_text, len(context_text), (SelectedTextEvidence("T1", "chunk", "doc.pdf", "2", "Only supplied evidence.", hit),), (), {}, (), 0.0, query, modalities, 5, None)
+    context = replace(context, context_fingerprint=build_context_fingerprint(context, plan.resolved_config()))
     requests = []
 
     class Client:
@@ -32,6 +37,6 @@ def test_local_generation_uses_only_supplied_evidence(tmp_path: Path):
 
     result = LocalGenerationAdapter(client_factory=lambda _: Client(), encoder=Encoder()).generate(context, plan)
     assert result.status == "succeeded"
-    assert result.context_fingerprint == "c" * 64
+    assert result.context_fingerprint == context.context_fingerprint
     assert "Only supplied evidence." in requests[0]["messages"][1]["content"]
     assert "What does it say?" in requests[0]["messages"][1]["content"]

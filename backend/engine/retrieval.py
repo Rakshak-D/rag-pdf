@@ -342,7 +342,7 @@ def _image_hits(result: Any) -> tuple[ImageSemanticHit, ...]:
     return tuple(hits)
 
 
-def _query_id(query: str, plan: RunPlan, modalities: tuple[Modality, ...], text_k: int | None, image_k: int | None) -> str:
+def query_id_for(query: str, plan: RunPlan, modalities: tuple[Modality, ...], text_k: int | None, image_k: int | None) -> str:
     payload = json.dumps(
         {
             "query": query,
@@ -355,6 +355,9 @@ def _query_id(query: str, plan: RunPlan, modalities: tuple[Modality, ...], text_
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+_query_id = query_id_for
 
 
 def retrieve_semantic(
@@ -436,7 +439,7 @@ def retrieve_semantic(
             store.close()
 
     return SemanticRetrievalResult(
-        query_id=_query_id(normalized_query, run_plan, requested, requested_text_k, requested_image_k),
+        query_id=query_id_for(normalized_query, run_plan, requested, requested_text_k, requested_image_k),
         index_fingerprint=run_plan.index_fingerprint,
         document_manifest_hash=run_plan.document_manifest_hash,
         modalities=requested,

@@ -47,6 +47,7 @@ from .retrieval import (
     HybridRetrievalError,
     HybridRetrievalResult,
     retrieve_hybrid,
+    query_id_for,
 )
 from .bm25 import BM25Error, BM25Index
 from .fusion import FusionEngine, FusionError
@@ -121,6 +122,7 @@ __all__ = [
     "HybridRetrievalError",
     "HybridRetrievalResult",
     "retrieve_hybrid",
+    "query_id_for",
     "BM25Error",
     "BM25Index",
     "FusionEngine",

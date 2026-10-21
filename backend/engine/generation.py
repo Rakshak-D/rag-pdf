@@ -10,8 +10,15 @@ from time import perf_counter
 from typing import Any, Callable, Literal
 
 from backend.config.paths import PathContainmentError, resolve_owned_path
-from backend.engine.context import EvidenceContext
+from backend.engine.context import (
+    EvidenceContext,
+    ContextInputError,
+    _sanitize_header_value,
+    build_context_fingerprint,
+    expected_text_context,
+)
 from backend.experiments.run_plan import RunPlan
+from backend.engine.retrieval import query_id_for
 
 
 OLLAMA_HOST = "http://127.0.0.1:11434"
@@ -145,7 +152,7 @@ class LocalGenerationAdapter:
             raise GenerationInferenceError("Ollama returned no usable answer", error_code="empty_response")
         return value.strip()
 
-    def _validate_and_prepare(self, context: Any, plan: Any) -> tuple[EvidenceContext, RunPlan, Any, str, list[str], tuple[str, ...]]:
+    def _validate_and_prepare(self, context: Any, plan: Any) -> tuple[EvidenceContext, RunPlan, Any, str, str, list[str], tuple[str, ...]]:
         if not isinstance(context, EvidenceContext):
             raise GenerationInputError("generation requires an EvidenceContext")
         if not isinstance(plan, RunPlan):
@@ -161,8 +168,29 @@ class LocalGenerationAdapter:
             raise GenerationInputError("evidence context query_id must be non-empty")
         if not isinstance(context.query_text, str) or not context.query_text.strip():
             raise GenerationInputError("evidence context query_text must be non-empty")
-        if not _SHA256_RE.fullmatch(context.context_fingerprint):
+        if not isinstance(context.modalities, tuple) or not context.modalities:
+            raise GenerationInputError("evidence context retrieval identity is incomplete")
+        if context.query_id != query_id_for(context.query_text, plan, context.modalities, context.text_k, context.image_k):
+            raise GenerationInputError("evidence context query identity does not match its query text or retrieval settings")
+        try:
+            expected_text = expected_text_context(context.selected_text)
+        except ContextInputError as exc:
+            raise GenerationInputError("selected text evidence is malformed") from exc
+        if context.selected_text:
+            if not isinstance(context.text_context, str) or not context.text_context.strip() or context.text_context != expected_text:
+                raise GenerationInputError("formatted text context does not match selected text evidence")
+        elif isinstance(context.text_context, str) and context.text_context.strip():
+            raise GenerationInputError("formatted text context has no corresponding selected evidence")
+        if not isinstance(context.text_context, str):
+            raise GenerationInputError("formatted text context must be a string")
+        if not isinstance(context.context_fingerprint, str) or not _SHA256_RE.fullmatch(context.context_fingerprint):
             raise GenerationInputError("evidence context fingerprint is invalid")
+        try:
+            actual_context_fingerprint = build_context_fingerprint(context, config)
+        except ContextInputError as exc:
+            raise GenerationInputError("evidence context fingerprint cannot be recomputed") from exc
+        if actual_context_fingerprint != context.context_fingerprint.lower():
+            raise GenerationInputError("evidence context fingerprint does not match its contents")
         if isinstance(context.text_context_tokens, bool) or not isinstance(context.text_context_tokens, int) or context.text_context_tokens < 0 or context.text_context_tokens > config.max_context_tokens:
             raise GenerationInputError("evidence context token count exceeds the configured limit")
         context_tokens = len(self._encode(context.text_context, config)) if context.text_context else 0
@@ -177,7 +205,9 @@ class LocalGenerationAdapter:
         hashes: list[str] = []
         total = 0
         image_lines: list[str] = []
-        for image in context.selected_images:
+        for index, image in enumerate(context.selected_images, 1):
+            if image.label != f"I{index}":
+                raise GenerationInputError("selected image labels must be unique and sequential")
             if not isinstance(image.caption, str):
                 raise GenerationImageError("selected image caption is invalid")
             try:
@@ -200,10 +230,12 @@ class LocalGenerationAdapter:
             total += size
             hashes.append(hashlib.sha256(data).hexdigest())
             image_payloads.append(base64.b64encode(data).decode("ascii"))
-            caption = image.caption.strip()
+            source = _sanitize_header_value(image.source, fallback="unknown")
+            page = _sanitize_header_value(image.page, fallback="N/A")
+            caption = _sanitize_header_value(image.caption, fallback="").strip()
             if caption and len(self._encode(caption, config)) > MAX_CAPTION_TOKENS:
                 raise GenerationInputError("image caption exceeds the generation safety limit")
-            image_lines.append(f"[{image.label}] Source: {image.source}, page {image.page}" + (f"; caption: {caption}" if caption else ""))
+            image_lines.append(f"[{image.label}] Source: {source}, page {page}" + (f"; caption: {caption}" if caption else ""))
         image_note = "\n".join(image_lines)
         user = f"Question:\n{context.query_text.strip()}\n\nEvidence:\n{context.text_context}"
         if image_note:
@@ -219,17 +251,11 @@ class LocalGenerationAdapter:
             raise GenerationInputError("query exceeds the generation safety limit")
         if prompt_tokens > prompt_limit:
             raise GenerationInputError("rendered generation prompt exceeds the safety limit")
-        return context, plan, config, system, image_payloads, tuple(hashes)
+        return context, plan, config, system, user, image_payloads, tuple(hashes)
 
     def generate(self, evidence_context: EvidenceContext, run_plan: RunPlan) -> GenerationResult:
         started = perf_counter()
-        context, plan, config, system, images, image_hashes = self._validate_and_prepare(evidence_context, run_plan)
-        user = f"Question:\n{context.query_text.strip()}\n\nEvidence:\n{context.text_context}"
-        if context.selected_images:
-            user += "\n\nImage evidence (payload order matches labels below):\n" + "\n".join(
-                f"[{image.label}] Source: {image.source}, page {image.page}" + (f"; caption: {image.caption.strip()}" if image.caption.strip() else "")
-                for image in context.selected_images
-            )
+        context, plan, config, system, user, images, image_hashes = self._validate_and_prepare(evidence_context, run_plan)
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         try:
             client = self._client_factory(self._host)

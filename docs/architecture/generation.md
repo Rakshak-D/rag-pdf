@@ -7,6 +7,21 @@ text/prompt/output tokens, and SHA-256 hashes of image bytes sent to Ollama.
 Results are frozen and do not persist prompts, responses, image bytes, or
 absolute paths.
 
+Before a client is constructed, generation verifies the RunPlan, query ID
+against the existing retrieval formula (query text, modalities, and k limits),
+all plan/context identities, and the version-2 canonical context fingerprint.
+That fingerprint covers the complete formatted text, selected text provenance
+and truncation state, selected image provenance/captions, and each image path
+relative to the configured image root. It is an accidental-change consistency
+check, not a cryptographic authenticity signature.
+
+The selected text tuple must exactly reconstruct the formatted text evidence in
+order, including labels and truncation markers. Empty text is permitted only
+when at least one image is selected and revalidated. Image labels must be
+sequential (`I1`, `I2`, ...); source, page, and captions are bounded and
+control-character-normalized for prompt display while the original structured
+records remain unchanged. Absolute image paths never enter the prompt.
+
 The adapter validates plan and context provenance, re-counts the text context
 with the configured `tiktoken` encoding, checks a bounded prompt, and
 revalidates every selected image beneath the configured `images_dir` immediately

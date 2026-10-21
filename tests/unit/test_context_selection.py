@@ -6,7 +6,7 @@ import pytest
 
 from backend.config import ResolvedRunConfig
 from backend.engine.context import ContextFormatter, ContextImagePathError, ContextInputError, ContextTokenizationError
-from backend.engine.retrieval import HybridHit, HybridRetrievalResult
+from backend.engine.retrieval import HybridHit, HybridRetrievalResult, query_id_for
 from backend.engine.manifest import build_document_manifest
 from backend.experiments import build_run_plan
 from notebooks.config import Config
@@ -23,7 +23,9 @@ def make_plan(tmp_path: Path, **overrides):
 
 
 def result(plan, text_hits=(), image_hits=()):
-    return HybridRetrievalResult("query-id", plan.index_fingerprint, plan.document_manifest_hash, ("text", "image"), 5, 5, tuple(text_hits), tuple(image_hits), "rrf", (0.5, 0.5), {}, (), 0.0)
+    query = "What is shown?"
+    modalities = ("text", "image")
+    return HybridRetrievalResult(query_id_for(query, plan, modalities, 5, 5), plan.index_fingerprint, plan.document_manifest_hash, modalities, 5, 5, tuple(text_hits), tuple(image_hits), "rrf", (0.5, 0.5), {}, (), 0.0, query_text=query)
 
 
 def text_hit(identifier, text, *, source="source.pdf", page=1, distance=None, fused=0.5):

@@ -12,4 +12,25 @@ Source basenames, page values, and displayed record IDs are whitespace-normalize
 
 Images are selected in retrieval order up to `max_images`. Their candidate paths must resolve through `resolve_owned_path()` beneath the configured `images_dir` and point to existing regular files. Traversal, symlink escapes, missing paths, and malformed paths are skipped with stable warning codes; files are never opened or modified. Image payload cost is not included in the text token count because it depends on the future generation model.
 
-The context fingerprint is a versioned SHA-256 over query/index/manifest/run identity, formatted text, and selected IDs. It excludes timestamps and filesystem enumeration state. Diagnostics report candidate counts, duplicate/filter/budget decisions, token usage, image rejections, and warnings. `EvidenceContext` also carries the original retrieval query text for the generation handoff; the generation adapter must revalidate that text and all plan identities before inference. See [generation.md](generation.md) for that handoff. Context-window negotiation, API/UI, persistence, and evaluation remain out of scope.
+The context fingerprint is schema version 2: a canonical UTF-8 JSON SHA-256 over
+the query ID and text, index/manifest/run identity, retrieval modalities and
+limits, complete formatted text, selected text labels/IDs/source/page/text and
+truncation state, and selected image labels/IDs/source/page/caption plus the
+path relative to the owned image root. It excludes timestamps, diagnostics,
+absolute paths, and filesystem enumeration state. The formatter and generation
+adapter use the same fingerprint builder; generation recomputes it before
+constructing the Ollama client. This is a consistency check, not a signature:
+a caller able to rewrite both evidence and its unkeyed hash can still create a
+self-consistent replacement.
+
+The formatter verifies the existing retrieval query-ID formula against the
+original query, requested modalities, and retrieval limits. It preserves those
+identity fields in `EvidenceContext`. Generation also checks that the formatted
+text exactly reconstructs the selected labelled text records, including valid
+truncation markers. Image-only contexts are valid when their images pass
+revalidation; a non-empty text context without selected text is rejected.
+
+Diagnostics report candidate counts, duplicate/filter/budget decisions, token
+usage, image rejections, and warnings. See [generation.md](generation.md) for
+the handoff. Context-window negotiation, API/UI, persistence, and evaluation
+remain out of scope.
