@@ -1,0 +1,730 @@
+--- CELL 0 (markdown) ---
+# Document loading
+
+Loads PDFs using the up-to-date `loading_pdf()` pipeline, then runs layout-aware chunking over the extracted text blocks.
+
+--- CELL 1 (code) ---
+import hashlib
+import numpy as np
+import pymupdf
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import traceback
+from dataclasses import dataclass, field
+
+--- CELL 2 (code) ---
+from config import Config, cfg, PROJECT_ROOT
+
+--- CELL 3 (code) ---
+import sys
+
+NOTEBOOK_ROOT = PROJECT_ROOT / "notebooks" if (PROJECT_ROOT / "notebooks").exists() else PROJECT_ROOT
+if str(NOTEBOOK_ROOT) not in sys.path:
+    sys.path.insert(0, str(NOTEBOOK_ROOT))
+
+--- CELL 4 (code) ---
+import logging as py_logging
+import shutil
+import textwrap
+import contextlib
+import io
+
+LOGGER = py_logging.getLogger("rag_pipeline")
+
+
+def setup_logging(level: str = "INFO") -> None:
+    """
+    Configure console logging once (safe for notebooks and repeated imports).
+
+    Why logging (instead of many `print()` calls)?
+    - lets you dial verbosity up/down without editing the pipeline
+    - avoids redundant, noisy output in notebooks
+    """
+    if LOGGER.handlers:
+        return
+
+    # Windows terminals sometimes default to legacy encodings (e.g., cp1252),
+    # which can crash on unicode characters (✓, ✗, box-drawing). Prefer UTF-8.
+    try:
+        import sys as _sys
+
+        for _stream in (_sys.stdout, _sys.stderr):
+            if hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    numeric = getattr(py_logging, level.upper(), py_logging.INFO)
+    py_logging.basicConfig(level=numeric, format="%(message)s")
+
+    # Silence noisy third-party libraries (HF Hub HTTP logs, tqdm progress bars, etc.).
+    # You can still enable them by raising levels or removing these overrides.
+    for name in (
+            "huggingface_hub",
+            "transformers",
+            "sentence_transformers",
+            "rouge_score",
+            "bert_score",
+            "httpcore",
+            "requests",
+            "urllib3",
+            "httpx",
+            "open_clip",
+            "chromadb",
+            "posthog",
+    ):
+        py_logging.getLogger(name).setLevel(py_logging.WARNING)
+
+    try:
+        from huggingface_hub.utils import logging as hf_logging
+
+        hf_logging.set_verbosity_error()
+    except Exception:
+        pass
+
+    try:
+        from transformers.utils import logging as t_logging
+
+        t_logging.set_verbosity_error()
+        t_logging.disable_progress_bar()
+    except Exception:
+        pass
+
+    # rouge_score uses absl logging in some paths and can emit messages like
+    # "Using default tokenizer." directly to stderr. Silence absl noise.
+    try:
+        from absl import logging as absl_logging
+
+        absl_logging.set_verbosity(absl_logging.ERROR)
+        absl_logging.set_stderrthreshold("error")
+    except Exception:
+        pass
+
+    # Hide common non-actionable HF Hub warning in viewer-facing runs.
+    try:
+        import warnings as _warnings
+
+        _warnings.filterwarnings(
+            "ignore",
+            message=r".*unauthenticated requests to the HF Hub.*",
+        )
+    except Exception:
+        pass
+
+
+def _terminal_width(default: int = 100) -> int:
+    try:
+        return max(shutil.get_terminal_size((default, 20)).columns, 60)
+    except Exception:
+        return default
+
+
+def log_section(title: str, width: Optional[int] = None) -> None:
+    width = width or _terminal_width()
+    bar = "=" * min(width, 120)
+    LOGGER.info("")
+    LOGGER.info(bar)
+    LOGGER.info(title.strip())
+    LOGGER.info(bar)
+
+
+def log_kv(label: str, value: str, indent: int = 2, width: Optional[int] = None) -> None:
+    """
+    Print a single key/value line with safe wrapping (prevents “broken tables/lines” in notebooks).
+    """
+    width = width or _terminal_width()
+    prefix = " " * indent + f"{label}: "
+    wrapped = textwrap.fill(str(value), width=width, subsequent_indent=" " * len(prefix))
+    LOGGER.info(prefix + wrapped[len(prefix):] if wrapped.startswith(prefix) else prefix + wrapped)
+
+
+@contextlib.contextmanager
+def suppress_output(enabled: bool = True):
+    """
+    Best-effort suppression of noisy third-party stdout/stderr (HF HTTP logs, tokenizers messages, etc.).
+
+    Use this in metrics where libraries sometimes print directly to stdout even when logging is configured.
+    """
+    if not enabled:
+        yield
+        return
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        yield
+
+--- CELL 5 (code) ---
+def is_low_variance(pix, threshold: int = cfg.img_variance_threshold) -> bool:
+    """
+    Checks if an image is too 'flat' or 'plain' (like a solid color block).
+    Threshold is read from config so it can be tuned without touching code.
+    """
+    try:
+        if pix is None or pix.samples is None:
+            return True
+        samples = np.frombuffer(pix.samples, dtype=np.uint8)
+        if len(samples) == 0:
+            return True
+        if pix.n >= 3:
+            samples = samples.reshape(-1, pix.n)[:, :3].mean(axis=1)
+        return samples.std() < threshold
+    except Exception as e:
+        LOGGER.debug("is_low_variance failed: %s", e)
+        return True
+
+--- CELL 6 (code) ---
+def is_mostly_white(pix, threshold: int = cfg.img_white_pixel_threshold,
+                    ratio: float = cfg.img_white_ratio_threshold) -> bool:
+    """
+    Checks if an image is almost entirely white space.
+    Threshold and ratio read from config.
+    """
+    try:
+        if pix is None or pix.samples is None:
+            return True
+        samples = np.frombuffer(pix.samples, dtype=np.uint8)
+        if len(samples) == 0:
+            return True
+        if pix.n >= 3:
+            samples = samples.reshape(-1, pix.n)[:, :3].mean(axis=1)
+        white_pixels = np.sum(samples > threshold)
+        return (white_pixels / len(samples)) > ratio
+    except Exception as e:
+        LOGGER.debug("is_mostly_white failed: %s", e)
+        return True
+
+--- CELL 7 (code) ---
+def is_extreme_aspect_ratio(pix, min_ratio: float = cfg.img_min_aspect_ratio,
+                            max_ratio: float = cfg.img_max_aspect_ratio) -> bool:
+    """
+    Checks if an image is extremely thin or wide (header/footer lines, decorative bars).
+    Bounds read from config.
+    """
+    try:
+        if pix is None:
+            return True
+        aspect_ratio = pix.width / max(pix.height, 1)
+        return aspect_ratio < min_ratio or aspect_ratio > max_ratio
+    except Exception as e:
+        LOGGER.debug("is_extreme_aspect_ratio failed: %s", e)
+        return True
+
+--- CELL 8 (code) ---
+def loading_pdf(dir_path: str = cfg.pdf_dir, images_dir: str = cfg.images_dir) -> List[Dict]:
+    """
+    Load every PDF in the input directory and extract page text blocks and images.
+
+    The returned list is page-centric: each entry contains the source file name,
+    the page number, the text blocks found on that page, and the images exported
+    from that same page. This structure makes later chunking and text-image linking
+    easier to explain and reproduce.
+    """
+    dir_path = Path(dir_path)
+    images_root = Path(images_dir)
+    if not dir_path.is_dir():
+        raise NotADirectoryError(f"{dir_path} is an invalid directory.")
+
+    LOGGER.info("")
+    LOGGER.info("=" * 80)
+    LOGGER.info("  PDF LOADING")
+    LOGGER.info("=" * 80)
+    LOGGER.info("  Directory: %s", dir_path)
+
+    pdf_files = sorted(dir_path.rglob("*.pdf"))  # Deterministic ordering keeps benchmarking reproducible.
+    LOGGER.info("  Found %d PDF file(s)", len(pdf_files))
+
+    if not pdf_files:
+        LOGGER.warning("  WARNING: No documents found in directory")
+        return []
+
+    all_pdf_size = 0.0
+    all_pages = []
+    failed_pdf = []
+
+    LOGGER.info("")
+    LOGGER.info("  Loading PDFs...")
+    LOGGER.info("  " + "-" * 76)
+
+    for serial, pdf_path in enumerate(pdf_files, start=1):
+        LOGGER.info("  [%d/%d] Loading: %s", serial, len(pdf_files), pdf_path.name)
+        pdf_size_bytes = pdf_path.stat().st_size
+        pdf_size_mb = pdf_size_bytes / (1024 ** 2)
+        LOGGER.info("       Size: %.2f MB", pdf_size_mb)
+
+        pdf = None
+        try:
+            image_dir = images_root / pdf_path.stem
+            image_dir.mkdir(parents=True, exist_ok=True)
+            pdf = pymupdf.open(filename=pdf_path, filetype="pdf")
+
+            pdf_total_text_blocks = 0
+            pdf_total_images = 0
+
+            for page_num, page in enumerate(pdf, start=1):
+                text_blocks = []
+                page_images = []
+                seen_xrefs = set()
+                images = page.get_images(full=True)
+
+                for img_index, img in enumerate(images):
+                    pix = None
+                    try:
+                        if img[1] != 0:  # Skip soft mask.
+                            # soft mask -> Transparency layer
+                            continue
+                        xref = img[0]
+                        if xref in seen_xrefs:
+                            continue
+                        seen_xrefs.add(xref)
+                        rects = page.get_image_rects(xref)
+                        if not rects:
+                            continue
+
+                        pix = pymupdf.Pixmap(pdf, xref)
+                        if pix.width < cfg.img_min_width or pix.height < cfg.img_min_height:
+                            pix = None
+                            continue
+                        # Skip fully transparent images (alpha channel all zeros).
+                        # Previous logic checked *all* channels, which misses many transparent images.
+                        if pix.alpha and pix.samples is not None and len(pix.samples) > 0:
+                            try:
+                                samples = np.frombuffer(pix.samples, dtype=np.uint8)
+                                # Alpha is the last channel when pix.alpha is True (pix.n includes alpha).
+                                alpha = samples[pix.n - 1::pix.n]
+                                if alpha.size > 0 and int(alpha.max()) == 0:
+                                    continue
+                            except Exception:
+                                # If we cannot safely inspect alpha, do not block extraction.
+                                pass
+                        if pix.n > 4:
+                            pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
+                        if is_mostly_white(pix):
+                            pix = None
+                            continue
+                        if is_low_variance(pix):
+                            pix = None
+                            continue
+                        if is_extreme_aspect_ratio(pix):
+                            pix = None
+                            continue
+
+                        img_path = image_dir / f"page_{page_num}_img_{img_index}.png"
+                        pix.save(img_path)
+                        pix = None
+                        rect = rects[0]
+                        page_images.append({
+                            "image_id": f"{pdf_path.stem}_p{page_num}_i{img_index}",
+                            "path": str(img_path),
+                            "page": page_num,
+                            "bbox": [rect.x0, rect.y0, rect.x1, rect.y1]
+                        })
+                    except Exception as img_error:
+                        LOGGER.warning("       Error processing image %d: %s", img_index, img_error)
+                    finally:
+                        if pix is not None:
+                            pix.close()
+
+                blocks = sorted(page.get_text("blocks"), key=lambda b: (b[1], b[0]))
+                for block_id, b in enumerate(blocks):
+                    x0, y0, x1, y1, text = b[:5]
+                    text = text.strip()
+                    if len(text) < cfg.chunk_min_text_len:
+                        continue
+                    block_bbox = [x0, y0, x1, y1]
+                    text_blocks.append({
+                        "block_id": block_id,
+                        "text": text,
+                        "bbox": block_bbox,
+                        "page": page_num,
+                    })
+
+                all_pages.append({
+                    "source": pdf_path.name,
+                    "page": page_num,
+                    "text_blocks": text_blocks,
+                    "images": page_images
+                })
+                pdf_total_text_blocks += len(text_blocks)
+                pdf_total_images += len(page_images)
+            all_pdf_size += pdf_size_mb
+            pdf.close()
+            LOGGER.info("       [OK] Extracted %d text blocks, %d images", pdf_total_text_blocks, pdf_total_images)
+
+        except Exception as e:
+            LOGGER.error("       [ERROR] Error loading %s: %s", pdf_path.name, e)  # Exception handling.
+            failed_pdf.append(pdf_path.name)
+            traceback.print_exc()
+        finally:
+            if pdf is not None and not pdf.is_closed:
+                pdf.close()
+
+    LOGGER.info("  " + "-" * 76)
+    LOGGER.info("")
+    LOGGER.info("  SUMMARY:")
+    LOGGER.info("       Total size: %.2f MB", all_pdf_size)
+    LOGGER.info("       Total pages extracted: %d", len(all_pages))
+    LOGGER.info("       Successful: %d/%d", len(pdf_files) - len(failed_pdf), len(pdf_files))
+
+    if failed_pdf:
+        # Surface the failure rate as a percentage so it appears in logs
+        # alongside the raw count and is easy to spot during batch runs.
+        fail_rate_pct = len(failed_pdf) / max(len(pdf_files), 1) * 100
+        LOGGER.warning(
+            "  PDF failure rate: %.1f%% (%d/%d files failed)",
+            fail_rate_pct, len(failed_pdf), len(pdf_files),
+        )
+        LOGGER.info("")
+        LOGGER.info("  Failed PDFs:")
+        for fp in failed_pdf:
+            LOGGER.info("       - %s", fp)
+
+    LOGGER.info("")
+    LOGGER.info("=" * 80)
+    LOGGER.info("")
+    return all_pages
+
+--- CELL 9 (markdown) ---
+# Chunking
+
+Goal: convert per-page text blocks into chunks sized for embedding + retrieval.
+
+Why chunking matters:
+- If chunks are too large, retrieval becomes noisy and LLM context overflows.
+- If chunks are too small, important meaning gets split across pieces.
+
+This pipeline uses **bounding boxes** (layout-aware chunking):
+- Blocks close together vertically are merged.
+- Each chunk keeps page + bbox + linked image IDs for cross-modal retrieval.
+
+--- CELL 10 (code) ---
+from langchain_core.documents import Document
+from typing import List
+from typing import Tuple
+import tiktoken
+
+--- CELL 11 (code) ---
+def vertical_gap(block1, block2) -> float:
+    """Return the vertical distance (points) between the bottom edge of block1 and the top edge of block2."""
+    return block2["bbox"][1] - block1["bbox"][3]
+
+--- CELL 12 (code) ---
+def merge_bbox(blocks):
+    """Return the bounding box that tightly encloses all blocks as (x0, y0, x1, y1)."""
+    if not blocks:
+        return None
+
+    return (
+        min(b["bbox"][0] for b in blocks),  # x0 left
+        min(b["bbox"][1] for b in blocks),  # y0 top
+        max(b["bbox"][2] for b in blocks),  # x1 right
+        max(b["bbox"][3] for b in blocks)  # y1 bottom
+    )
+
+--- CELL 13 (code) ---
+def stable_chunk_id(source: str, page_num: int, text: str) -> str:
+    """Generate a deterministic chunk identifier from source, page, and text content."""
+    h = hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+    return f"{source}_p{page_num}_c{h}"
+
+--- CELL 14 (code) ---
+def bbox_overlap(a, b) -> bool:
+    """Return True if bounding boxes a and b overlap in both axes."""
+    return not (
+            a[2] < b[0] or  # right edge of a and left edge of b
+            a[0] > b[2] or  # left edge of a and right edge of b
+            a[3] < b[1] or  # bottom edge of a and top edge of b
+            a[1] > b[3]  # top edge of a and bottom edge of b
+    )
+
+--- CELL 15 (code) ---
+def is_caption_block(text_block: Dict, image: Dict, max_words: int = 60, max_vertical_dist: int = 80) -> bool:
+    """
+    Return True if text_block is likely a caption for the given image.
+
+    A block qualifies when it is horizontally aligned with the image, within
+    max_vertical_dist points vertically, and does not exceed max_words in length.
+    """
+    text = text_block.get("text", "")
+
+    if not text or len(text.split()) > max_words:
+        return False
+
+    tb_bbox = text_block.get("bbox")
+    im_bbox = image.get("bbox")
+
+    if not tb_bbox or not im_bbox:
+        return False
+
+    tb_x0, tb_y0, tb_x1, tb_y1 = tb_bbox
+    im_x0, im_y0, im_x1, im_y1 = im_bbox
+
+    horizontal_overlap = not (tb_x1 < im_x0 or tb_x0 > im_x1)
+
+    vertical_distance = min(  # Vertical distance between text block and image.
+        abs(tb_y0 - im_y1),
+        abs(im_y0 - tb_y1)
+    )
+    return horizontal_overlap and vertical_distance <= max_vertical_dist
+
+--- CELL 16 (code) ---
+def get_overlapping_images(chunk_bbox: Tuple, page_images: List[Dict], vertical_tolerance: int = 200,
+                           horizontal_tolerance: int = 50) -> List[str]:
+    """
+    Return the image IDs of all images spatially associated with chunk_bbox.
+
+    Association is determined by horizontal proximity combined with vertical
+    proximity within tolerance, or by direct bounding-box overlap.
+    """
+    if not chunk_bbox or not page_images:
+        return []
+
+    overlapping_ids = []
+
+    chunk_x0, chunk_y0, chunk_x1, chunk_y1 = chunk_bbox
+
+    for img in page_images:
+        img_bbox = img.get("bbox")
+        if not img_bbox:
+            continue
+
+        img_x0, img_y0, img_x1, img_y1 = img_bbox
+
+        # Check for horizontal overlap or proximity
+        horizontal_overlap = not (
+                chunk_x1 + horizontal_tolerance < img_x0 or
+                chunk_x0 > img_x1 + horizontal_tolerance
+        )
+
+        # Calculate vertical distance between chunk and image
+        vertical_distance = min(
+            abs(chunk_y0 - img_y1),  # Distance from chunk top to image bottom
+            abs(img_y0 - chunk_y1),  # Distance from image top to chunk bottom
+            abs(chunk_y0 - img_y0),  # Distance between tops
+            abs(chunk_y1 - img_y1)  # Distance between bottoms
+        )
+
+        # Method 1: Check if horizontally aligned and vertically close
+        if horizontal_overlap and vertical_distance <= vertical_tolerance:
+            overlapping_ids.append(img["image_id"])
+        # Method 2: Or if they actually overlap perfectly
+        elif bbox_overlap(chunk_bbox, img_bbox):
+            overlapping_ids.append(img["image_id"])
+
+    return overlapping_ids
+
+--- CELL 17 (code) ---
+def build_image_objects(pages: List[Dict]) -> List[Dict]:
+    """
+    Construct image metadata objects from extracted PDF pages.
+
+    Each object carries the image path, source coordinates, page number, and
+    any caption text identified from adjacent text blocks.
+    """
+    image_objects = []
+
+    for page in pages:
+        source = page.get("source", "unknown")
+        page_num = page.get("page", 0)
+        text_blocks = page.get("text_blocks", [])
+        images = page.get("images", [])
+
+        for img in images:
+            caption_blocks = [
+                tb["text"] for tb in text_blocks
+                if tb.get("text") and is_caption_block(tb, img)
+            ]
+
+            caption_text = " ".join(caption_blocks).strip() or None
+
+            image_objects.append({
+                "image_id": img.get("image_id", "unknown"),
+                "type": "image",
+                "modality": "vision",
+                "source": source,
+                "page_num": page_num,
+                "bbox": img.get("bbox"),
+                "path": img.get("path"),
+                "caption_text": caption_text
+            })
+
+    return image_objects
+
+--- CELL 18 (code) ---
+def build_chunk(source: str, page_num: int, blocks: List, page_images: List[Dict],
+                related_image_ids: Optional[List[str]] = None) -> Optional[Document]:
+    """
+    Assemble a LangChain Document from a list of text blocks.
+
+    Merges block text, computes a bounding box, generates a stable chunk ID,
+    and associates spatially co-located image IDs with the chunk.
+    """
+    if not blocks:
+        return None
+
+    chunk_text = "\n".join(b.get("text", "") for b in blocks)
+
+    if not chunk_text.strip():
+        return None
+
+    chunk_bbox = merge_bbox(blocks)
+
+    if related_image_ids is None:
+        related_image_ids = get_overlapping_images(chunk_bbox, page_images)
+
+    return Document(
+        page_content=chunk_text,
+        metadata={
+            "source": source,
+            "page_num": page_num,
+            "bbox": chunk_bbox,
+            "chunk_id": stable_chunk_id(source, page_num, chunk_text),
+            "related_image_ids": related_image_ids or []
+        }
+    )
+
+--- CELL 19 (code) ---
+def bbox_chunker(
+        pages: List[Dict],
+        max_tokens: int = cfg.chunk_max_tokens,
+        max_vertical_gap: int = cfg.chunk_max_vertical_gap,
+        overlap_tokens: int = cfg.chunk_overlap_tokens,
+        token_model: str = cfg.tiktoken_encoding
+) -> List[Document]:
+    """
+    Segment page text blocks into overlapping chunks using spatial and token constraints.
+
+    A new chunk is started when adding the next block would exceed max_tokens or
+    when the vertical gap between blocks exceeds max_vertical_gap. Overlap is
+    implemented by stepping back up to overlap_tokens worth of blocks before
+    starting each new chunk.
+    """
+    tokenizer = tiktoken.get_encoding(token_model)
+
+    all_chunks = []
+
+    for page in pages:
+        source = page.get("source", "")
+        page_num = page.get("page", 0)
+        blocks = page.get("text_blocks", [])
+        page_images = page.get("images", [])
+
+        if not blocks:
+            continue
+
+        i = 0
+        while i < len(blocks):
+            current_blocks = []
+            current_tokens = 0
+            start_i = i
+
+            # Building a chunk until max_tokens or vertical gap threshold
+            while i < len(blocks):
+                block = blocks[i]
+                text = block.get("text", "")
+
+                if not text:
+                    i += 1
+                    continue
+
+                block_tokens = len(tokenizer.encode(text))
+
+                if current_blocks:
+                    gap = vertical_gap(current_blocks[-1], block)
+                else:
+                    gap = 0
+
+                # Checking conditions for creating a chunk.
+                # (Basically threshold that chunk should have certain number of tokens and text block distances.)
+                if current_blocks and (
+                        current_tokens + block_tokens > max_tokens
+                        or gap > max_vertical_gap
+                ):
+                    break
+
+                current_blocks.append(block)
+                current_tokens += block_tokens
+                i += 1
+
+            if current_blocks:
+                chunk = build_chunk(source, page_num, current_blocks, page_images)
+                if chunk:
+                    first_sentence = current_blocks[0]["text"].split(".")[0][:100].strip()
+                    chunk.metadata["semantic_tag"] = (
+                        first_sentence[:50] + "..." if len(first_sentence) > 50 else first_sentence
+                    )
+                    all_chunks.append(chunk)
+
+            if overlap_tokens > 0 and i < len(blocks):
+                overlap_tok = 0
+                step_back = 0
+
+                for j in range(len(current_blocks) - 1, -1, -1):
+                    block_text = current_blocks[j].get("text", "")
+                    block_tok = len(tokenizer.encode(block_text))
+                    if overlap_tok + block_tok <= overlap_tokens:
+                        overlap_tok += block_tok
+                        step_back += 1
+                    else:
+                        break
+
+                i = max(start_i + 1, i - step_back)
+
+    LOGGER.info("  Created %d chunks from %d pages (max_tokens=%d, overlap_tokens=%d)",
+                len(all_chunks), len(pages), max_tokens, overlap_tokens)
+
+    return all_chunks
+
+--- CELL 20 (code) ---
+pages = loading_pdf()  # Loading PDF
+
+
+--- CELL 21 (code) ---
+chunks = bbox_chunker(pages)  # Creating chunks
+
+
+--- CELL 22 (code) ---
+print(chunks[1])  # Displaying a single chunk
+
+
+--- CELL 23 (code) ---
+print(chunks[1].page_content)  # Page content of a chunk
+
+
+--- CELL 24 (code) ---
+print(chunks[1].metadata)  # Metadata of a chunk
+
+
+--- CELL 25 (code) ---
+image_objects = build_image_objects(pages)  # Image objects
+
+
+--- CELL 26 (code) ---
+print(image_objects[1])  # Displaying details of a image object
+
+
+--- CELL 27 (code) ---
+print("Total number of image objects :", len(image_objects))  # Total number of image objects from all the pages
+
+
+--- CELL 28 (code) ---
+caption_num = 0
+for img in image_objects:
+    if img["caption_text"]:
+        caption_num += 1
+print("Total number of captions available :", caption_num)  # Total number of captions extracted
+
+
+--- CELL 29 (code) ---
+import matplotlib.pyplot as plt
+
+
+--- CELL 30 (code) ---
+img_path = image_objects[21].get("path")  # Fetching details of image from a image object
+caption = image_objects[21].get("caption_text")
+img = plt.imread(img_path)
+
+
+--- CELL 31 (code) ---
+plt.imshow(img)  # Displaying image with a caption
+plt.axis("off")
+plt.title(caption)
+plt.show()
+
+

@@ -1,0 +1,558 @@
+--- CELL 0 (markdown) ---
+# Embedding
+
+Goal: turn text chunks and images into vectors.
+
+- Text embeddings: using the model configured in `cfg.text_embed_model`.
+- Image embeddings: using OpenCLIP (model + pretrained weights from config).
+
+Output: NumPy vectors + metadata that will be written to the vector store.
+
+--- CELL 1 (code) ---
+import hashlib
+import numpy as np
+import pymupdf
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import traceback
+from dataclasses import dataclass, field
+
+--- CELL 2 (code) ---
+from config import Config, cfg, PROJECT_ROOT
+
+--- CELL 3 (code) ---
+import sys
+
+NOTEBOOK_ROOT = PROJECT_ROOT / "notebooks" if (PROJECT_ROOT / "notebooks").exists() else PROJECT_ROOT
+if str(NOTEBOOK_ROOT) not in sys.path:
+    sys.path.insert(0, str(NOTEBOOK_ROOT))
+
+--- CELL 4 (code) ---
+import logging as py_logging
+import shutil
+import textwrap
+import contextlib
+import io
+
+LOGGER = py_logging.getLogger("rag_pipeline")
+
+
+def setup_logging(level: str = "INFO") -> None:
+    """
+    Configure console logging once (safe for notebooks and repeated imports).
+
+    Why logging (instead of many `print()` calls)?
+    - lets you dial verbosity up/down without editing the pipeline
+    - avoids redundant, noisy output in notebooks
+    """
+    if LOGGER.handlers:
+        return
+
+    # Windows terminals sometimes default to legacy encodings (e.g., cp1252),
+    # which can crash on unicode characters (✓, ✗, box-drawing). Prefer UTF-8.
+    try:
+        import sys as _sys
+
+        for _stream in (_sys.stdout, _sys.stderr):
+            if hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    numeric = getattr(py_logging, level.upper(), py_logging.INFO)
+    py_logging.basicConfig(level=numeric, format="%(message)s")
+
+    # Silence noisy third-party libraries (HF Hub HTTP logs, tqdm progress bars, etc.).
+    # You can still enable them by raising levels or removing these overrides.
+    for name in (
+            "huggingface_hub",
+            "transformers",
+            "sentence_transformers",
+            "rouge_score",
+            "bert_score",
+            "httpcore",
+            "requests",
+            "urllib3",
+            "httpx",
+            "open_clip",
+            "chromadb",
+            "posthog",
+    ):
+        py_logging.getLogger(name).setLevel(py_logging.WARNING)
+
+    try:
+        from huggingface_hub.utils import logging as hf_logging
+
+        hf_logging.set_verbosity_error()
+    except Exception:
+        pass
+
+    try:
+        from transformers.utils import logging as t_logging
+
+        t_logging.set_verbosity_error()
+        t_logging.disable_progress_bar()
+    except Exception:
+        pass
+
+    # rouge_score uses absl logging in some paths and can emit messages like
+    # "Using default tokenizer." directly to stderr. Silence absl noise.
+    try:
+        from absl import logging as absl_logging
+
+        absl_logging.set_verbosity(absl_logging.ERROR)
+        absl_logging.set_stderrthreshold("error")
+    except Exception:
+        pass
+
+    # Hide common non-actionable HF Hub warning in viewer-facing runs.
+    try:
+        import warnings as _warnings
+
+        _warnings.filterwarnings(
+            "ignore",
+            message=r".*unauthenticated requests to the HF Hub.*",
+        )
+    except Exception:
+        pass
+
+
+def _terminal_width(default: int = 100) -> int:
+    try:
+        return max(shutil.get_terminal_size((default, 20)).columns, 60)
+    except Exception:
+        return default
+
+
+def log_section(title: str, width: Optional[int] = None) -> None:
+    width = width or _terminal_width()
+    bar = "=" * min(width, 120)
+    LOGGER.info("")
+    LOGGER.info(bar)
+    LOGGER.info(title.strip())
+    LOGGER.info(bar)
+
+
+def log_kv(label: str, value: str, indent: int = 2, width: Optional[int] = None) -> None:
+    """
+    Print a single key/value line with safe wrapping (prevents “broken tables/lines” in notebooks).
+    """
+    width = width or _terminal_width()
+    prefix = " " * indent + f"{label}: "
+    wrapped = textwrap.fill(str(value), width=width, subsequent_indent=" " * len(prefix))
+    LOGGER.info(prefix + wrapped[len(prefix):] if wrapped.startswith(prefix) else prefix + wrapped)
+
+
+@contextlib.contextmanager
+def suppress_output(enabled: bool = True):
+    """
+    Best-effort suppression of noisy third-party stdout/stderr (HF HTTP logs, tokenizers messages, etc.).
+
+    Use this in metrics where libraries sometimes print directly to stdout even when logging is configured.
+    """
+    if not enabled:
+        yield
+        return
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        yield
+
+--- CELL 5 (code) ---
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+--- CELL 6 (code) ---
+import numpy as np
+import torch
+from PIL import Image
+import open_clip  # Image embedding model .
+from typing import List, Dict, Tuple
+from dotenv import load_dotenv
+from time import perf_counter
+import os
+
+--- CELL 7 (code) ---
+load_dotenv()
+
+--- CELL 8 (code) ---
+# Suppress verbose warnings from sentence-transformers.
+import warnings
+from transformers import logging as transformers_logging
+
+transformers_logging.set_verbosity_error()
+transformers_logging.disable_progress_bar()
+warnings.filterwarnings("ignore", message=".*position_ids.*UNEXPECTED.*")
+
+--- CELL 9 (code) ---
+class ImageEmbeddingModel:
+    """
+    Embed document images with OpenCLIP.
+
+    Each image can optionally be fused with its nearby caption so the final
+    vector carries both visual and textual cues. Batching is used to take
+    advantage of the GPU instead of processing one image at a time.
+    """
+
+    def __init__(
+            self,
+            model_name: str = cfg.image_embed_model,
+            pretrained: str = cfg.image_embed_pretrained,
+            caption_image_weight: float = cfg.image_caption_image_weight,
+            batch_size: int = cfg.image_embed_batch_size
+    ):
+        if not 0.0 <= caption_image_weight <= 1.0:
+            raise ValueError("caption_image_weight must be between 0.0 and 1.0.")
+        self.model_name = model_name
+        self.pretrained = pretrained
+        self.caption_image_weight = caption_image_weight
+        self.batch_size = batch_size
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        try:
+            self.model, self.preprocess, _ = open_clip.create_model_and_transforms(
+                model_name=model_name,
+                pretrained=pretrained
+            )
+            self.tokenizer = open_clip.get_tokenizer(model_name)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load OpenCLIP model '{model_name}': {e}") from e
+
+        self.model = self.model.to(self.device)
+        self.model.eval()
+
+        if self.device == "cuda":
+            LOGGER.info("OpenCLIP running on %s.", torch.cuda.get_device_name(0))
+        else:
+            LOGGER.info("OpenCLIP running on CPU.")
+
+        model_config = open_clip.get_model_config(self.model_name)
+        self.embed_dim = model_config["embed_dim"]
+        LOGGER.info("Embedding dimension of %s is %d", self.model_name, self.embed_dim)
+
+    @torch.no_grad()
+    def embed_image(self, image_objects: List[Dict]) -> Tuple[np.ndarray, float, Dict]:
+        # Image embedding must be fault-tolerant:
+        # - PDFs often contain broken/unsupported images
+        # - the pipeline should still run on remaining valid images
+        if not image_objects:
+            stats = {
+                "count": 0,
+                "embeddings_created": 0,
+                "failed_loads": 0,
+                "total_time": 0.0,
+                "avg_time": 0.0,
+                "dimension": getattr(self, "embed_dim", 0),
+                "caption_image_weight": self.caption_image_weight,
+            }
+            return np.empty((0, stats["dimension"]), dtype=np.float32), 0.0, stats
+
+        start_time = perf_counter()
+        original_count = len(image_objects)
+        captions: List[str] = []
+        image_tensors: List[torch.Tensor] = []
+        failed_paths: List[str] = []
+        kept_image_objects: List[Dict] = []
+
+        for image_object in image_objects:
+            image_path = image_object.get("path")
+            if not isinstance(image_path, str) or not image_path.strip():
+                failed_paths.append(str(image_path))
+                continue
+            try:
+                with Image.open(image_path) as pil_image:
+                    processed_image = self.preprocess(pil_image.convert("RGB"))
+            except Exception as e:
+                LOGGER.warning("Image load failed; skipping: %s (%s)", image_path, e)
+                failed_paths.append(image_path)
+                continue
+
+            image_tensors.append(processed_image)
+            raw_caption = image_object.get("caption_text") or ""
+            captions.append(raw_caption.strip() if isinstance(raw_caption, str) else "")
+            kept_image_objects.append(image_object)
+
+        # Keep caller data consistent: downstream storage expects documents and embeddings to align 1:1.
+        # We mutate the list in-place so `image_objects` corresponds exactly to the returned embeddings.
+        image_objects[:] = kept_image_objects
+
+        if not image_tensors:
+            stats = {
+                "count": original_count,
+                "embeddings_created": 0,
+                "failed_loads": len(failed_paths),
+                "total_time": perf_counter() - start_time,
+                "avg_time": 0.0,
+                "dimension": self.embed_dim,
+                "caption_image_weight": self.caption_image_weight,
+                "kept": 0,
+            }
+            LOGGER.warning("All extracted images failed to load; continuing without image vectors.")
+            return np.empty((0, self.embed_dim), dtype=np.float32), stats["total_time"], stats
+        if failed_paths:
+            LOGGER.warning("Skipped %s image(s) that failed to load during embedding.", len(failed_paths))
+
+        image_embeddings: List[np.ndarray] = []
+        for batch_start in range(0, len(image_tensors), self.batch_size):
+            batch_tensor = torch.stack(
+                image_tensors[batch_start: batch_start + self.batch_size]
+            ).to(self.device)
+            batch_embeddings = self.model.encode_image(batch_tensor)
+            batch_embeddings = batch_embeddings / batch_embeddings.norm(dim=-1, keepdim=True)
+            image_embeddings.extend(batch_embeddings.cpu().numpy())
+
+        # Keep weights stable and always summing to 1.0:
+        # fused = (image_weight * image_vec) + (caption_weight * caption_vec)
+        image_weight = float(self.caption_image_weight)
+        caption_weight = 1.0 - image_weight
+        final_embeddings: List[np.ndarray] = []
+
+        for image_embedding, caption in zip(image_embeddings, captions):
+            if caption:
+                try:
+                    tokens = self.tokenizer([caption]).to(self.device)
+                    caption_embedding = self.model.encode_text(tokens)
+                    caption_embedding = caption_embedding / caption_embedding.norm(dim=-1, keepdim=True)
+                    caption_embedding = caption_embedding.cpu().numpy()[0]
+                    # Both components are already L2-normalised. Renormalising after
+                    # the weighted sum would distort the caller-specified blend ratio,
+                    # because the post-fusion norm depends on the angle between the
+                    # two vectors and is not guaranteed to equal 1. Storing the raw
+                    # weighted sum preserves the intended image_weight/caption_weight
+                    # balance while still producing a vector whose magnitude is in
+                    # (0, 1] when both inputs are unit vectors.
+                    fused_embedding = (image_weight * image_embedding) + (caption_weight * caption_embedding)
+                    final_embeddings.append(fused_embedding)
+                except Exception as e:
+                    LOGGER.warning("Caption embedding failed; using image-only embedding (%s)", e)
+                    final_embeddings.append(image_embedding)
+            else:
+                final_embeddings.append(image_embedding)
+
+        total_time = perf_counter() - start_time
+        avg_time = total_time / len(final_embeddings) if final_embeddings else 0.0
+
+        stats = {
+            "count": original_count,
+            "embeddings_created": len(final_embeddings),
+            "failed_loads": len(failed_paths),
+            "total_time": total_time,
+            "avg_time": avg_time,
+            "dimension": self.embed_dim,
+            "caption_image_weight": self.caption_image_weight,
+            "kept": len(final_embeddings),
+        }
+
+        return np.vstack(final_embeddings), total_time, stats
+
+    @torch.no_grad()
+    def embed_query(self, query: str) -> np.ndarray:
+        if not isinstance(query, str):
+            raise TypeError("Query must be a string.")
+        if not query.strip():
+            raise ValueError("Please give a valid prompt.")
+        tokens = self.tokenizer([query]).to(self.device)
+        query_embedding = self.model.encode_text(tokens)
+        query_embedding = query_embedding / query_embedding.norm(dim=-1, keepdim=True)
+        query_embedding = query_embedding.cpu().numpy()[0]
+        return query_embedding
+
+--- CELL 10 (code) ---
+from sentence_transformers import SentenceTransformer
+import numpy as np
+import torch
+from typing import List
+from langchain_core.documents import Document
+from time import perf_counter
+
+--- CELL 11 (code) ---
+class TextEmbeddingModel:
+    def __init__(self, model_name: str = cfg.text_embed_model, batch_size: int = cfg.text_embed_batch_size):
+        self.model_name = model_name
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.batch_size = batch_size
+
+        try:
+            self.model = SentenceTransformer(model_name_or_path=model_name, device=self.device)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load SentenceTransformer model: {e}")
+
+        self.query_prefix = "Represent this sentence for searching relevant passages: " if "bge" in model_name.lower() else ""
+
+        if self.device == "cuda":
+            LOGGER.info("BGE running on %s.", torch.cuda.get_device_name(0))
+        else:
+            LOGGER.info("BGE running on CPU.")
+        LOGGER.info(
+            "Embedding dimension of %s is %d.",
+            model_name,
+            self.model.get_sentence_embedding_dimension(),
+        )
+
+    @torch.no_grad()
+    def embed_documents(self, documents: List[Document]) -> Tuple:
+        if not documents:
+            raise ValueError("No documents to embed.")
+
+        texts = []
+        for index, doc in enumerate(documents):
+            if not hasattr(doc, "page_content"):
+                raise TypeError(f"Document at index {index} is missing page_content.")
+            content = (doc.page_content or "").strip()
+            if not content:
+                raise ValueError(f"Document at index {index} has empty page_content.")
+            texts.append(content)
+
+        # Embedding texts.
+        # sentences -> input/texts
+        # batch_size -> Number of inputs embedding at a single time.
+        # convert_to_numpy -> Convert output to numpy array.
+        # normalize_embeddings -> Normalizing all the output vectors.
+
+        start_time = perf_counter()  # Start the timer before text embedding starts . # M1 (Embedding time )
+
+        text_embeddings = self.model.encode(
+            sentences=texts,
+            batch_size=self.batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            show_progress_bar=False
+        )
+        total_time = perf_counter() - start_time
+        avg_time = total_time / len(texts)
+
+        # Store stats in dict instead of printing
+        stats = {
+            "count": len(texts),
+            "embeddings_created": len(text_embeddings),
+            "total_time": total_time,
+            "avg_time": avg_time,
+            "dimension": self.model.get_sentence_embedding_dimension()
+        }
+
+        return text_embeddings, total_time, stats
+
+    @torch.no_grad()
+    def encode_text(self, text: str, use_query_prefix: bool = False) -> np.ndarray:
+        if not isinstance(text, str):
+            raise TypeError("Text must be a string.")
+        text = text.strip()
+        if not text:
+            raise ValueError("Given text is not valid.")
+        model_input = f"{self.query_prefix}{text}" if use_query_prefix and self.query_prefix else text
+        embedding = self.model.encode(
+            sentences=model_input,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False
+        )
+        return embedding
+
+    @torch.no_grad()
+    def embed_query(self, query: str) -> np.ndarray:
+        return self.encode_text(query, use_query_prefix=True)
+
+--- CELL 12 (code) ---
+image_model = ImageEmbeddingModel()  # Loading model
+
+
+--- CELL 13 (code) ---
+from PIL import ImageDraw  # Used to create an image
+
+
+--- CELL 14 (code) ---
+img = Image.new("RGB", (400, 300), "white")  # Creating a blank image
+draw = ImageDraw.Draw(img)
+draw.rectangle([50, 50, 350, 250], outline="black", width=3)  # Creating a triangle
+draw.text((120, 140), "Bias Variance", fill="black")  # A text inside a box
+img.save("../data/test_images/test_image.png")  # Saving image
+print("Saved test_image.png")
+
+
+--- CELL 15 (code) ---
+import matplotlib.pyplot as plt  # For displaying image
+
+
+--- CELL 16 (code) ---
+# Displaying test image
+test_image = Image.open("../data/test_images/test_image.png")
+plt.imshow(test_image)
+plt.axis("off")
+plt.title("Test image")
+plt.show()
+
+
+--- CELL 17 (code) ---
+# Creating a test image object
+image_objects = [
+    {
+        "image_id": "test_img_1",
+        "path": "../data/test_images/test_image.png",
+        "caption_text": "Bias variance tradeoff diagram",
+        "source": "unit_test",
+        "page_num": 1,
+        "bbox": [0, 0, 400, 300]
+    }
+]
+
+
+--- CELL 18 (code) ---
+image_embeddings, image_time, image_stats = image_model.embed_image(image_objects)  # Creating embeddings
+
+
+--- CELL 19 (code) ---
+# Details about image embedding
+print("Embedding shape:", image_embeddings[0].shape)
+print("Embedding L2 norm:", np.linalg.norm(image_embeddings[0]))
+
+
+--- CELL 20 (code) ---
+image_embeddings[2]
+
+
+--- CELL 21 (code) ---
+image_embeddings[0][:100]  # Displaying only first 100 vectors of image
+
+
+--- CELL 22 (markdown) ---
+# Embedding for text
+
+
+--- CELL 23 (code) ---
+text_model = TextEmbeddingModel()  # Loading model
+
+
+--- CELL 24 (code) ---
+# Test data
+documents = [
+    Document(
+        page_content="The bias variance tradeoff explains the balance between underfitting and overfitting in machine learning.",
+        metadata={"chunk_id": "c1", "page_num": 1}
+    ),
+    Document(
+        page_content="Overfitting occurs when a model learns noise in the training data instead of the underlying pattern.",
+        metadata={"chunk_id": "c2", "page_num": 1}
+    ),
+    Document(
+        page_content="Regularization techniques such as L2 penalty help reduce overfitting by constraining model complexity.",
+        metadata={"chunk_id": "c3", "page_num": 2}
+    )
+]
+
+
+--- CELL 25 (code) ---
+text_embeddings, text_time, text_stats = text_model.embed_documents(documents)  # Passing data or embedding input
+
+
+--- CELL 26 (code) ---
+# Details of embeddings
+print("Embedding shape:", text_embeddings[0].shape)
+print("Embedding L2 norm:", np.linalg.norm(text_embeddings[0]))
+
+
+--- CELL 27 (code) ---
+text_embeddings[2]
+
+
+--- CELL 28 (code) ---
+text_embeddings[0][:100]  # Embeddings of first document
+
+

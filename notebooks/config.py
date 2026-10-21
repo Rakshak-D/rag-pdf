@@ -65,7 +65,7 @@ class Config:
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
 
     # ── LLM settings ──────────────────────────────────────────────────────────
-    llm_model: str = "qwen3.5:2b"
+    llm_model: str = "gemma4:e2b"
     llm_models: List[str] = field(default_factory=lambda: ["gemma4:e2b"])
 
     tiktoken_encoding: str = "cl100k_base"

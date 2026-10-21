@@ -1,0 +1,412 @@
+--- CELL 0 (markdown) ---
+# Pymupdf method
+
+Document loading pipeline — extracts text blocks and images from every PDF in `cfg.pdf_dir`, filtering out low-quality, blank, or extreme-aspect-ratio images using the thresholds defined in `config.py`.
+
+--- CELL 1 (code) ---
+import hashlib
+import numpy as np
+import pymupdf
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import traceback
+from dataclasses import dataclass, field
+
+--- CELL 2 (code) ---
+from config import Config, cfg, PROJECT_ROOT
+
+--- CELL 3 (code) ---
+import sys
+
+NOTEBOOK_ROOT = PROJECT_ROOT / "notebooks" if (PROJECT_ROOT / "notebooks").exists() else PROJECT_ROOT
+if str(NOTEBOOK_ROOT) not in sys.path:
+    sys.path.insert(0, str(NOTEBOOK_ROOT))
+
+--- CELL 4 (code) ---
+import logging as py_logging
+import shutil
+import textwrap
+import contextlib
+import io
+
+LOGGER = py_logging.getLogger("rag_pipeline")
+
+
+def setup_logging(level: str = "INFO") -> None:
+    """
+    Configure console logging once (safe for notebooks and repeated imports).
+
+    Why logging (instead of many `print()` calls)?
+    - lets you dial verbosity up/down without editing the pipeline
+    - avoids redundant, noisy output in notebooks
+    """
+    if LOGGER.handlers:
+        return
+
+    # Windows terminals sometimes default to legacy encodings (e.g., cp1252),
+    # which can crash on unicode characters (✓, ✗, box-drawing). Prefer UTF-8.
+    try:
+        import sys as _sys
+
+        for _stream in (_sys.stdout, _sys.stderr):
+            if hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    numeric = getattr(py_logging, level.upper(), py_logging.INFO)
+    py_logging.basicConfig(level=numeric, format="%(message)s")
+
+    # Silence noisy third-party libraries (HF Hub HTTP logs, tqdm progress bars, etc.).
+    # You can still enable them by raising levels or removing these overrides.
+    for name in (
+            "huggingface_hub",
+            "transformers",
+            "sentence_transformers",
+            "rouge_score",
+            "bert_score",
+            "httpcore",
+            "requests",
+            "urllib3",
+            "httpx",
+            "open_clip",
+            "chromadb",
+            "posthog",
+    ):
+        py_logging.getLogger(name).setLevel(py_logging.WARNING)
+
+    try:
+        from huggingface_hub.utils import logging as hf_logging
+
+        hf_logging.set_verbosity_error()
+    except Exception:
+        pass
+
+    try:
+        from transformers.utils import logging as t_logging
+
+        t_logging.set_verbosity_error()
+        t_logging.disable_progress_bar()
+    except Exception:
+        pass
+
+    # rouge_score uses absl logging in some paths and can emit messages like
+    # "Using default tokenizer." directly to stderr. Silence absl noise.
+    try:
+        from absl import logging as absl_logging
+
+        absl_logging.set_verbosity(absl_logging.ERROR)
+        absl_logging.set_stderrthreshold("error")
+    except Exception:
+        pass
+
+    # Hide common non-actionable HF Hub warning in viewer-facing runs.
+    try:
+        import warnings as _warnings
+
+        _warnings.filterwarnings(
+            "ignore",
+            message=r".*unauthenticated requests to the HF Hub.*",
+        )
+    except Exception:
+        pass
+
+
+def _terminal_width(default: int = 100) -> int:
+    try:
+        return max(shutil.get_terminal_size((default, 20)).columns, 60)
+    except Exception:
+        return default
+
+
+def log_section(title: str, width: Optional[int] = None) -> None:
+    width = width or _terminal_width()
+    bar = "=" * min(width, 120)
+    LOGGER.info("")
+    LOGGER.info(bar)
+    LOGGER.info(title.strip())
+    LOGGER.info(bar)
+
+
+def log_kv(label: str, value: str, indent: int = 2, width: Optional[int] = None) -> None:
+    """
+    Print a single key/value line with safe wrapping (prevents “broken tables/lines” in notebooks).
+    """
+    width = width or _terminal_width()
+    prefix = " " * indent + f"{label}: "
+    wrapped = textwrap.fill(str(value), width=width, subsequent_indent=" " * len(prefix))
+    LOGGER.info(prefix + wrapped[len(prefix):] if wrapped.startswith(prefix) else prefix + wrapped)
+
+
+@contextlib.contextmanager
+def suppress_output(enabled: bool = True):
+    """
+    Best-effort suppression of noisy third-party stdout/stderr (HF HTTP logs, tokenizers messages, etc.).
+
+    Use this in metrics where libraries sometimes print directly to stdout even when logging is configured.
+    """
+    if not enabled:
+        yield
+        return
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        yield
+
+--- CELL 5 (code) ---
+def is_low_variance(pix, threshold: int = cfg.img_variance_threshold) -> bool:
+    """
+    Checks if an image is too 'flat' or 'plain' (like a solid color block).
+    Threshold is read from config so it can be tuned without touching code.
+    """
+    try:
+        if pix is None or pix.samples is None:
+            return True
+        samples = np.frombuffer(pix.samples, dtype=np.uint8)
+        if len(samples) == 0:
+            return True
+        if pix.n >= 3:
+            samples = samples.reshape(-1, pix.n)[:, :3].mean(axis=1)
+        return samples.std() < threshold
+    except Exception as e:
+        LOGGER.debug("is_low_variance failed: %s", e)
+        return True
+
+--- CELL 6 (code) ---
+def is_mostly_white(pix, threshold: int = cfg.img_white_pixel_threshold,
+                    ratio: float = cfg.img_white_ratio_threshold) -> bool:
+    """
+    Checks if an image is almost entirely white space.
+    Threshold and ratio read from config.
+    """
+    try:
+        if pix is None or pix.samples is None:
+            return True
+        samples = np.frombuffer(pix.samples, dtype=np.uint8)
+        if len(samples) == 0:
+            return True
+        if pix.n >= 3:
+            samples = samples.reshape(-1, pix.n)[:, :3].mean(axis=1)
+        white_pixels = np.sum(samples > threshold)
+        return (white_pixels / len(samples)) > ratio
+    except Exception as e:
+        LOGGER.debug("is_mostly_white failed: %s", e)
+        return True
+
+--- CELL 7 (code) ---
+def is_extreme_aspect_ratio(pix, min_ratio: float = cfg.img_min_aspect_ratio,
+                            max_ratio: float = cfg.img_max_aspect_ratio) -> bool:
+    """
+    Checks if an image is extremely thin or wide (header/footer lines, decorative bars).
+    Bounds read from config.
+    """
+    try:
+        if pix is None:
+            return True
+        aspect_ratio = pix.width / max(pix.height, 1)
+        return aspect_ratio < min_ratio or aspect_ratio > max_ratio
+    except Exception as e:
+        LOGGER.debug("is_extreme_aspect_ratio failed: %s", e)
+        return True
+
+--- CELL 8 (code) ---
+def loading_pdf(dir_path: str = cfg.pdf_dir, images_dir: str = cfg.images_dir) -> List[Dict]:
+    """
+    Load every PDF in the input directory and extract page text blocks and images.
+
+    The returned list is page-centric: each entry contains the source file name,
+    the page number, the text blocks found on that page, and the images exported
+    from that same page. This structure makes later chunking and text-image linking
+    easier to explain and reproduce.
+    """
+    dir_path = Path(dir_path)
+    images_root = Path(images_dir)
+    if not dir_path.is_dir():
+        raise NotADirectoryError(f"{dir_path} is an invalid directory.")
+
+    LOGGER.info("")
+    LOGGER.info("=" * 80)
+    LOGGER.info("  PDF LOADING")
+    LOGGER.info("=" * 80)
+    LOGGER.info("  Directory: %s", dir_path)
+
+    pdf_files = sorted(dir_path.rglob("*.pdf"))  # Deterministic ordering keeps benchmarking reproducible.
+    LOGGER.info("  Found %d PDF file(s)", len(pdf_files))
+
+    if not pdf_files:
+        LOGGER.warning("  WARNING: No documents found in directory")
+        return []
+
+    all_pdf_size = 0.0
+    all_pages = []
+    failed_pdf = []
+
+    LOGGER.info("")
+    LOGGER.info("  Loading PDFs...")
+    LOGGER.info("  " + "-" * 76)
+
+    for serial, pdf_path in enumerate(pdf_files, start=1):
+        LOGGER.info("  [%d/%d] Loading: %s", serial, len(pdf_files), pdf_path.name)
+        pdf_size_bytes = pdf_path.stat().st_size
+        pdf_size_mb = pdf_size_bytes / (1024 ** 2)
+        LOGGER.info("       Size: %.2f MB", pdf_size_mb)
+
+        pdf = None
+        try:
+            image_dir = images_root / pdf_path.stem
+            image_dir.mkdir(parents=True, exist_ok=True)
+            pdf = pymupdf.open(filename=pdf_path, filetype="pdf")
+
+            pdf_total_text_blocks = 0
+            pdf_total_images = 0
+
+            for page_num, page in enumerate(pdf, start=1):
+                text_blocks = []
+                page_images = []
+                seen_xrefs = set()
+                images = page.get_images(full=True)
+
+                for img_index, img in enumerate(images):
+                    pix = None
+                    try:
+                        if img[1] != 0:  # Skip soft mask.
+                            # soft mask -> Transparency layer
+                            continue
+                        xref = img[0]
+                        if xref in seen_xrefs:
+                            continue
+                        seen_xrefs.add(xref)
+                        rects = page.get_image_rects(xref)
+                        if not rects:
+                            continue
+
+                        pix = pymupdf.Pixmap(pdf, xref)
+                        if pix.width < cfg.img_min_width or pix.height < cfg.img_min_height:
+                            pix = None
+                            continue
+                        # Skip fully transparent images (alpha channel all zeros).
+                        # Previous logic checked *all* channels, which misses many transparent images.
+                        if pix.alpha and pix.samples is not None and len(pix.samples) > 0:
+                            try:
+                                samples = np.frombuffer(pix.samples, dtype=np.uint8)
+                                # Alpha is the last channel when pix.alpha is True (pix.n includes alpha).
+                                alpha = samples[pix.n - 1::pix.n]
+                                if alpha.size > 0 and int(alpha.max()) == 0:
+                                    continue
+                            except Exception:
+                                # If we cannot safely inspect alpha, do not block extraction.
+                                pass
+                        if pix.n > 4:
+                            pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
+                        if is_mostly_white(pix):
+                            pix = None
+                            continue
+                        if is_low_variance(pix):
+                            pix = None
+                            continue
+                        if is_extreme_aspect_ratio(pix):
+                            pix = None
+                            continue
+
+                        img_path = image_dir / f"page_{page_num}_img_{img_index}.png"
+                        pix.save(img_path)
+                        pix = None
+                        rect = rects[0]
+                        page_images.append({
+                            "image_id": f"{pdf_path.stem}_p{page_num}_i{img_index}",
+                            "path": str(img_path),
+                            "page": page_num,
+                            "bbox": [rect.x0, rect.y0, rect.x1, rect.y1]
+                        })
+                    except Exception as img_error:
+                        LOGGER.warning("       Error processing image %d: %s", img_index, img_error)
+                    finally:
+                        if pix is not None:
+                            pix.close()
+
+                blocks = sorted(page.get_text("blocks"), key=lambda b: (b[1], b[0]))
+                for block_id, b in enumerate(blocks):
+                    x0, y0, x1, y1, text = b[:5]
+                    text = text.strip()
+                    if len(text) < cfg.chunk_min_text_len:
+                        continue
+                    block_bbox = [x0, y0, x1, y1]
+                    text_blocks.append({
+                        "block_id": block_id,
+                        "text": text,
+                        "bbox": block_bbox,
+                        "page": page_num,
+                    })
+
+                all_pages.append({
+                    "source": pdf_path.name,
+                    "page": page_num,
+                    "text_blocks": text_blocks,
+                    "images": page_images
+                })
+                pdf_total_text_blocks += len(text_blocks)
+                pdf_total_images += len(page_images)
+            all_pdf_size += pdf_size_mb
+            pdf.close()
+            LOGGER.info("       [OK] Extracted %d text blocks, %d images", pdf_total_text_blocks, pdf_total_images)
+
+        except Exception as e:
+            LOGGER.error("       [ERROR] Error loading %s: %s", pdf_path.name, e)  # Exception handling.
+            failed_pdf.append(pdf_path.name)
+            traceback.print_exc()
+        finally:
+            if pdf is not None and not pdf.is_closed:
+                pdf.close()
+
+    LOGGER.info("  " + "-" * 76)
+    LOGGER.info("")
+    LOGGER.info("  SUMMARY:")
+    LOGGER.info("       Total size: %.2f MB", all_pdf_size)
+    LOGGER.info("       Total pages extracted: %d", len(all_pages))
+    LOGGER.info("       Successful: %d/%d", len(pdf_files) - len(failed_pdf), len(pdf_files))
+
+    if failed_pdf:
+        # Surface the failure rate as a percentage so it appears in logs
+        # alongside the raw count and is easy to spot during batch runs.
+        fail_rate_pct = len(failed_pdf) / max(len(pdf_files), 1) * 100
+        LOGGER.warning(
+            "  PDF failure rate: %.1f%% (%d/%d files failed)",
+            fail_rate_pct, len(failed_pdf), len(pdf_files),
+        )
+        LOGGER.info("")
+        LOGGER.info("  Failed PDFs:")
+        for fp in failed_pdf:
+            LOGGER.info("       - %s", fp)
+
+    LOGGER.info("")
+    LOGGER.info("=" * 80)
+    LOGGER.info("")
+    return all_pages
+
+--- CELL 9 (code) ---
+pages = loading_pdf()  # Loading PDF
+
+
+--- CELL 10 (code) ---
+print(pages[1])  # Displaying a page of content
+
+
+--- CELL 11 (code) ---
+print(pages[1].get("text_blocks"))  # Text of page block
+
+
+--- CELL 12 (code) ---
+import matplotlib.pyplot as plt  # Used for displaying image
+
+
+--- CELL 13 (code) ---
+img = plt.imread(pages[1].get("images")[0].get("path"))  # Displaying a image from a page
+plt.imshow(img)
+plt.axis("off")
+
+
+--- CELL 14 (code) ---
+from json import dumps
+
+
+--- CELL 15 (code) ---
+print(dumps(pages[1], indent=2, sort_keys=True))  # Pretty print
+
+

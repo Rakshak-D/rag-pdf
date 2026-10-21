@@ -1,0 +1,527 @@
+--- CELL 0 (markdown) ---
+# LLM
+
+Goal: run a local LLM against the formatted context and images, and capture the response.
+
+The `LocalLLM` class wraps a local Ollama-served model, manages the server lifecycle, builds the prompt, sends images as base64, and computes the Factual Consistency Distance (FCD) between the response and the context.
+
+--- CELL 1 (code) ---
+import hashlib
+import numpy as np
+import pymupdf
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import traceback
+from dataclasses import dataclass, field
+
+--- CELL 2 (code) ---
+from config import Config, cfg, PROJECT_ROOT
+
+--- CELL 3 (code) ---
+import sys
+
+NOTEBOOK_ROOT = PROJECT_ROOT / "notebooks" if (PROJECT_ROOT / "notebooks").exists() else PROJECT_ROOT
+if str(NOTEBOOK_ROOT) not in sys.path:
+    sys.path.insert(0, str(NOTEBOOK_ROOT))
+
+--- CELL 4 (code) ---
+import logging as py_logging
+import shutil
+import textwrap
+import contextlib
+import io
+
+LOGGER = py_logging.getLogger("rag_pipeline")
+
+
+def setup_logging(level: str = "INFO") -> None:
+    """
+    Configure console logging once (safe for notebooks and repeated imports).
+
+    Why logging (instead of many `print()` calls)?
+    - lets you dial verbosity up/down without editing the pipeline
+    - avoids redundant, noisy output in notebooks
+    """
+    if LOGGER.handlers:
+        return
+
+    # Windows terminals sometimes default to legacy encodings (e.g., cp1252),
+    # which can crash on unicode characters (✓, ✗, box-drawing). Prefer UTF-8.
+    try:
+        import sys as _sys
+
+        for _stream in (_sys.stdout, _sys.stderr):
+            if hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    numeric = getattr(py_logging, level.upper(), py_logging.INFO)
+    py_logging.basicConfig(level=numeric, format="%(message)s")
+
+    # Silence noisy third-party libraries (HF Hub HTTP logs, tqdm progress bars, etc.).
+    # You can still enable them by raising levels or removing these overrides.
+    for name in (
+            "huggingface_hub",
+            "transformers",
+            "sentence_transformers",
+            "rouge_score",
+            "bert_score",
+            "httpcore",
+            "requests",
+            "urllib3",
+            "httpx",
+            "open_clip",
+            "chromadb",
+            "posthog",
+    ):
+        py_logging.getLogger(name).setLevel(py_logging.WARNING)
+
+    try:
+        from huggingface_hub.utils import logging as hf_logging
+
+        hf_logging.set_verbosity_error()
+    except Exception:
+        pass
+
+    try:
+        from transformers.utils import logging as t_logging
+
+        t_logging.set_verbosity_error()
+        t_logging.disable_progress_bar()
+    except Exception:
+        pass
+
+    # rouge_score uses absl logging in some paths and can emit messages like
+    # "Using default tokenizer." directly to stderr. Silence absl noise.
+    try:
+        from absl import logging as absl_logging
+
+        absl_logging.set_verbosity(absl_logging.ERROR)
+        absl_logging.set_stderrthreshold("error")
+    except Exception:
+        pass
+
+    # Hide common non-actionable HF Hub warning in viewer-facing runs.
+    try:
+        import warnings as _warnings
+
+        _warnings.filterwarnings(
+            "ignore",
+            message=r".*unauthenticated requests to the HF Hub.*",
+        )
+    except Exception:
+        pass
+
+
+def _terminal_width(default: int = 100) -> int:
+    try:
+        return max(shutil.get_terminal_size((default, 20)).columns, 60)
+    except Exception:
+        return default
+
+
+def log_section(title: str, width: Optional[int] = None) -> None:
+    width = width or _terminal_width()
+    bar = "=" * min(width, 120)
+    LOGGER.info("")
+    LOGGER.info(bar)
+    LOGGER.info(title.strip())
+    LOGGER.info(bar)
+
+
+def log_kv(label: str, value: str, indent: int = 2, width: Optional[int] = None) -> None:
+    """
+    Print a single key/value line with safe wrapping (prevents “broken tables/lines” in notebooks).
+    """
+    width = width or _terminal_width()
+    prefix = " " * indent + f"{label}: "
+    wrapped = textwrap.fill(str(value), width=width, subsequent_indent=" " * len(prefix))
+    LOGGER.info(prefix + wrapped[len(prefix):] if wrapped.startswith(prefix) else prefix + wrapped)
+
+
+@contextlib.contextmanager
+def suppress_output(enabled: bool = True):
+    """
+    Best-effort suppression of noisy third-party stdout/stderr (HF HTTP logs, tokenizers messages, etc.).
+
+    Use this in metrics where libraries sometimes print directly to stdout even when logging is configured.
+    """
+    if not enabled:
+        yield
+        return
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        yield
+
+--- CELL 5 (code) ---
+from typing import List, Dict
+import matplotlib.pyplot as plt
+from PIL import Image
+
+--- CELL 6 (code) ---
+# LLM
+
+Goal: run one or more local LLMs on the formatted context and capture responses.
+
+Notes:
+- LLM responses are evaluated against ground truth if available in `TEST_QUESTIONS`.
+- Runtime metrics (latency/CPU/RAM/GPU) are captured per query for analysis.
+
+--- CELL 7 (code) ---
+import ollama  # Used to load model .
+from textwrap import dedent  # Used for spacing problems in prompt .
+from tabulate import tabulate  # Used for creating a table for displaying models .
+import subprocess  # Used to start ollama server .
+import time  # For waiting .
+import requests  # Used to access ollama server .
+import base64
+import io
+from PIL import Image
+from sentence_transformers import util
+import re
+
+--- CELL 8 (code) ---
+class LocalLLM:
+    """
+    Interface to a locally hosted Ollama language model.
+
+    Manages server lifecycle, model availability checks, prompt construction,
+    streaming inference, and per-query Factual Consistency Distance computation.
+    """
+
+    def __init__(self, model_name: str = cfg.llm_model, text_embedder: TextEmbeddingModel = None):
+        self.model_name = model_name
+        self.process = self.ollama_server(process="start")
+        self.text_embedder = text_embedder or TextEmbeddingModel()
+        if not self.is_model_available(self.model_name):
+            available = [m['model_name'] for m in self.available_models()]
+            raise ValueError(
+                f"Model '{model_name}' not available. "
+                f"Available models: {available}"
+            )
+        self.tokenizer = tiktoken.get_encoding(cfg.tiktoken_encoding)
+
+    def ollama_server(self, process: str):
+        """Start or stop the local Ollama server process."""
+        if process == "start":
+            try:
+                requests.get("http://localhost:11434/api/tags", timeout=1)
+                LOGGER.info("Ollama server already running.")
+                return "external"
+            except Exception:
+                pass
+            ollama_process = subprocess.Popen(
+                ["ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                shell=False
+            )
+            for _ in range(10):
+                try:
+                    requests.get("http://localhost:11434/api/tags", timeout=1)
+                    LOGGER.info("Ollama server started.")
+                    return ollama_process
+                except Exception:
+                    time.sleep(1)
+            raise RuntimeError("Ollama failed to start")  # If server did not start after many tries, raise error.
+
+        elif process == "stop":  # Stopping ollama server.
+            if isinstance(self.process, subprocess.Popen):  # Checking if server was started here.
+                self.process.terminate()
+                self.process.wait()
+                LOGGER.info("Ollama server stopped.")
+            else:
+                LOGGER.info("Ollama server was started externally — not stopping.")  # If started externally, notify.
+            return None
+        else:
+            raise ValueError("Input can be either 'start' or 'stop'")  # Input validation.
+
+    def available_models(self):
+        """Return list of locally available Ollama models."""
+        response = ollama.list()
+
+        # ollama >= 0.2 returns a Pydantic ListResponse object; older versions
+        # returned a plain dict.  Handle both.
+        if hasattr(response, "models"):
+            models_available = response.models or []
+        elif isinstance(response, dict):
+            models_available = response.get("models", [])
+        else:
+            models_available = []
+
+        models = []
+        for m in models_available:
+            if hasattr(m, "model"):
+                name = m.model
+                params = getattr(m, "details", None)
+                params = params.parameter_size if params else None
+            elif isinstance(m, dict):
+                name = m.get("model") or m.get("name")
+                params = m.get("details", {}).get("parameter_size")
+            else:
+                continue
+            models.append({"model_name": name, "parameters": params})
+        return models
+
+    def is_model_available(self, model_name: str) -> bool:
+        """Check whether a specific model is available in the local Ollama instance."""
+        models = self.available_models()
+        return any(m["model_name"] == model_name for m in models)
+
+    def build_prompt(self, query: str, context: str) -> str:
+        """Format the user prompt by injecting the retrieved context and query."""
+        return f"""Use ONLY the context and images provided below to answer the question. Do not use any outside knowledge. If the context is insufficient, clearly state what is missing.
+
+    If images are provided, treat them as direct evidence alongside the text — describe what they show and how they support or relate to the answer.
+
+    Be thorough but natural. Write in clear prose, not bullet points or numbered sections. Aim for 150–250 words.
+
+    Context:
+    {context}
+
+    Question: {query}
+
+    Answer:""".strip()
+
+    @staticmethod
+    def pil_to_base64(img: Image.Image) -> str:
+        """Encode a PIL image as a base64 PNG string for inclusion in the Ollama payload."""
+        buffer = io.BytesIO()
+        img = img.convert("RGB")
+        img.save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    def generate_response(
+            self,
+            query: str,
+            context: str,
+            images: Optional[List[Dict]] = None,
+            stream: bool = True,
+            temperature: float = cfg.llm_temperature,
+            max_tokens: int = cfg.llm_max_tokens,
+    ) -> Dict:
+        """
+        Run inference for a single query against the provided context and images.
+
+        Returns a dict containing the generated response text, context length
+        statistics, wall-clock generation time, and Factual Consistency Distance.
+        """
+        if not query or not query.strip():
+            raise ValueError("Query cannot be empty")
+
+        if not context or not context.strip():
+            if not images:
+                raise ValueError("Context cannot be empty when no images are provided")
+
+        if len(context) > 10000:
+            LOGGER.warning(
+                "Context length (%d chars) exceeds 10,000 — inference may be slow.", len(context)
+            )
+
+        prompt = self.build_prompt(query, context)
+
+        image_payload = []
+        if images:
+            for img_dict in images:
+                img = img_dict.get("image")
+                if isinstance(img, Image.Image):
+                    image_payload.append(self.pil_to_base64(img))
+                else:
+                    raise TypeError("Images must be PIL.Image.Image")
+
+        context_chars = len(context)
+        context_tokens = len(self.tokenizer.encode(context))
+
+        retries = int(getattr(cfg, "llm_retries", 2))
+        backoff_sec = float(getattr(cfg, "llm_retry_backoff_sec", 1.0))
+        fail_fast = bool(getattr(cfg, "llm_fail_fast", False))
+        last_err: Optional[Exception] = None
+
+        for attempt in range(retries + 1):
+            try:
+                start_time = time.perf_counter()
+
+                user_message = {
+                    "role": "user",
+                    "content": prompt,
+                }
+                if image_payload:
+                    user_message["images"] = image_payload
+
+                response = ollama.chat(
+                    model=self.model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a precise scientific analyst. "
+                                "Answer strictly from the provided context and images — never from prior knowledge. "
+                                "Write naturally in prose. Be evidence-based and concise."
+                            ),
+                        },
+                        user_message,
+                    ],
+                    think=cfg.llm_think_mode,
+                    stream=stream,
+                    options={
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                )
+
+                if stream:
+                    print(f"\n{'=' * 80}")
+                    print(f"QUERY: {query}")
+                    print(f"{'=' * 80}")
+                    print("ANSWER:")
+                    print("-" * 80)
+
+                    full_response = ""
+                    try:
+                        for chunk in response:
+                            content = ""
+                            try:
+                                if hasattr(chunk, "message") and hasattr(chunk.message, "content"):
+                                    # chunk.message.content may be None during think-mode reasoning
+                                    # tokens. Coerce to empty string to avoid concatenation errors.
+                                    content = chunk.message.content or ""
+                                elif isinstance(chunk, dict):
+                                    if "message" in chunk and isinstance(chunk["message"], dict):
+                                        content = chunk["message"].get("content") or ""
+                                    elif "response" in chunk:
+                                        content = chunk.get("response") or ""
+                            except Exception:
+                                pass
+
+                            # Only append and print non-empty content tokens.
+                            # Think-mode models emit intermediate reasoning chunks
+                            # whose content field is None or empty; those are
+                            # intentionally skipped here.
+                            if content:
+                                full_response += content
+                                print(content, end="", flush=True)
+                    except Exception as e:
+                        # Streaming can fail mid-flight if the server restarts.
+                        # Treat this as retryable.
+                        raise RuntimeError(f"Streaming interrupted: {e}") from e
+
+                    print()
+                    final_response = (full_response or "").strip()
+                    if not final_response:
+                        final_response = "No sufficient answer could be generated from the provided context."
+                else:
+                    final_response = ""
+                    try:
+                        if hasattr(response, "message") and hasattr(response.message, "content"):
+                            final_response = response.message.content or ""
+                        elif isinstance(response, dict):
+                            if "message" in response and isinstance(response["message"], dict):
+                                final_response = response["message"].get("content", "")
+                            elif "response" in response:
+                                final_response = response.get("response", "")
+                    except Exception:
+                        pass
+
+                    final_response = (final_response or "").strip()
+                    if not final_response:
+                        final_response = "No sufficient answer could be generated from the provided context."
+
+                generation_time = time.perf_counter() - start_time
+
+                fcd = None
+                try:
+                    resp_snippet = (final_response or "")[:2000].strip()
+                    if not resp_snippet:
+                        raise ValueError("Empty response for FCD")
+                    # Limit the context snippet to the same token budget the
+                    # LLM actually consumed. Using the full context string would
+                    # include material the model never read, artificially
+                    # inflating embedding overlap and understating FCD.
+                    prompt_for_fcd = self.build_prompt(query, context)
+                    ctx_snippet = prompt_for_fcd[:2000]
+                    resp_emb = self.text_embedder.embed_query(resp_snippet)
+                    ctx_emb = self.text_embedder.embed_query(ctx_snippet)
+                    sim = util.cos_sim(resp_emb, ctx_emb).item()
+                    fcd = (1.0 - sim) * 100
+                except Exception as e:
+                    LOGGER.warning("FCD computation failed: %s", e)
+                    fcd = None
+
+                return {
+                    "response": final_response,
+                    "context_length_chars": context_chars,
+                    "context_length_tokens": context_tokens,
+                    "generation_time_sec": round(generation_time, 4),
+                    "factual_consistency_distance": round(fcd, 2) if fcd is not None else None,
+                    "error": None,
+                    "attempts": attempt + 1,
+                }
+
+            except Exception as e:
+                last_err = e
+                if attempt < retries:
+                    wait = backoff_sec * (2 ** attempt)
+                    LOGGER.warning("LLM call failed (attempt %s/%s). Retrying in %.1fs. Error: %s",
+                                   attempt + 1, retries + 1, wait, e)
+                    time.sleep(wait)
+                    continue
+
+                msg = f"LLM generation failed after {attempt + 1} attempt(s): {e}"
+                if fail_fast:
+                    raise RuntimeError(msg) from e
+                LOGGER.error(msg)
+                return {
+                    "response": "No answer (LLM error).",
+                    "context_length_chars": context_chars,
+                    "context_length_tokens": context_tokens,
+                    "generation_time_sec": 0.0,
+                    "factual_consistency_distance": None,
+                    "error": str(last_err),
+                    "attempts": attempt + 1,
+                }
+
+--- CELL 9 (markdown) ---
+### Ollama Setup Notes
+
+* Start the Ollama server **before** running the code.
+  Running the code multiple times without a running server can create multiple Ollama instances, which may waste RAM and cause the model to fail.
+
+  ```bash
+  ollama serve
+  ```
+
+* Download the required model locally before running the code.
+
+  ```bash
+  ollama pull <model-name>
+  ```
+
+
+--- CELL 10 (code) ---
+llm = LocalLLM()  # Initializing model
+
+
+--- CELL 11 (code) ---
+query = "Why does the visual geometry prove that gravity assists fundamentally redirect trajectories rather than merely accelerate the spacecraft, and what irreversible decision did this force upon Voyager 1 at Saturn?"
+
+
+--- CELL 12 (code) ---
+content = """[1] Voyager's Grand Tour\n"
+                  "By John Uri Manager, History Office NASA Johnson Space Center\n"
+                  "In the early days of the Space Age, scientists realized that given the right planetary alignments it might be possible to use the gravity of one planet to change the trajectory of a spacecraft and send it on to another planet without expending any fuel.\n"
+                  "This slingshot or gravity assist trajectory principle was first tested by Mariner 10, which used the gravity of Venus to slingshot its way to Mercury in 1974.\n"
+                  "(Source: Voyager Grand Tour.pdf, page 1)"""
+
+
+--- CELL 13 (code) ---
+from json import dumps
+
+
+--- CELL 14 (code) ---
+# Test data
+print(dumps(llm.generate_response(query=query, context=content), indent=2, sort_keys=False))  # Pretty print
+
+
+--- CELL 15 (code) ---
+llm.ollama_server(process="stop")  # Stopping server
+
+
