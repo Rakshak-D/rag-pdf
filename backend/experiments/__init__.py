@@ -15,6 +15,7 @@ from .tracing import (
     TraceStageTiming,
     TraceContractError,
     build_query_trace,
+    build_failed_query_trace,
 )
 from .evaluation import (
     EVALUATION_SCHEMA_VERSION,
@@ -24,6 +25,8 @@ from .evaluation import (
     MetricObservation,
     build_evaluation_report,
 )
+from .benchmark import BenchmarkCase, BenchmarkSuite, BenchmarkContractError
+from .evaluation_runner import EvaluationCaseOutcome, EvaluationRunResult, EvaluationRunner, EvaluationRunnerError
 
 __all__ = [
     "RUN_PLAN_SCHEMA_VERSION",
@@ -38,10 +41,18 @@ __all__ = [
     "TraceStageTiming",
     "TraceContractError",
     "build_query_trace",
+    "build_failed_query_trace",
     "EVALUATION_SCHEMA_VERSION",
     "EvaluationContractError",
     "EvaluationReport",
     "MetricAggregate",
     "MetricObservation",
     "build_evaluation_report",
+    "BenchmarkCase",
+    "BenchmarkSuite",
+    "BenchmarkContractError",
+    "EvaluationCaseOutcome",
+    "EvaluationRunResult",
+    "EvaluationRunner",
+    "EvaluationRunnerError",
 ]

@@ -1,5 +1,11 @@
 # Query trace and evaluation contracts
 
+The bounded in-memory `EvaluationRunner` is described in
+[`evaluation-runner.md`](evaluation-runner.md). It consumes these contracts
+after retrieval, context selection, and generation, and uses the failed-query
+trace factory when retrieval does not produce a result. It never fabricates
+evidence for an unreached stage.
+
 This phase adds immutable in-memory contracts; it does not execute metrics,
 run evaluation jobs, or persist traces and reports.
 

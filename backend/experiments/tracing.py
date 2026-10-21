@@ -201,6 +201,7 @@ class QueryTrace:
     generation: TraceGeneration | None
     timings: tuple[TraceStageTiming, ...]
     warnings: tuple[str, ...]
+    failure: TraceFailure | None = None
 
 
 def _trace_evidence(result: HybridRetrievalResult) -> tuple[TraceEvidence, ...]:
@@ -281,6 +282,7 @@ def _fingerprint_payload(trace: QueryTrace) -> dict[str, Any]:
         "run": trace.run_fingerprint, "context": trace.context_fingerprint,
         "prompt": trace.prompt_fingerprint, "status": trace.status,
         "failed_stage": trace.failed_stage, "error_code": trace.error_code,
+        "failure": {"stage": trace.failure.stage, "error_code": trace.failure.error_code, "attempts": trace.failure.attempts} if trace.failure else None,
         "evidence": [item.__dict__ for item in trace.evidence],
         "context_summary": trace.context.__dict__ if trace.context else None,
         "generation_summary": trace.generation.__dict__ if trace.generation else None,
@@ -339,14 +341,46 @@ def build_query_trace(
         status = "succeeded" if generation.status == "succeeded" else "failed"
     if failure is not None:
         status = "failed"
-    failed_stage = failure.stage if failure else ("generation" if generation is not None and generation.status == "failed" else None)
-    error_code = failure.error_code if failure else (generation.error_code if generation is not None and generation.status == "failed" else None)
+    derived_failure = failure
+    if derived_failure is None and generation is not None and generation.status == "failed":
+        derived_failure = TraceFailure("generation", generation.error_code or "generation_failed", generation.attempts, generation.elapsed_seconds)
+    failed_stage = derived_failure.stage if derived_failure else None
+    error_code = derived_failure.error_code if derived_failure else None
     evidence = _trace_evidence(retrieval)
     warning_values = tuple(_safe_warning(value) for value in retrieval.warnings)
     timing_values = tuple(timings)
     for timing in timing_values:
         if not isinstance(timing, TraceStageTiming):
             raise TraceContractError("timings must contain TraceStageTiming values")
-    trace = QueryTrace(TRACE_SCHEMA_VERSION, "0" * 64, "0" * 64, retrieval.query_id, retrieval.index_fingerprint, retrieval.document_manifest_hash, run_plan.run_fingerprint, context_fp, prompt_fp, status, failed_stage, error_code, evidence, context_summary, generation_summary, timing_values, warning_values)
+    trace = QueryTrace(TRACE_SCHEMA_VERSION, "0" * 64, "0" * 64, retrieval.query_id, retrieval.index_fingerprint, retrieval.document_manifest_hash, run_plan.run_fingerprint, context_fp, prompt_fp, status, failed_stage, error_code, evidence, context_summary, generation_summary, timing_values, warning_values, derived_failure)
     fingerprint = hashlib.sha256(json.dumps(_fingerprint_payload(trace), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
-    return QueryTrace(trace.schema_version, fingerprint, fingerprint, trace.query_id, trace.index_fingerprint, trace.document_manifest_hash, trace.run_fingerprint, trace.context_fingerprint, trace.prompt_fingerprint, trace.status, trace.failed_stage, trace.error_code, trace.evidence, trace.context, trace.generation, trace.timings, trace.warnings)
+    return QueryTrace(trace.schema_version, fingerprint, fingerprint, trace.query_id, trace.index_fingerprint, trace.document_manifest_hash, trace.run_fingerprint, trace.context_fingerprint, trace.prompt_fingerprint, trace.status, trace.failed_stage, trace.error_code, trace.evidence, trace.context, trace.generation, trace.timings, trace.warnings, trace.failure)
+
+
+def build_failed_query_trace(
+    run_plan: RunPlan,
+    *,
+    query: str,
+    modalities: tuple[str, ...],
+    text_k: int | None,
+    image_k: int | None,
+    failure: TraceFailure,
+) -> QueryTrace:
+    """Create a failed trace before retrieval exists, without fabricated evidence."""
+
+    if not isinstance(run_plan, RunPlan):
+        raise TraceContractError("failed trace construction requires a RunPlan")
+    try:
+        run_plan.verify_integrity()
+    except Exception as exc:
+        raise TraceContractError("RunPlan integrity verification failed") from exc
+    if not isinstance(query, str) or not query.strip() or not isinstance(modalities, tuple) or not modalities or any(value not in _ALLOWED_MODALITIES for value in modalities) or len(set(modalities)) != len(modalities):
+        raise TraceContractError("failed trace query identity is invalid")
+    if any(isinstance(value, bool) or value is not None and (not isinstance(value, int) or value <= 0) for value in (text_k, image_k)):
+        raise TraceContractError("failed trace retrieval limits are invalid")
+    if not isinstance(failure, TraceFailure):
+        raise TraceContractError("failure must be a TraceFailure")
+    query_id = query_id_for(query.strip(), run_plan, modalities, text_k, image_k)
+    trace = QueryTrace(TRACE_SCHEMA_VERSION, "0" * 64, "0" * 64, query_id, run_plan.index_fingerprint, run_plan.document_manifest_hash, run_plan.run_fingerprint, None, None, "failed", failure.stage, failure.error_code, (), None, None, (), (), failure)
+    fingerprint = hashlib.sha256(json.dumps(_fingerprint_payload(trace), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+    return QueryTrace(trace.schema_version, fingerprint, fingerprint, trace.query_id, trace.index_fingerprint, trace.document_manifest_hash, trace.run_fingerprint, None, None, trace.status, trace.failed_stage, trace.error_code, (), None, None, (), (), failure)
