@@ -28,6 +28,7 @@ def test_tiny_pdf_extraction_uses_temp_storage_only(tmp_path):
             "pymupdf": pymupdf,
             "Path": Path,
             "cfg": type("Cfg", (), {
+                "pdf_dir": str(pdf_dir), "images_dir": str(images_dir),
                 "img_min_width": 50, "img_min_height": 50,
                 "img_variance_threshold": 10, "img_white_pixel_threshold": 240,
                 "img_white_ratio_threshold": 0.95, "img_min_aspect_ratio": 0.1,
