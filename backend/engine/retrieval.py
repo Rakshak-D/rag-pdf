@@ -126,6 +126,7 @@ class HybridRetrievalResult:
     cross_modal_elapsed_seconds: float = 0.0
     reranker_elapsed_seconds: float = 0.0
     warnings: tuple[str, ...] = ()
+    query_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -523,4 +524,4 @@ def retrieve_hybrid(query: str, run_plan: RunPlan, storage_root: str | Path, *, 
         image_hits = tuple(replace(hit, rank=index + 1) for index, hit in enumerate(image_hits))
     finally:
         if store is not None: store.close()
-    return HybridRetrievalResult(_query_id(q,run_plan,requested,tk,ik),run_plan.index_fingerprint,run_plan.document_manifest_hash,requested,tk,ik,text_hits,image_hits,strategy,effective,diagnostics,tuple(timings),perf_counter()-started,max(0.0, perf_counter()-boost_started) if 'boost_started' in locals() else 0.0, rerank_elapsed if 'rerank_elapsed' in locals() else 0.0, warnings if 'warnings' in locals() else ())
+    return HybridRetrievalResult(_query_id(q,run_plan,requested,tk,ik),run_plan.index_fingerprint,run_plan.document_manifest_hash,requested,tk,ik,text_hits,image_hits,strategy,effective,diagnostics,tuple(timings),perf_counter()-started,max(0.0, perf_counter()-boost_started) if 'boost_started' in locals() else 0.0, rerank_elapsed if 'rerank_elapsed' in locals() else 0.0, warnings if 'warnings' in locals() else (), q)

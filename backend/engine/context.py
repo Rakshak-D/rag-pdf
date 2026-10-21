@@ -77,6 +77,7 @@ class EvidenceContext:
     diagnostics: Mapping[str, Any]
     warnings: tuple[str, ...]
     elapsed_seconds: float
+    query_text: str = ""
 
 
 _HEADER_VALUE_LIMIT = 120
@@ -335,4 +336,6 @@ class ContextFormatter:
         diagnostics = {"input_text_candidates": len(result.text_hits), "input_image_candidates": len(result.image_hits), "selected_text_count": len(selected_text), "selected_image_count": len(selected_images), **text_diag, **budget_diag, **image_diag, "max_context_tokens": config.max_context_tokens, "max_images": config.max_images}
         fingerprint_payload = {"schema": CONTEXT_SCHEMA_VERSION, "query_id": result.query_id, "index_fingerprint": result.index_fingerprint, "document_manifest_hash": result.document_manifest_hash, "run_fingerprint": plan.run_fingerprint, "text": text_context, "text_ids": [item.record_id for item in selected_text], "image_ids": [item.record_id for item in selected_images]}
         context_fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
-        return EvidenceContext(result.query_id, result.index_fingerprint, result.document_manifest_hash, plan.run_fingerprint, context_fingerprint, text_context, budget_diag["text_context_tokens"], selected_text, selected_images, diagnostics, tuple(warnings), max(0.0, perf_counter() - started))
+        if not isinstance(result.query_text, str):
+            raise ContextInputError("retrieval query_text must be a string")
+        return EvidenceContext(result.query_id, result.index_fingerprint, result.document_manifest_hash, plan.run_fingerprint, context_fingerprint, text_context, budget_diag["text_context_tokens"], selected_text, selected_images, diagnostics, tuple(warnings), max(0.0, perf_counter() - started), result.query_text)

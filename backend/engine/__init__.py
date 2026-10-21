@@ -69,6 +69,16 @@ from .context import (
     SelectedImageEvidence,
     SelectedTextEvidence,
 )
+from .generation import (
+    GenerationClientError,
+    GenerationError,
+    GenerationImageError,
+    GenerationInferenceError,
+    GenerationInputError,
+    GenerationResult,
+    GenerationTokenizationError,
+    LocalGenerationAdapter,
+)
 
 __all__ = [
     "PdfExtractionResult",
@@ -130,4 +140,12 @@ __all__ = [
     "EvidenceContext",
     "SelectedImageEvidence",
     "SelectedTextEvidence",
+    "GenerationError",
+    "GenerationInputError",
+    "GenerationClientError",
+    "GenerationInferenceError",
+    "GenerationTokenizationError",
+    "GenerationImageError",
+    "GenerationResult",
+    "LocalGenerationAdapter",
 ]
