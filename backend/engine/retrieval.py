@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
@@ -18,6 +18,8 @@ from backend.experiments.run_plan import RunPlan
 from backend.vectorstore import ChromaVectorStore
 from backend.engine.bm25 import BM25Index, BM25Error
 from backend.engine.fusion import FusionEngine, FusionError
+from backend.engine.cross_modal import apply_cross_modal_boosts
+from backend.engine.reranking import CrossEncoderReranker, RerankerError
 
 
 Modality = Literal["text", "image"]
@@ -95,6 +97,16 @@ class HybridHit:
     semantic_distance: float | None = None
     semantic_similarity: float | None = None
     sources: tuple[str, ...] = ()
+    cross_modal_boost: float = 0.0
+    boosted_fused_score: float | None = None
+    effective_distance: float | None = None
+    effective_similarity: float | None = None
+    reranker_score: float | None = None
+    reranker_normalized_score: float | None = None
+    normalized_fused_score: float | None = None
+    normalized_cross_modal_boost: float | None = None
+    final_rank_score: float | None = None
+    reranker_applied: bool = False
 
 @dataclass(frozen=True)
 class HybridRetrievalResult:
@@ -111,6 +123,9 @@ class HybridRetrievalResult:
     diagnostics: Mapping[str, Any]
     modality_timings: tuple[tuple[Modality, float], ...]
     total_elapsed_seconds: float
+    cross_modal_elapsed_seconds: float = 0.0
+    reranker_elapsed_seconds: float = 0.0
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -449,13 +464,15 @@ def _hybrid_hits(fused: Mapping[str, Any], bm: Mapping[str, Any], sem: Mapping[s
     return tuple(out)
 
 
-def retrieve_hybrid(query: str, run_plan: RunPlan, storage_root: str | Path, *, build_report_path: str | Path, modalities: Sequence[str] = ("text", "image"), text_adapter: Any = None, image_adapter: Any = None, text_k: int | None = None, image_k: int | None = None) -> HybridRetrievalResult:
+def retrieve_hybrid(query: str, run_plan: RunPlan, storage_root: str | Path, *, build_report_path: str | Path, modalities: Sequence[str] = ("text", "image"), text_adapter: Any = None, image_adapter: Any = None, text_k: int | None = None, image_k: int | None = None, reranker_adapter: CrossEncoderReranker | None = None) -> HybridRetrievalResult:
     """Retrieve and fuse lexical and semantic candidates independently per modality."""
     started = perf_counter()
     if not isinstance(run_plan, RunPlan): raise TypeError("retrieve_hybrid requires a RunPlan")
     run_plan.verify_integrity(); config = run_plan.resolved_config(); q = _validate_query(query); requested = _validate_modalities(modalities)
     tk = _validate_k(text_k, label="text_k", default=config.text_k) if "text" in requested else None; ik = _validate_k(image_k, label="image_k", default=config.image_k) if "image" in requested else None
     report = _validate_build_report(storage_root, build_report_path, run_plan); _validate_adapter_configuration(text_adapter, config, modality="text"); _validate_adapter_configuration(image_adapter, config, modality="image")
+    if config.use_reranker and reranker_adapter is not None and getattr(reranker_adapter, "model_name", None) != config.reranker_model:
+        raise RetrievalInputError("injected reranker configuration does not match the RunPlan")
     store = None; timings=[]; text_hits=(); image_hits=(); diagnostics={}; effective=(config.bm25_weight, config.semantic_weight); strategy=config.fusion_type
     try:
         try: store=ChromaVectorStore.open_existing(storage_root, run_plan)
@@ -476,11 +493,33 @@ def retrieve_hybrid(query: str, run_plan: RunPlan, storage_root: str | Path, *, 
                 _outer_query_values(sem, "ids"); _outer_query_values(sem, "distances")
             except Exception as exc: raise RetrievalQueryError(f"{modality} semantic retrieval failed") from exc
             bw, sw, diag=engine.adaptive_weights(q,bm); effective=(bw,sw); diagnostics[modality]=diag
-            fused, stats=(engine.fuse(bm,sem,bw,sw,k or n) if config.use_weighted_fusion else engine.rrf(bm,sem,bw,sw,k or n)); diagnostics[modality]={**diag,**stats}
-            hits=_hybrid_hits(fused,bm,sem,limit=k or n,image=modality=="image")
+            candidate_limit = min(n, max(k or n, config.rerank_k if modality == "text" and config.use_reranker else k or n))
+            fused, stats=(engine.fuse(bm,sem,bw,sw,candidate_limit) if config.use_weighted_fusion else engine.rrf(bm,sem,bw,sw,candidate_limit)); diagnostics[modality]={**diag,**stats,"candidate_pool_size":candidate_limit}
+            hits=_hybrid_hits(fused,bm,sem,limit=candidate_limit,image=modality=="image")
             if modality=="text": text_hits=hits
             else: image_hits=hits
             timings.append((modality,perf_counter()-t0))
+        boost_started = perf_counter()
+        text_hits, image_hits, warnings, boost_diag = apply_cross_modal_boosts(text_hits, image_hits, config)
+        diagnostics["cross_modal"] = boost_diag
+        rerank_elapsed = 0.0
+        if config.use_reranker and text_hits:
+            rerank_started = perf_counter()
+            try:
+                reranker = reranker_adapter or CrossEncoderReranker(config)
+                text_hits = tuple(reranker.rerank_items(q, text_hits, top_k=min(config.rerank_k, len(text_hits))))
+            except RerankerError as exc:
+                raise HybridRetrievalError("cross-encoder reranking failed") from exc
+            except Exception as exc:
+                raise HybridRetrievalError("cross-encoder reranking failed") from exc
+            rerank_elapsed = max(0.0, perf_counter() - rerank_started)
+            diagnostics["reranking"] = {"candidate_pool_size": len(text_hits), "final_result_count": len(text_hits), "enabled": True}
+        else:
+            text_hits = tuple(sorted(text_hits, key=lambda hit: (-(hit.boosted_fused_score if hit.boosted_fused_score is not None else hit.fused_score))))[:tk] if text_hits else ()
+            diagnostics["reranking"] = {"candidate_pool_size": len(text_hits), "final_result_count": len(text_hits), "enabled": False}
+        image_hits = tuple(image_hits[:ik]) if ik is not None else image_hits
+        text_hits = tuple(replace(hit, rank=index + 1) for index, hit in enumerate(text_hits))
+        image_hits = tuple(replace(hit, rank=index + 1) for index, hit in enumerate(image_hits))
     finally:
         if store is not None: store.close()
-    return HybridRetrievalResult(_query_id(q,run_plan,requested,tk,ik),run_plan.index_fingerprint,run_plan.document_manifest_hash,requested,tk,ik,text_hits,image_hits,strategy,effective,diagnostics,tuple(timings),perf_counter()-started)
+    return HybridRetrievalResult(_query_id(q,run_plan,requested,tk,ik),run_plan.index_fingerprint,run_plan.document_manifest_hash,requested,tk,ik,text_hits,image_hits,strategy,effective,diagnostics,tuple(timings),perf_counter()-started,max(0.0, perf_counter()-boost_started) if 'boost_started' in locals() else 0.0, rerank_elapsed if 'rerank_elapsed' in locals() else 0.0, warnings if 'warnings' in locals() else ())

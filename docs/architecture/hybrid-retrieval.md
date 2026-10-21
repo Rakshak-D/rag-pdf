@@ -8,4 +8,6 @@ Semantic candidates use the existing lazy text or OpenCLIP query adapter and the
 
 The result contains separate typed text and image hits, stable IDs, ranks, metadata, source indicators, timings, effective weights, and per-modality diagnostics. Empty collections return empty hits without loading a query model. Malformed Chroma records, distances, or fusion outputs fail with a typed retrieval error; failed modalities are not silently omitted.
 
+Cross-modal evidence matching and optional text-only cross-encoder reranking are described in [reranking-and-cross-modal.md](reranking-and-cross-modal.md). They run only after both requested modality retrievals complete and preserve raw BM25, semantic, and fused measurements.
+
 The query path is non-creating and never chooses a latest report or repairs an index. A successful report and matching counts do not prove that vector contents were not changed after the build, and there is no active-index registry or promotion transaction. BM25 mode dispatch, reranking, cross-modal boosting, context selection, generation, evaluation, SQLite persistence, API, and UI remain future work.

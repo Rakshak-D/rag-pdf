@@ -50,6 +50,15 @@ from .retrieval import (
 )
 from .bm25 import BM25Error, BM25Index
 from .fusion import FusionEngine, FusionError
+from .reranking import (
+    CrossEncoderReranker,
+    RerankerError,
+    RerankerInferenceError,
+    RerankerInputError,
+    RerankerLoadError,
+    normalize_scores,
+)
+from .cross_modal import apply_cross_modal_boosts
 
 __all__ = [
     "PdfExtractionResult",
@@ -96,4 +105,11 @@ __all__ = [
     "BM25Index",
     "FusionEngine",
     "FusionError",
+    "CrossEncoderReranker",
+    "RerankerError",
+    "RerankerInferenceError",
+    "RerankerInputError",
+    "RerankerLoadError",
+    "normalize_scores",
+    "apply_cross_modal_boosts",
 ]

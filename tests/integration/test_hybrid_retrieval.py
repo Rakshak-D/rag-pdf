@@ -2,20 +2,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-
 from backend.engine import retrieve_hybrid
+from backend.config import ResolvedRunConfig
+from backend.engine.manifest import build_document_manifest
+from backend.experiments import build_run_plan
+from notebooks.config import Config
 from tests.integration.test_retrieval import (
     QueryImageAdapter,
     QueryTextAdapter,
-    make_plan,
     make_store,
     write_report,
 )
 
 
 def test_hybrid_retrieval_fuses_each_modality_and_keeps_models_injected(tmp_path: Path):
-    config, plan = make_plan(tmp_path)
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    (pdf_dir / "document.pdf").write_bytes(b"deterministic source")
+    config = ResolvedRunConfig.from_legacy(Config(pdf_dir=str(pdf_dir), images_dir=str(tmp_path / "images"), database_dir=str(tmp_path / "database"), results_dir=str(tmp_path / "results"), model_comparison_results_dir=str(tmp_path / "model-comparison"), retrieval_results_dir=str(tmp_path / "retrieval-results"), text_k=5, image_k=5, reset_collections_on_start=False, use_reranker=False, use_cross_modal_boost=False))
+    plan = build_run_plan(config, build_document_manifest(pdf_dir).content_hash)
     storage = tmp_path / "owned"
     make_store(storage, plan, image=False)
     report = write_report(storage, plan, text_count=2, image_count=0)
@@ -39,7 +44,11 @@ def test_hybrid_retrieval_fuses_each_modality_and_keeps_models_injected(tmp_path
 
 
 def test_hybrid_empty_modality_does_not_load_query_adapter(tmp_path: Path):
-    config, plan = make_plan(tmp_path)
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    (pdf_dir / "document.pdf").write_bytes(b"deterministic source")
+    config = ResolvedRunConfig.from_legacy(Config(pdf_dir=str(pdf_dir), images_dir=str(tmp_path / "images"), database_dir=str(tmp_path / "database"), results_dir=str(tmp_path / "results"), model_comparison_results_dir=str(tmp_path / "model-comparison"), retrieval_results_dir=str(tmp_path / "retrieval-results"), text_k=5, image_k=5, reset_collections_on_start=False, use_reranker=False, use_cross_modal_boost=False))
+    plan = build_run_plan(config, build_document_manifest(pdf_dir).content_hash)
     storage = tmp_path / "owned"
     make_store(storage, plan, text=False, image=False)
     report = write_report(storage, plan, text_count=0, image_count=0)
