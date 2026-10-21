@@ -29,6 +29,7 @@ from .index_builder import (
     IndexBuildError,
     IndexBuildResult,
     MetadataSerializationError,
+    ReportWriteError,
     build_index,
     serialize_index_metadata,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "IndexBuildError",
     "IndexBuildResult",
     "MetadataSerializationError",
+    "ReportWriteError",
     "build_index",
     "serialize_index_metadata",
 ]

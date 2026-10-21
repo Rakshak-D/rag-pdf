@@ -23,7 +23,17 @@ def test_metadata_serialization_preserves_scalars_and_is_deterministic():
     assert first["bbox"] == '[1,2,{"a":"x","z":true}]'
 
 
-@pytest.mark.parametrize("value", [object(), float("nan"), {"bad": object()}])
+@pytest.mark.parametrize(
+    "value",
+    [
+        object(),
+        float("nan"),
+        {"bad": object()},
+        [1.0, float("nan")],
+        {"nested": {"infinity": float("inf")}},
+        (0.0, float("-inf")),
+    ],
+)
 def test_metadata_serialization_rejects_unsupported_values(value):
     with pytest.raises(MetadataSerializationError):
         serialize_index_metadata({"value": value})

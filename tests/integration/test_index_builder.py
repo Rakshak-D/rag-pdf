@@ -10,8 +10,15 @@ import torch
 from PIL import Image, ImageDraw
 
 from backend.config import ResolvedRunConfig
-from backend.embeddings import ImageEmbeddingAdapter, ImageModelComponents, TextEmbeddingAdapter
+from backend.embeddings import (
+    EmbeddingBatchResult,
+    ImageEmbeddingAdapter,
+    ImageEmbeddingBatchResult,
+    ImageModelComponents,
+    TextEmbeddingAdapter,
+)
 from backend.engine import build_index
+from backend.engine.index_builder import IndexBuildError
 from backend.engine.manifest import ManifestMismatchError, build_document_manifest
 from backend.experiments import build_run_plan
 from backend.vectorstore import ChromaVectorStore
@@ -81,6 +88,47 @@ class FakeTokens:
 
     def to(self, device):
         return self
+
+
+class StubTextAdapter:
+    def __init__(self, config, output=None, error=None):
+        self.config = config
+        self.model_name = config.text_embed_model
+        self.output = output
+        self.error = error
+
+    def embed_documents(self, documents):
+        if self.error is not None:
+            raise self.error
+        values = np.asarray(self.output)
+        return EmbeddingBatchResult(values, 0.25, len(documents), values.shape[0] if values.ndim else 0, values.shape[1] if values.ndim == 2 else 0, 0.25 / len(documents))
+
+
+class StubImageAdapter:
+    def __init__(self, config, output=None, error=None):
+        self.config = config
+        self.model_name = config.image_embed_model
+        self.pretrained = config.image_embed_pretrained
+        self.output = output
+        self.error = error
+
+    def embed_images(self, image_objects):
+        if self.error is not None:
+            raise self.error
+        values = np.asarray(self.output)
+        objects = tuple(dict(item) for item in image_objects)
+        return ImageEmbeddingBatchResult(
+            values,
+            objects,
+            0.5,
+            len(objects),
+            values.shape[0] if values.ndim else 0,
+            values.shape[1] if values.ndim == 2 else 0,
+            0.5 / len(objects),
+            0,
+            0,
+            (),
+        )
 
 
 def adapters(config: ResolvedRunConfig, calls: list):
@@ -220,6 +268,177 @@ def test_mismatched_injected_adapter_is_rejected_before_chroma(tmp_path):
     config = make_config(tmp_path)
     plan = make_plan(config, pdf_dir)
     mismatched = TextEmbeddingAdapter(make_config(tmp_path / "other", text_model="different"), model_loader=lambda n, d: FakeTextModel([]))
-    with pytest.raises(Exception, match="text adapter configuration"):
+    with pytest.raises(IndexBuildError, match="text adapter configuration"):
         build_index(plan, pdf_dir, tmp_path / "owned", text_adapter=mismatched)
     assert not (tmp_path / "owned" / "indexes").exists()
+
+
+def _plan_with_text_and_optional_image(tmp_path: Path, *, with_image: bool = False):
+    pdf_dir = tmp_path / "pdfs"
+    write_pdf(pdf_dir / "document.pdf", "A deterministic text block for failure contracts.", with_image=with_image)
+    config = make_config(tmp_path)
+    return pdf_dir, config, make_plan(config, pdf_dir)
+
+
+def _valid_text_adapter(config):
+    return StubTextAdapter(config, np.asarray([[1.0, 0.0, 0.0]], dtype=np.float32))
+
+
+def _valid_image_adapter(config, image_count=1):
+    return StubImageAdapter(config, np.tile(np.asarray([[0.0, 1.0, 0.0]], dtype=np.float32), (image_count, 1)))
+
+
+def test_text_adapter_failure_is_reported_at_text_embedding_stage(tmp_path):
+    pdf_dir, config, plan = _plan_with_text_and_optional_image(tmp_path)
+    result = build_index(
+        plan,
+        pdf_dir,
+        tmp_path / "owned",
+        text_adapter=StubTextAdapter(config, error=RuntimeError("private model detail")),
+    )
+    assert result.status == "failed"
+    assert result.failure_stage == "text_embedding"
+    assert result.failure_type == "RuntimeError"
+    assert result.failure_message == "text_embedding failed (RuntimeError)"
+    assert result.partial_persistence is False
+    assert result.report_path.is_file()
+    assert "private model detail" not in result.report_path.read_text(encoding="utf-8")
+    assert not (tmp_path / "owned" / "indexes").exists()
+
+
+def test_image_adapter_failure_is_reported_at_image_embedding_stage(tmp_path):
+    pdf_dir, config, plan = _plan_with_text_and_optional_image(tmp_path, with_image=True)
+    result = build_index(
+        plan,
+        pdf_dir,
+        tmp_path / "owned",
+        text_adapter=_valid_text_adapter(config),
+        image_adapter=StubImageAdapter(config, error=RuntimeError("private image detail")),
+    )
+    assert result.status == "failed"
+    assert result.failure_stage == "image_embedding"
+    assert result.failure_type == "RuntimeError"
+    assert result.text_embeddings_created == 1
+    assert result.failure_message == "image_embedding failed (RuntimeError)"
+    assert result.partial_persistence is False
+    assert not (tmp_path / "owned" / "indexes").exists()
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        np.asarray(1.0),
+        np.empty((0, 3), dtype=np.float32),
+        np.empty((1, 0), dtype=np.float32),
+            np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+        np.asarray([["not", "numeric"]], dtype=object),
+        np.asarray([[1.0, np.nan]], dtype=np.float32),
+        np.asarray([[1.0, np.inf]], dtype=np.float32),
+    ],
+)
+def test_malformed_text_embeddings_fail_before_chroma(tmp_path, output):
+    pdf_dir, config, plan = _plan_with_text_and_optional_image(tmp_path)
+    result = build_index(
+        plan,
+        pdf_dir,
+        tmp_path / "owned",
+        text_adapter=StubTextAdapter(config, output=output),
+    )
+    assert result.status == "failed"
+    assert result.failure_stage == "embedding_validation"
+    assert result.partial_persistence is False
+    assert not (tmp_path / "owned" / "indexes").exists()
+
+
+def test_operational_index_build_error_returns_report(tmp_path, monkeypatch):
+    pdf_dir, config, plan = _plan_with_text_and_optional_image(tmp_path)
+
+    def fail_chunking(*args, **kwargs):
+        raise IndexBuildError("chunking contract detail")
+
+    monkeypatch.setattr("backend.engine.index_builder.bbox_chunker", fail_chunking)
+    result = build_index(plan, pdf_dir, tmp_path / "owned")
+    assert result.status == "failed"
+    assert result.failure_stage == "chunking"
+    assert result.failure_type == "IndexBuildError"
+    assert result.partial_persistence is False
+    assert result.report_path.is_file()
+
+
+def test_text_persisted_then_image_failure_reports_partial_progress(tmp_path, monkeypatch):
+    pdf_dir, config, plan = _plan_with_text_and_optional_image(tmp_path, with_image=True)
+    original_open = ChromaVectorStore.open
+
+    class FailingImageStore:
+        def __init__(self, store):
+            self.store = store
+
+        def upsert_text(self, *args, **kwargs):
+            return self.store.upsert_text(*args, **kwargs)
+
+        def upsert_image(self, *args, **kwargs):
+            raise RuntimeError("image persistence detail")
+
+        def close(self):
+            self.store.close()
+
+    def open_store(storage_root, run_plan):
+        return FailingImageStore(original_open(storage_root, run_plan))
+
+    monkeypatch.setattr("backend.engine.index_builder.ChromaVectorStore.open", open_store)
+    result = build_index(
+        plan,
+        pdf_dir,
+        tmp_path / "owned",
+        text_adapter=_valid_text_adapter(config),
+        image_adapter=_valid_image_adapter(config),
+    )
+    assert result.status == "failed"
+    assert result.failure_stage == "vector_persistence"
+    assert result.partial_persistence is True
+    assert result.text_records_persisted == 1
+    assert result.image_records_persisted == 0
+    assert result.report_path.is_file()
+
+
+def test_store_open_and_verification_failures_have_distinct_stages(tmp_path, monkeypatch):
+    pdf_dir, config, plan = _plan_with_text_and_optional_image(tmp_path)
+
+    def fail_open(*args, **kwargs):
+        raise RuntimeError("store detail")
+
+    monkeypatch.setattr("backend.engine.index_builder.ChromaVectorStore.open", fail_open)
+    opened = build_index(plan, pdf_dir, tmp_path / "owned", text_adapter=_valid_text_adapter(config))
+    assert opened.failure_stage == "vector_store_open"
+    assert opened.partial_persistence is False
+
+    class MismatchedStore:
+        def upsert_text(self, *args, **kwargs):
+            pass
+
+        def count(self, modality):
+            return 99
+
+        def ids(self, modality):
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("backend.engine.index_builder.ChromaVectorStore.open", lambda *args, **kwargs: MismatchedStore())
+    verified = build_index(plan, pdf_dir, tmp_path / "owned-verify", text_adapter=_valid_text_adapter(config))
+    assert verified.failure_stage == "vector_verification"
+    assert verified.partial_persistence is True
+
+
+def test_report_schema_and_counts_are_json_serializable(tmp_path):
+    pdf_dir, config, plan = _plan_with_text_and_optional_image(tmp_path)
+    result = build_index(plan, pdf_dir, tmp_path / "owned", text_adapter=_valid_text_adapter(config))
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert report["report_schema_version"] == "1"
+    assert report["failure_stage"] is None
+    assert report["failure_type"] is None
+    assert report["failure_message"] is None
+    assert report["partial_persistence"] is False
+    assert report["text_embeddings_created"] == 1
+    assert report["text_records_persisted"] == 1
