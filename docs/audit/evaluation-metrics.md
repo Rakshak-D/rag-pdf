@@ -39,3 +39,5 @@ M16 is mean positive per-query end-to-end wall time from before `generate_respon
 ## Methodology risks and required evidence
 
 The benchmark has 14 hard multimodal questions, but no test runner or statistical confidence intervals were found. The code reports arithmetic means and often skips missing ground truth/context. It does not record per-metric eligible counts in the structured summary for every metric, although verbose logs print some. FCD, faithfulness and M15 must be renamed in the UI as embedding/lexical heuristics unless independently validated. Preserve formulas for baseline compatibility; add metric provenance (`reference_kind`, implementation version, eligible/skipped count, model ID) before refactoring.
+
+The in-memory provenance and status contracts for future evaluators are documented in [tracing-and-evaluation-contracts.md](../architecture/tracing-and-evaluation-contracts.md); this audit remains an unchanged description of the notebook formulas.

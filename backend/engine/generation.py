@@ -79,6 +79,7 @@ class GenerationResult:
     images_sent: int
     image_hashes: tuple[str, ...]
     elapsed_seconds: float
+    prompt_fingerprint: str = ""
 
 
 def _default_client_factory(host: str) -> Any:
@@ -129,7 +130,7 @@ class LocalGenerationAdapter:
             raise GenerationTokenizationError("configured tokenizer could not encode generation text") from exc
 
     @staticmethod
-    def _base_result(context: EvidenceContext, plan: RunPlan, config: Any, *, started: float, status: Literal["succeeded", "failed"], response: str | None, error_code: str | None, attempts: int, prompt_tokens: int, output_tokens: int, image_hashes: tuple[str, ...]) -> GenerationResult:
+    def _base_result(context: EvidenceContext, plan: RunPlan, config: Any, *, started: float, status: Literal["succeeded", "failed"], response: str | None, error_code: str | None, attempts: int, prompt_tokens: int, output_tokens: int, image_hashes: tuple[str, ...], prompt_fingerprint: str) -> GenerationResult:
         return GenerationResult(
             context.query_id, context.query_text, context.index_fingerprint,
             context.document_manifest_hash, plan.run_fingerprint,
@@ -137,6 +138,7 @@ class LocalGenerationAdapter:
             error_code, attempts, context.text_context_tokens, prompt_tokens,
             output_tokens, len(image_hashes), image_hashes,
             max(0.0, perf_counter() - started),
+            prompt_fingerprint,
         )
 
     @staticmethod
@@ -256,6 +258,7 @@ class LocalGenerationAdapter:
     def generate(self, evidence_context: EvidenceContext, run_plan: RunPlan) -> GenerationResult:
         started = perf_counter()
         context, plan, config, system, user, images, image_hashes = self._validate_and_prepare(evidence_context, run_plan)
+        prompt_fingerprint = hashlib.sha256((system + "\n\n" + user).encode("utf-8")).hexdigest()
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         try:
             client = self._client_factory(self._host)
@@ -275,7 +278,7 @@ class LocalGenerationAdapter:
                     output_tokens = len(self._encode(answer, config))
                 except GenerationTokenizationError:
                     raise
-                return self._base_result(context, plan, config, started=started, status="succeeded", response=answer, error_code=None, attempts=attempts, prompt_tokens=len(self._encode(system + "\n\n" + user, config)), output_tokens=output_tokens, image_hashes=image_hashes)
+                return self._base_result(context, plan, config, started=started, status="succeeded", response=answer, error_code=None, attempts=attempts, prompt_tokens=len(self._encode(system + "\n\n" + user, config)), output_tokens=output_tokens, image_hashes=image_hashes, prompt_fingerprint=prompt_fingerprint)
             except GenerationTokenizationError:
                 raise
             except GenerationInferenceError as exc:
@@ -287,4 +290,4 @@ class LocalGenerationAdapter:
         assert last_error is not None
         if config.llm_fail_fast:
             raise last_error
-        return self._base_result(context, plan, config, started=started, status="failed", response=None, error_code=_safe_error_code(last_error), attempts=attempts, prompt_tokens=len(self._encode(system + "\n\n" + user, config)), output_tokens=0, image_hashes=image_hashes)
+        return self._base_result(context, plan, config, started=started, status="failed", response=None, error_code=_safe_error_code(last_error), attempts=attempts, prompt_tokens=len(self._encode(system + "\n\n" + user, config)), output_tokens=0, image_hashes=image_hashes, prompt_fingerprint=prompt_fingerprint)

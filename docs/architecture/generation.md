@@ -4,8 +4,9 @@
 verified `RunPlan`. It carries the original query, index/document/run
 identities, context fingerprint, model name, status, attempts, locally counted
 text/prompt/output tokens, and SHA-256 hashes of image bytes sent to Ollama.
-Results are frozen and do not persist prompts, responses, image bytes, or
-absolute paths.
+It also exposes a SHA-256 `prompt_fingerprint` for the final rendered system
+and user messages. Results are frozen and do not persist prompts, responses,
+image bytes, or absolute paths.
 
 Before a client is constructed, generation verifies the RunPlan, query ID
 against the existing retrieval formula (query text, modalities, and k limits),
