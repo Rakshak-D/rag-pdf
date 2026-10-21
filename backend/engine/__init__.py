@@ -15,6 +15,16 @@ from .ingestion import (
     stable_chunk_id,
     vertical_gap,
 )
+from .manifest import (
+    DocumentManifest,
+    DocumentManifestEntry,
+    ManifestMismatchError,
+    ManifestSourceChangedError,
+    ManifestValidationError,
+    build_document_manifest,
+    stage_document_snapshot,
+    verify_document_manifest,
+)
 
 __all__ = [
     "PdfExtractionResult",
@@ -30,4 +40,12 @@ __all__ = [
     "merge_bbox",
     "stable_chunk_id",
     "vertical_gap",
+    "DocumentManifest",
+    "DocumentManifestEntry",
+    "ManifestMismatchError",
+    "ManifestSourceChangedError",
+    "ManifestValidationError",
+    "build_document_manifest",
+    "stage_document_snapshot",
+    "verify_document_manifest",
 ]

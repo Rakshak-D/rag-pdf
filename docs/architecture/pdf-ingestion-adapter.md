@@ -43,10 +43,11 @@ successful research shape, plus `successful_files` and structured
 successful. Image-level failures are reported through logging and skipped as
 in the research implementation.
 
-PDF-stem image directories are retained for parity. Two different PDFs with
-the same stem can therefore collide; this is not a final multi-user identity.
-Unique document IDs, verified manifests, versioned storage, atomic ingestion,
-and explicit activation belong to a later persistence phase.
+PDF-stem image directories are retained for parity. The adapter preflights and
+rejects two different PDFs with the same case-folded stem before staging, so
+the collision cannot silently merge or overwrite extraction output. Unique
+document IDs, versioned storage, atomic ingestion, and explicit activation
+belong to a later persistence phase.
 
 ## Parity and limits
 
@@ -56,7 +57,8 @@ through `tests.support.source_loader`. Chunk tests compare `Document` content
 and metadata, including order, overlap, bounding boxes, stable IDs, semantic
 tags, and related-image IDs. Only output-root prefixes are normalized.
 
-The current RunPlan document hash is caller-supplied; this adapter does not
-prove that it matches the PDF directory contents. It also does not impose the
-later upload byte/page/pixel policy or create a document manifest. There is no
-versioned index, Chroma integration, or end-to-end retrieval adapter yet.
+The adapter now builds and verifies a manifest of the actual PDF directory and
+requires a RunPlan hash to match it before staging. The manifest is not signed
+and therefore does not establish document authenticity. The adapter also does
+not impose the later upload byte/page/pixel policy. There is no versioned index,
+Chroma integration, or end-to-end retrieval adapter yet.

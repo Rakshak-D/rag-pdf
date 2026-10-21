@@ -24,6 +24,13 @@ from langchain_core.documents import Document
 from backend.config.paths import resolve_owned_path
 from backend.config.schema import ResolvedRunConfig
 from backend.experiments.run_plan import RunPlan
+from backend.engine.manifest import (
+    DocumentManifest,
+    ManifestMismatchError,
+    ManifestValidationError,
+    build_document_manifest,
+    stage_document_snapshot,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -36,6 +43,7 @@ class PdfExtractionResult:
     pages: List[Dict[str, Any]]
     successful_files: List[str]
     failed_files: List[Dict[str, str]]
+    manifest_hash: str = ""
 
 
 def _validated_config(config: ResolvedRunConfig) -> ResolvedRunConfig:
@@ -110,21 +118,14 @@ def is_extreme_aspect_ratio(pix: Any, min_ratio: float, max_ratio: float) -> boo
         return True
 
 
-def extract_pdfs(
-    config_or_plan: ResolvedRunConfig | RunPlan,
+def _extract_pdf_pages(
+    config: ResolvedRunConfig,
     input_dir: str | Path,
     storage_root: str | Path,
+    manifest_hash: str,
 ) -> PdfExtractionResult:
-    """Extract all PDFs under ``input_dir`` into owned image storage.
+    """Extract pages from an already verified, staged PDF directory."""
 
-    A verified ``RunPlan`` is checked before its snapshot is consumed.  A
-    direct resolved configuration is revalidated and must satisfy the
-    non-destructive workbench policy.  The input directory is intentionally a
-    local configured path in this phase; the derived image output is validated
-    under ``storage_root`` before any directory or image is created.
-    """
-
-    config = _execution_config(config_or_plan)
     source_root = Path(input_dir)
     if not source_root.is_dir():
         raise NotADirectoryError(f"{source_root} is an invalid directory.")
@@ -133,7 +134,9 @@ def extract_pdfs(
     images_root = resolve_owned_path(owned_root, config.images_dir)
     pdf_files = sorted(source_root.rglob("*.pdf"))
     if not pdf_files:
-        return PdfExtractionResult(pages=[], successful_files=[], failed_files=[])
+        return PdfExtractionResult(
+            pages=[], successful_files=[], failed_files=[], manifest_hash=manifest_hash
+        )
 
     owned_root.mkdir(parents=True, exist_ok=True)
     images_root.mkdir(parents=True, exist_ok=True)
@@ -252,7 +255,42 @@ def extract_pdfs(
         pages=all_pages,
         successful_files=successful_files,
         failed_files=failed_files,
+        manifest_hash=manifest_hash,
     )
+
+
+def _reject_duplicate_stems(manifest: DocumentManifest) -> None:
+    stems: dict[str, list[str]] = {}
+    for entry in manifest.entries:
+        stem = Path(entry.relative_path).stem.casefold()
+        stems.setdefault(stem, []).append(entry.relative_path)
+    conflicts = [paths for paths in stems.values() if len(paths) > 1]
+    if conflicts:
+        formatted = "; ".join(", ".join(sorted(paths)) for paths in conflicts)
+        raise ManifestValidationError(
+            "duplicate PDF stems are not supported by the current extraction identity: "
+            f"{formatted}"
+        )
+
+
+def extract_pdfs(
+    config_or_plan: ResolvedRunConfig | RunPlan,
+    input_dir: str | Path,
+    storage_root: str | Path,
+) -> PdfExtractionResult:
+    """Bind extraction to a verified manifest and immutable source snapshot."""
+
+    config = _execution_config(config_or_plan)
+    manifest = build_document_manifest(input_dir)
+    _reject_duplicate_stems(manifest)
+    if isinstance(config_or_plan, RunPlan):
+        if manifest.content_hash != config_or_plan.document_manifest_hash:
+            raise ManifestMismatchError(
+                "run-plan document_manifest_hash does not match source directory: "
+                f"plan={config_or_plan.document_manifest_hash}, current={manifest.content_hash}"
+            )
+    snapshot_root = stage_document_snapshot(input_dir, manifest, storage_root)
+    return _extract_pdf_pages(config, snapshot_root, storage_root, manifest.content_hash)
 
 
 def vertical_gap(block1: Dict[str, Any], block2: Dict[str, Any]) -> float:

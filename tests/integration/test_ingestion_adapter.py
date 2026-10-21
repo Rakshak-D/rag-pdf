@@ -9,6 +9,11 @@ from PIL import Image, ImageDraw
 
 from backend.config import PathContainmentError, ResolvedRunConfig
 from backend.engine.ingestion import PdfExtractionResult, extract_pdfs
+from backend.engine.manifest import (
+    ManifestMismatchError,
+    ManifestValidationError,
+    build_document_manifest,
+)
 from backend.experiments import build_run_plan
 from notebooks.config import Config
 from tests.support.source_loader import load_functions
@@ -89,8 +94,14 @@ def test_empty_input_directory_has_explicit_empty_result(tmp_path):
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
     result = extract_pdfs(config, pdf_dir, tmp_path / "owned")
-    assert result == PdfExtractionResult(pages=[], successful_files=[], failed_files=[])
-    assert not (tmp_path / "owned").exists()
+    assert result == PdfExtractionResult(
+        pages=[],
+        successful_files=[],
+        failed_files=[],
+        manifest_hash=build_document_manifest(pdf_dir).content_hash,
+    )
+    assert (tmp_path / "owned" / "snapshots").is_dir()
+    assert not (tmp_path / "owned" / "images").exists()
 
 
 def test_real_pdf_extraction_matches_research_pages_and_image_metadata(tmp_path):
@@ -108,6 +119,7 @@ def test_real_pdf_extraction_matches_research_pages_and_image_metadata(tmp_path)
     assert actual == expected_normalized
     assert result.successful_files == ["b.pdf", "a.pdf"]
     assert result.failed_files == []
+    assert result.manifest_hash == build_document_manifest(pdf_dir).content_hash
     assert result.pages[0]["source"] == "b.pdf"
     assert result.pages[1]["source"] == "a.pdf"
     assert result.pages[0]["images"][0]["page"] == 1
@@ -161,10 +173,68 @@ def test_verified_run_plan_is_the_execution_boundary(tmp_path):
     pdf_dir = tmp_path / "pdfs"
     write_pdf(pdf_dir / "planned.pdf", "A planned PDF with enough deterministic text.")
     config = make_config(tmp_path)
-    plan = build_run_plan(config, "a" * 64)
+    manifest = build_document_manifest(pdf_dir)
+    plan = build_run_plan(config, manifest.content_hash)
     result = extract_pdfs(plan, pdf_dir, tmp_path / "owned")
     assert result.successful_files == ["planned.pdf"]
     assert result.failed_files == []
+    assert result.manifest_hash == manifest.content_hash
+
+
+@pytest.mark.parametrize("change", ["modify", "add", "remove", "rename"])
+def test_run_plan_manifest_mismatch_fails_before_snapshot_or_image_side_effects(tmp_path, change):
+    pdf_dir = tmp_path / "pdfs"
+    original = pdf_dir / "planned.pdf"
+    write_pdf(original, "A planned PDF with enough deterministic text.", with_image=True)
+    config = make_config(tmp_path)
+    manifest = build_document_manifest(pdf_dir)
+    plan = build_run_plan(config, manifest.content_hash)
+
+    if change == "modify":
+        write_pdf(original, "A changed PDF with enough deterministic text.", with_image=True)
+    elif change == "add":
+        write_pdf(pdf_dir / "new.pdf", "A newly added PDF with enough deterministic text.")
+    elif change == "remove":
+        original.unlink()
+    else:
+        original.rename(pdf_dir / "renamed.pdf")
+
+    storage = tmp_path / "owned"
+    with pytest.raises(ManifestMismatchError, match="document_manifest_hash"):
+        extract_pdfs(plan, pdf_dir, storage)
+    assert not storage.exists()
+
+
+def test_duplicate_casefolded_stems_are_rejected_before_snapshot_creation(tmp_path):
+    pdf_dir = tmp_path / "pdfs"
+    write_pdf(pdf_dir / "one" / "Report.pdf", "First report with enough deterministic text.")
+    write_pdf(pdf_dir / "two" / "report.pdf", "Second report with enough deterministic text.")
+    config = make_config(tmp_path)
+    with pytest.raises(ManifestValidationError, match="duplicate PDF stems"):
+        extract_pdfs(config, pdf_dir, tmp_path / "owned")
+    assert not (tmp_path / "owned").exists()
+
+
+def test_extraction_uses_staged_bytes_after_manifest_verification(tmp_path, monkeypatch):
+    import backend.engine.ingestion as ingestion
+
+    pdf_dir = tmp_path / "pdfs"
+    source_pdf = pdf_dir / "stable.pdf"
+    write_pdf(source_pdf, "Original staged PDF with enough deterministic text.")
+    config = make_config(tmp_path)
+    real_stage = ingestion.stage_document_snapshot
+
+    def stage_then_mutate(input_dir, manifest, storage_root):
+        snapshot = real_stage(input_dir, manifest, storage_root)
+        source_pdf.write_bytes(b"mutated after snapshot")
+        return snapshot
+
+    monkeypatch.setattr(ingestion, "stage_document_snapshot", stage_then_mutate)
+    result = extract_pdfs(config, pdf_dir, tmp_path / "owned")
+    assert result.successful_files == ["stable.pdf"]
+    assert result.pages[0]["text_blocks"][0]["text"] == (
+        "Original staged PDF with enough deterministic text."
+    )
 
 
 def test_import_does_not_expose_research_global_or_create_repository_data():
