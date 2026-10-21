@@ -19,7 +19,7 @@ import chromadb
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from backend.config.fingerprint import INDEX_SCHEMA_VERSION
-from backend.config.paths import resolve_owned_path
+from backend.config.paths import resolve_disjoint_paths, resolve_owned_path
 from backend.experiments.run_plan import RunPlan
 
 
@@ -150,6 +150,37 @@ def _validate_collection_metadata(
         )
 
 
+def _validate_index_hierarchy(
+    storage_root: Path,
+    index_fingerprint: str,
+) -> tuple[Path, Path, Path, Path]:
+    """Validate fixed index path components before resolving or creating them."""
+
+    indexes_path = storage_root / "indexes"
+    index_root = indexes_path / index_fingerprint
+    manifest_path = index_root / "index-manifest.json"
+    chroma_path = index_root / "chroma"
+    components = (
+        ("indexes directory", indexes_path),
+        ("index directory", index_root),
+        ("index manifest", manifest_path),
+        ("Chroma directory", chroma_path),
+    )
+    for label, path in components:
+        if path.is_symlink():
+            raise ChromaStoreStateError(
+                f"symlinked {label} is not allowed in the reserved index hierarchy: {path}"
+            )
+        resolved = path.resolve(strict=False)
+        try:
+            resolved.relative_to(storage_root)
+        except ValueError as exc:
+            raise ChromaStoreStateError(
+                f"{label} resolves outside storage root: {path}"
+            ) from exc
+    return indexes_path, index_root, manifest_path, chroma_path
+
+
 def _as_vector(value: Any, *, label: str) -> list[float]:
     if isinstance(value, (str, bytes, bytearray)):
         raise ChromaStoreInputError(f"{label} must be a non-empty numeric vector")
@@ -242,11 +273,21 @@ class ChromaVectorStore:
         if not isinstance(run_plan, RunPlan):
             raise TypeError("ChromaVectorStore.open requires a RunPlan")
         run_plan.verify_integrity()
+        config = run_plan.resolved_config()
 
-        owned_root = Path(storage_root).expanduser().resolve(strict=False)
-        index_root = resolve_owned_path(owned_root, Path("indexes") / run_plan.index_fingerprint)
-        manifest_path = index_root / "index-manifest.json"
-        chroma_path = index_root / "chroma"
+        owned_root, _ = resolve_disjoint_paths(
+            storage_root,
+            config.pdf_dir,
+            first_label="vector-store storage root",
+            second_label="configured PDF source root",
+        )
+        _, raw_index_root, raw_manifest_path, raw_chroma_path = _validate_index_hierarchy(
+            owned_root,
+            run_plan.index_fingerprint,
+        )
+        index_root = resolve_owned_path(owned_root, raw_index_root.relative_to(owned_root))
+        manifest_path = resolve_owned_path(owned_root, raw_manifest_path.relative_to(owned_root))
+        chroma_path = resolve_owned_path(owned_root, raw_chroma_path.relative_to(owned_root))
         manifest = _IndexStoreManifest(
             index_fingerprint=run_plan.index_fingerprint,
             document_manifest_hash=run_plan.document_manifest_hash,

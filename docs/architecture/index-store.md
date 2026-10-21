@@ -19,6 +19,15 @@ use cosine distance, explicit caller-supplied vectors, and
 or access the network. Text and image collections may contain the same record
 ID because they are distinct Chroma collections.
 
+The caller-owned storage root must be disjoint from the verified run
+configuration's PDF source root; equal or nested roots are rejected before any
+storage side effect. The fixed reserved index hierarchy is also preflighted
+before path resolution and before `PersistentClient` is opened. Symlinked
+`indexes/`, fingerprint, manifest, or `chroma/` components are rejected even
+when a link target remains inside the storage root, preventing aliases into
+the `snapshots/` namespace. Invalid or redirected stores are rejected without
+repair, deletion, or silent recreation.
+
 `index-manifest.json` records the store schema version, index fingerprint,
 document-manifest hash, index schema version, and modality collection names.
 It is written through a same-directory temporary file and atomic replacement.

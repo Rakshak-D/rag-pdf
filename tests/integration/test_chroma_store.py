@@ -5,16 +5,22 @@ from pathlib import Path
 
 import pytest
 
-from backend.config import ResolvedRunConfig
+from backend.config import PathContainmentError, ResolvedRunConfig
 from backend.experiments import build_run_plan
 from backend.vectorstore import ChromaStoreStateError, ChromaVectorStore
 from notebooks.config import Config
 
 
-def make_plan(tmp_path: Path, *, manifest_hash: str = "a" * 64, model_name: str = "model-a"):
+def make_plan(
+    tmp_path: Path,
+    *,
+    manifest_hash: str = "a" * 64,
+    model_name: str = "model-a",
+    pdf_dir: Path | None = None,
+):
     config = ResolvedRunConfig.from_legacy(
         Config(
-            pdf_dir=str(tmp_path / "pdfs"),
+            pdf_dir=str(pdf_dir or (tmp_path / "pdfs")),
             images_dir=str(tmp_path / "images"),
             database_dir=str(tmp_path / "database"),
             results_dir=str(tmp_path / "results"),
@@ -101,3 +107,58 @@ def test_manifest_contains_versioned_identity_and_cosine_metadata(tmp_path):
     assert payload["document_manifest_hash"] == plan.document_manifest_hash
     assert store._collections["text"].metadata["hnsw:space"] == "cosine"
     assert store._collections["image"].metadata["modality"] == "image"
+
+
+def test_symlinked_chroma_directory_is_rejected_without_touching_target(tmp_path):
+    storage = tmp_path / "owned"
+    plan = make_plan(tmp_path)
+    index_root = storage / "indexes" / plan.index_fingerprint
+    index_root.mkdir(parents=True)
+    target = tmp_path / "external-chroma"
+    target.mkdir()
+    marker = target / "marker.txt"
+    marker.write_text("keep", encoding="utf-8")
+    try:
+        (index_root / "chroma").symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable in this environment")
+
+    with pytest.raises(ChromaStoreStateError, match="symlinked Chroma directory"):
+        ChromaVectorStore.open(storage, plan)
+    assert marker.read_text(encoding="utf-8") == "keep"
+    assert not (target / "chroma.sqlite3").exists()
+
+
+def test_symlinked_manifest_is_rejected_without_following_or_overwriting_target(tmp_path):
+    storage = tmp_path / "owned"
+    plan = make_plan(tmp_path)
+    index_root = storage / "indexes" / plan.index_fingerprint
+    (index_root / "chroma").mkdir(parents=True)
+    target = tmp_path / "external-manifest.json"
+    target.write_text("keep", encoding="utf-8")
+    try:
+        (index_root / "index-manifest.json").symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable in this environment")
+
+    with pytest.raises(ChromaStoreStateError, match="symlinked index manifest"):
+        ChromaVectorStore.open(storage, plan)
+    assert target.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.parametrize("layout", ["equal", "storage-child", "source-child"])
+def test_persistent_store_rejects_overlapping_configured_pdf_root(tmp_path, layout):
+    if layout == "equal":
+        storage = tmp_path / "owned"
+        pdf_dir = storage
+    elif layout == "storage-child":
+        pdf_dir = tmp_path / "pdfs"
+        storage = pdf_dir / "owned"
+    else:
+        storage = tmp_path / "owned"
+        pdf_dir = storage / "pdfs"
+    plan = make_plan(tmp_path, pdf_dir=pdf_dir)
+
+    with pytest.raises(PathContainmentError, match="must be disjoint"):
+        ChromaVectorStore.open(storage, plan)
+    assert not storage.exists()
