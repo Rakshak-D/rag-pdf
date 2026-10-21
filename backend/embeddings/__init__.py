@@ -9,6 +9,17 @@ from .text import (
     TextEmbeddingLoadError,
     TextEmbeddingOutputError,
 )
+from .image import (
+    ImageEmbeddingAdapter,
+    ImageEmbeddingBatchResult,
+    ImageEmbeddingError,
+    ImageEmbeddingInferenceError,
+    ImageEmbeddingInputError,
+    ImageEmbeddingIssue,
+    ImageEmbeddingLoadError,
+    ImageEmbeddingOutputError,
+    ImageModelComponents,
+)
 
 __all__ = [
     "EmbeddingBatchResult",
@@ -18,4 +29,13 @@ __all__ = [
     "TextEmbeddingInputError",
     "TextEmbeddingLoadError",
     "TextEmbeddingOutputError",
+    "ImageEmbeddingAdapter",
+    "ImageEmbeddingBatchResult",
+    "ImageEmbeddingError",
+    "ImageEmbeddingInferenceError",
+    "ImageEmbeddingInputError",
+    "ImageEmbeddingIssue",
+    "ImageEmbeddingLoadError",
+    "ImageEmbeddingOutputError",
+    "ImageModelComponents",
 ]
