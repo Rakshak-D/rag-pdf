@@ -1,0 +1,91 @@
+# Immutable run plans
+
+Phase 2.2 adds `backend/experiments/run_plan.py` as a pure planning boundary.
+It does not execute ingestion, indexing, retrieval, generation, evaluation, or
+any persistence operation.
+
+## Identity boundaries
+
+`LegacyConfigSchema` is the typed compatibility view of all 74 fields in
+`notebooks.config.Config`. `ResolvedRunConfig` is the validated execution
+configuration plus `WorkbenchSafetyPolicy`. The compatibility default
+`reset_collections_on_start=True` is preserved, but `build_run_plan()` rejects
+it unless `allow_destructive_index_reset=True` is explicitly supplied. The
+collection-delete policy remains false by default and no deletion operation is
+implemented.
+
+The plan stores only canonical JSON plus hashes:
+
+- `document_manifest_hash` identifies the exact caller-supplied document
+  manifest;
+- `index_fingerprint` is produced by the existing index allowlist in
+  `backend/config/fingerprint.py` and identifies document-derived chunks and
+  vectors;
+- `run_fingerprint` includes the index fingerprint plus the behavior-affecting
+  run configuration; and
+- `configuration_snapshot_hash` binds the complete serialized resolved
+  configuration, including safety policy, without making that policy part of
+  experiment identity.
+
+No timestamp, random ID, model object, client, path handle, or runtime result
+is included. A later persistence layer may assign a unique run ID separately.
+
+## Run identity field classification
+
+All legacy fields are classified; the included set is derived from the actual
+dataclass so a future legacy field addition is visible in tests. The following
+fields are excluded from both index and run fingerprints because they are
+operational or output/storage concerns:
+
+`pdf_dir`, `images_dir`, `database_dir`, `results_dir`,
+`model_comparison_results_dir`, `retrieval_results_dir`, `metrics_verbose`,
+`text_collection_name`, `image_collection_name`, and
+`reset_collections_on_start`.
+
+Every other legacy field contributes to run identity, including:
+
+`llm_retries`, `llm_retry_backoff_sec`, `llm_fail_fast`, `text_embed_model`,
+`image_embed_model`, `image_embed_pretrained`, `reranker_model`, `llm_model`,
+`llm_models`, `tiktoken_encoding`, `chunk_max_tokens`,
+`chunk_overlap_tokens`, `chunk_max_vertical_gap`, `chunk_min_text_len`,
+`text_embed_batch_size`, `image_embed_batch_size`, `text_k`, `image_k`,
+`rerank_k`, `rrf_k_constant`, `bm25_weight`, `semantic_weight`,
+`adaptive_weights_keyword`, `adaptive_weights_semantic`,
+`adaptive_weights_balanced_strong_bm25`, `adaptive_weights_balanced_weak_bm25`,
+`bm25_strong_max_score_threshold`, `bm25_strong_std_threshold`,
+`bm25_weak_max_score_threshold`, `image_caption_image_weight`,
+`max_text_chunks`, `max_context_tokens`, `max_images`,
+`text_distance_threshold`, `image_distance_threshold`, `use_filtering`,
+`use_percentile_filtering`, `percentile_cutoff`, `llm_temperature`,
+`llm_max_tokens`, `llm_think_mode`, `retrieval_mode`, `use_reranker`,
+`adaptive_weighting`, `use_weighted_fusion`, `rouge_top_k_chunks`,
+`top_k_accuracy_k`, `reranker_ce_weight`, `reranker_fused_weight`,
+`reranker_boost_weight`, `use_cross_modal_boost`, `cross_modal_max_boost`,
+`cross_modal_boost_per_overlap`, `bm25_signal_max_weight`,
+`bm25_signal_std_weight`, `bm25_signal_spec_weight`,
+`bm25_signal_lex_weight`, `img_variance_threshold`,
+`img_white_pixel_threshold`, `img_white_ratio_threshold`, `img_min_width`,
+`img_min_height`, `img_min_aspect_ratio`, and `img_max_aspect_ratio`.
+
+The run fingerprint uses canonical UTF-8 JSON with sorted keys. It therefore
+changes for retrieval, reranker, context, generation, evaluation, retry, and
+other behavior-affecting settings, while preserving index-fingerprint
+stability for runtime/output-only changes. The safety policy is not experiment
+semantics and is not included in the run fingerprint.
+
+## Integrity and limits
+
+`RunPlan.verify_integrity()` reparses the stored configuration snapshot,
+recomputes the index and run fingerprints, and raises
+`RunPlanIntegrityError` on manifest, fingerprint, or snapshot corruption.
+`resolved_config()` always returns a newly parsed configuration object, so a
+caller cannot mutate the stored snapshot through the returned object.
+
+The plan proves only that the intended configuration and document identity are
+internally consistent. It does not prove immutable model weights, successful
+index construction, reproducible model outputs, or execution-engine behavior.
+
+Mapping inputs to `canonical_index_definition()` and `index_fingerprint()` are
+intentionally legacy-only. A mapping containing `workbench_policy` is rejected
+by the strict compatibility schema rather than having that field silently
+dropped; the run-plan builder passes the validated typed object instead.
