@@ -204,6 +204,16 @@ def build_evaluation_report(
         raise EvaluationContractError("duplicate aggregate metric IDs are not allowed")
     for aggregate in aggregate_tuple:
         related = [item for item in observation_tuple if item.metric_id == aggregate.metric_id]
+        if related:
+            for field in ("metric_name", "unit", "optimization_direction", "reference_kind", "implementation_version"):
+                if any(getattr(item, field) != getattr(aggregate, field) for item in related):
+                    raise EvaluationContractError(f"aggregate {aggregate.metric_id} metadata disagrees with observations")
+            model_values = {item.model_identifier for item in related if item.model_identifier is not None}
+            if len(model_values) > 1:
+                raise EvaluationContractError(f"aggregate {aggregate.metric_id} has conflicting model identifiers")
+            computed_models = {item.model_identifier for item in related if item.status == "computed"}
+            if aggregate.model_identifier is not None and any(value != aggregate.model_identifier for value in computed_models):
+                raise EvaluationContractError(f"aggregate {aggregate.metric_id} model identifier disagrees with computed observations")
         counts = {
             "eligible_count": sum(item.status == "computed" for item in related),
             "skipped_count": sum(item.status == "skipped" for item in related),

@@ -26,6 +26,12 @@ token/candidate counts, whitelisted scalar diagnostics, and stable warning
 codes. Generation summaries retain model/settings, statuses, token counts,
 image hashes, response hash, and the generation `prompt_fingerprint`.
 
+Record IDs are passed through one conservative boundary. Bounded identifiers
+such as `chunk-1` remain readable; path-like, traversal, or malformed values
+are replaced by stable SHA-256-derived redactions in both evidence and context
+summaries. Raw exception messages, arbitrary signal labels, and local path
+components are not copied into trace fields.
+
 Trace fingerprints are canonical SHA-256 identifiers over schema, identity,
 redacted evidence, context/generation summaries, statuses, response hash, and
 stable warnings. Timings are retained separately and excluded from the
@@ -49,7 +55,8 @@ and no exclusions; `partial` requires both eligible and excluded values;
 `no_eligible_values` requires no value and at least one excluded observation.
 The contracts never calculate means or replace missing measurements with zero.
 `build_evaluation_report()` checks trace membership, duplicate observations and
-aggregates, run identity, and count agreement, then creates a deterministic
+aggregates, run identity, count agreement, and core aggregate metadata
+agreement, then creates a deterministic
 evaluation fingerprint from canonical report data. It excludes timestamps and
 mutable state and, like the trace hash, is not a cryptographic authenticity
 mechanism.

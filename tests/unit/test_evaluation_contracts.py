@@ -55,3 +55,23 @@ def test_partial_and_no_eligible_states_preserve_explicit_counts(tmp_path):
     )
     report = build_evaluation_report([trace], observations, aggregates, run_fingerprint=plan.run_fingerprint, benchmark_id="bench", benchmark_version="1")
     assert report.aggregates[1].value is None
+
+
+@pytest.mark.parametrize("field", ["unit", "optimization_direction", "reference_kind", "implementation_version"])
+def test_aggregate_core_metadata_must_match_observations(tmp_path, field):
+    plan, trace = report_inputs(tmp_path)
+    observation = MetricObservation(trace.trace_id, "m1", "Metric", "computed", 1.0, "score", "higher_is_better", "no_reference", "v1")
+    values = {"unit": "other", "optimization_direction": "descriptive", "reference_kind": "ground_truth", "implementation_version": "v2"}
+    aggregate_kwargs = {"metric_name": "Metric", "status": "computed", "value": 1.0, "unit": "score", "optimization_direction": "higher_is_better", "reference_kind": "no_reference", "implementation_version": "v1"}
+    aggregate_kwargs[field] = values[field]
+    aggregate = MetricAggregate("m1", **aggregate_kwargs, eligible_count=1, skipped_count=0, failed_count=0, unavailable_count=0)
+    with pytest.raises(EvaluationContractError):
+        build_evaluation_report([trace], [observation], [aggregate], run_fingerprint=plan.run_fingerprint, benchmark_id="bench", benchmark_version="1")
+
+
+def test_aggregate_model_identifier_must_match_computed_observations(tmp_path):
+    plan, trace = report_inputs(tmp_path)
+    observation = MetricObservation(trace.trace_id, "m1", "Metric", "computed", 1.0, "score", "higher_is_better", "no_reference", "v1", model_identifier="model-a")
+    aggregate = MetricAggregate("m1", "Metric", "computed", 1.0, "score", "higher_is_better", "no_reference", "v1", 1, 0, 0, 0, model_identifier="model-b")
+    with pytest.raises(EvaluationContractError):
+        build_evaluation_report([trace], [observation], [aggregate], run_fingerprint=plan.run_fingerprint, benchmark_id="bench", benchmark_version="1")

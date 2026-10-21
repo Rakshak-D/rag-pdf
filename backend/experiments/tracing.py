@@ -19,6 +19,8 @@ from backend.experiments.run_plan import RunPlan
 TRACE_SCHEMA_VERSION = "1"
 _HASH_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+_SAFE_RECORD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_REDACTED_RECORD_RE = re.compile(r"^record_[0-9a-f]{64}$")
 _ALLOWED_MODALITIES = {"text", "image"}
 _DIAGNOSTIC_KEYS = {
     "candidate_pool_size", "final_result_count", "bm25_count", "semantic_count",
@@ -81,6 +83,22 @@ def _safe_warning(value: Any) -> str:
     return value
 
 
+def _record_id(value: Any) -> str:
+    """Return a useful safe ID or a stable redaction for path-like IDs."""
+
+    if isinstance(value, str) and (_SAFE_RECORD_RE.fullmatch(value) or _REDACTED_RECORD_RE.fullmatch(value)):
+        if value not in {".", ".."} and ".." not in value:
+            return value
+    raw = value if isinstance(value, str) else repr(type(value).__name__)
+    return "record_" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _safe_signal(value: Any) -> str:
+    if isinstance(value, str) and _CODE_RE.fullmatch(value):
+        return value
+    return "unknown"
+
+
 @dataclass(frozen=True)
 class TraceStageTiming:
     stage: str
@@ -134,7 +152,7 @@ class TraceEvidence:
     reranker_applied: bool = False
 
     def __post_init__(self) -> None:
-        if self.modality not in _ALLOWED_MODALITIES or not isinstance(self.record_id, str) or not self.record_id:
+        if self.modality not in _ALLOWED_MODALITIES or not isinstance(self.record_id, str) or not self.record_id or self.record_id != _record_id(self.record_id):
             raise TraceContractError("trace evidence modality and record_id are invalid")
         if isinstance(self.rank, bool) or not isinstance(self.rank, int) or self.rank < 1:
             raise TraceContractError("trace evidence rank must be positive")
@@ -212,9 +230,9 @@ def _trace_evidence(result: HybridRetrievalResult) -> tuple[TraceEvidence, ...]:
                 raise TraceContractError("retrieval evidence contains an invalid hit")
             metadata = hit.metadata if isinstance(hit.metadata, Mapping) else {}
             values.append(TraceEvidence(
-                modality, hit.record_id, hit.rank,
+                modality, _record_id(hit.record_id), hit.rank,
                 _source_name(metadata.get("source")), _safe_page(metadata.get("page_num")),
-                tuple(_display(value, fallback="unknown") for value in hit.sources),
+                tuple(_safe_signal(value) for value in hit.sources),
                 _finite(hit.fused_score, label="fused_score", allow_none=False),
                 hit.bm25_rank, hit.bm25_score, hit.semantic_rank,
                 hit.semantic_distance, hit.semantic_similarity,
@@ -242,8 +260,8 @@ def _trace_context(context: EvidenceContext, config: Any) -> TraceContext:
         return value
     return TraceContext(
         _hash(context.context_fingerprint, label="context fingerprint", allow_none=False),
-        tuple((item.label, item.record_id, item.truncated) for item in context.selected_text),
-        tuple((item.label, item.record_id) for item in context.selected_images),
+        tuple((item.label, _record_id(item.record_id), item.truncated) for item in context.selected_text),
+        tuple((item.label, _record_id(item.record_id)) for item in context.selected_images),
         context.text_context_tokens, config.max_context_tokens,
         diagnostic_count("input_text_candidates"),
         diagnostic_count("input_image_candidates"),

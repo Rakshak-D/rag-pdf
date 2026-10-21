@@ -8,7 +8,7 @@ from backend.config import ResolvedRunConfig
 from backend.engine.context import ContextFormatter
 from backend.engine.generation import LocalGenerationAdapter
 from backend.engine.retrieval import HybridHit, HybridRetrievalResult, query_id_for
-from backend.experiments import TraceContractError, TraceFailure, TraceStageTiming, build_query_trace, build_run_plan
+from backend.experiments import TraceContractError, TraceEvidence, TraceFailure, TraceStageTiming, build_query_trace, build_run_plan
 from notebooks.config import Config
 
 
@@ -69,3 +69,21 @@ def test_trace_failure_is_explicit_and_sanitized(tmp_path):
     assert trace.error_code == "inference_failed"
     with pytest.raises(TraceContractError):
         TraceFailure("generation", "raw server error")
+
+
+@pytest.mark.parametrize("record_id", [r"C:\Users\abhis\secret\chunk.txt", "/home/abhis/secret/chunk", "../private", "x" * 300])
+def test_path_like_record_ids_are_redacted_in_trace(tmp_path, record_id):
+    plan, retrieval, context, _ = chain(tmp_path)
+    hit = HybridHit(record_id, 1, 0.25, {"source": "paper.pdf", "page_num": 3}, document="evidence", semantic_distance=0.25, semantic_similarity=0.75, sources=("semantic",))
+    changed = retrieval.__class__(query_id_for(retrieval.query_text, plan, retrieval.modalities, 5, None), retrieval.index_fingerprint, retrieval.document_manifest_hash, retrieval.modalities, 5, None, (hit,), (), retrieval.fusion_strategy, retrieval.effective_weights, retrieval.diagnostics, retrieval.modality_timings, retrieval.total_elapsed_seconds, query_text=retrieval.query_text)
+    trace = build_query_trace(changed, plan)
+    assert record_id not in repr(trace)
+    assert "secret" not in repr(trace)
+    traced_context = ContextFormatter(encoder=Encoder()).format(changed, plan)
+    context_trace = build_query_trace(changed, plan, context=traced_context)
+    assert record_id not in repr(context_trace)
+
+
+def test_direct_trace_evidence_rejects_unsafe_ids():
+    with pytest.raises(TraceContractError):
+        TraceEvidence("text", r"C:\private\chunk", 1, "source", "1", (), 0.0)
