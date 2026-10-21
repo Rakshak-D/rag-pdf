@@ -59,6 +59,16 @@ from .reranking import (
     normalize_scores,
 )
 from .cross_modal import apply_cross_modal_boosts
+from .context import (
+    ContextError,
+    ContextImagePathError,
+    ContextInputError,
+    ContextFormatter,
+    ContextTokenizationError,
+    EvidenceContext,
+    SelectedImageEvidence,
+    SelectedTextEvidence,
+)
 
 __all__ = [
     "PdfExtractionResult",
@@ -112,4 +122,12 @@ __all__ = [
     "RerankerLoadError",
     "normalize_scores",
     "apply_cross_modal_boosts",
+    "ContextError",
+    "ContextImagePathError",
+    "ContextInputError",
+    "ContextFormatter",
+    "ContextTokenizationError",
+    "EvidenceContext",
+    "SelectedImageEvidence",
+    "SelectedTextEvidence",
 ]

@@ -11,3 +11,5 @@ Cross-modal matching uses exact stable IDs first, then normalized path basenames
 Only text candidates are cross-encoder reranked. Image ordering remains the fused ordering, with boost diagnostics exposed separately. Store closure is retained on success and failure, and no result files or model caches are written. Timings and sanitized warnings are returned in the immutable result object.
 
 This phase still does not provide context selection, answer generation, evaluation jobs, API/UI, SQLite registry, active-index promotion, or transactional index activation. Model-name identity also does not prove immutable model-weight provenance.
+
+The next evidence-context boundary is documented in [context-selection.md](context-selection.md). It consumes the immutable hybrid result without changing raw retrieval provenance.
