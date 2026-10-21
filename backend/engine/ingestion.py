@@ -123,6 +123,7 @@ def _extract_pdf_pages(
     input_dir: str | Path,
     storage_root: str | Path,
     manifest_hash: str,
+    image_output_root: str | Path | None = None,
 ) -> PdfExtractionResult:
     """Extract pages from an already verified, staged PDF directory."""
 
@@ -131,7 +132,10 @@ def _extract_pdf_pages(
         raise NotADirectoryError(f"{source_root} is an invalid directory.")
 
     owned_root = Path(storage_root).expanduser().resolve(strict=False)
-    images_root = resolve_owned_path(owned_root, config.images_dir)
+    images_root = resolve_owned_path(
+        owned_root,
+        config.images_dir if image_output_root is None else image_output_root,
+    )
     pdf_files = sorted(source_root.rglob("*.pdf"))
     if not pdf_files:
         return PdfExtractionResult(
@@ -277,18 +281,27 @@ def _validate_image_output_paths(
     config: ResolvedRunConfig,
     storage_root: str | Path,
     manifest: DocumentManifest,
+    image_output_root: str | Path | None = None,
 ) -> None:
-    """Reject image destinations that overlap the reserved snapshot namespace."""
+    """Reject image destinations that overlap reserved storage namespaces."""
 
     owned_root = Path(storage_root).expanduser().resolve(strict=False)
-    images_root = resolve_owned_path(owned_root, config.images_dir)
-    snapshots_root = resolve_owned_path(owned_root, "snapshots")
+    images_root = resolve_owned_path(
+        owned_root,
+        config.images_dir if image_output_root is None else image_output_root,
+    )
+    reserved_roots = {
+        name: resolve_owned_path(owned_root, name)
+        for name in ("snapshots", "indexes")
+    }
 
     def reject_snapshot_overlap(candidate: Path, label: str) -> None:
-        if candidate == snapshots_root or candidate.is_relative_to(snapshots_root):
-            raise PathContainmentError(
-                f"{label} enters reserved snapshot namespace: {candidate}"
-            )
+        for namespace, reserved_root in reserved_roots.items():
+            if candidate == reserved_root or candidate.is_relative_to(reserved_root):
+                raise PathContainmentError(
+                    f"{label} enters reserved {namespace} namespace "
+                    f"(reserved snapshot namespace): {candidate}"
+                )
 
     reject_snapshot_overlap(images_root, "image output root")
     for entry in manifest.entries:
@@ -300,6 +313,8 @@ def extract_pdfs(
     config_or_plan: ResolvedRunConfig | RunPlan,
     input_dir: str | Path,
     storage_root: str | Path,
+    *,
+    image_output_root: str | Path | None = None,
 ) -> PdfExtractionResult:
     """Bind extraction to a verified manifest and immutable source snapshot."""
 
@@ -312,7 +327,7 @@ def extract_pdfs(
     )
     manifest = build_document_manifest(input_dir)
     _reject_duplicate_stems(manifest)
-    _validate_image_output_paths(config, storage_root, manifest)
+    _validate_image_output_paths(config, storage_root, manifest, image_output_root)
     if isinstance(config_or_plan, RunPlan):
         if manifest.content_hash != config_or_plan.document_manifest_hash:
             raise ManifestMismatchError(
@@ -320,7 +335,13 @@ def extract_pdfs(
                 f"plan={config_or_plan.document_manifest_hash}, current={manifest.content_hash}"
             )
     snapshot_root = stage_document_snapshot(input_dir, manifest, storage_root)
-    return _extract_pdf_pages(config, snapshot_root, storage_root, manifest.content_hash)
+    return _extract_pdf_pages(
+        config,
+        snapshot_root,
+        storage_root,
+        manifest.content_hash,
+        image_output_root,
+    )
 
 
 def vertical_gap(block1: Dict[str, Any], block2: Dict[str, Any]) -> float:

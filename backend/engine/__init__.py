@@ -25,6 +25,13 @@ from .manifest import (
     stage_document_snapshot,
     verify_document_manifest,
 )
+from .index_builder import (
+    IndexBuildError,
+    IndexBuildResult,
+    MetadataSerializationError,
+    build_index,
+    serialize_index_metadata,
+)
 
 __all__ = [
     "PdfExtractionResult",
@@ -48,4 +55,9 @@ __all__ = [
     "build_document_manifest",
     "stage_document_snapshot",
     "verify_document_manifest",
+    "IndexBuildError",
+    "IndexBuildResult",
+    "MetadataSerializationError",
+    "build_index",
+    "serialize_index_metadata",
 ]
