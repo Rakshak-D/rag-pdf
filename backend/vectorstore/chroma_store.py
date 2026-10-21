@@ -267,8 +267,14 @@ class ChromaVectorStore:
         }
 
     @classmethod
-    def open(cls, storage_root: str | Path, run_plan: RunPlan) -> "ChromaVectorStore":
-        """Verify ``run_plan`` and open/create its isolated persistent store."""
+    def _open(
+        cls,
+        storage_root: str | Path,
+        run_plan: RunPlan,
+        *,
+        create: bool,
+    ) -> "ChromaVectorStore":
+        """Open a verified index, optionally creating a new empty store."""
 
         if not isinstance(run_plan, RunPlan):
             raise TypeError("ChromaVectorStore.open requires a RunPlan")
@@ -294,6 +300,10 @@ class ChromaVectorStore:
         )
 
         is_new = not index_root.exists()
+        if is_new and not create:
+            raise ChromaStoreStateError(
+                f"index store does not exist: {index_root}"
+            )
         if not is_new:
             if not index_root.is_dir():
                 raise ChromaStoreStateError(f"index path is not a directory: {index_root}")
@@ -353,6 +363,22 @@ class ChromaVectorStore:
             image_collection=image_collection,
             manifest=manifest,
         )
+
+    @classmethod
+    def open(cls, storage_root: str | Path, run_plan: RunPlan) -> "ChromaVectorStore":
+        """Verify ``run_plan`` and open/create its isolated persistent store."""
+
+        return cls._open(storage_root, run_plan, create=True)
+
+    @classmethod
+    def open_existing(
+        cls,
+        storage_root: str | Path,
+        run_plan: RunPlan,
+    ) -> "ChromaVectorStore":
+        """Open only an existing verified store; never create or repair it."""
+
+        return cls._open(storage_root, run_plan, create=False)
 
     def close(self) -> None:
         """Release adapter references; Chroma 1.5 has no client close method."""

@@ -33,6 +33,17 @@ from .index_builder import (
     build_index,
     serialize_index_metadata,
 )
+from .retrieval import (
+    ImageSemanticHit,
+    RetrievalInputError,
+    RetrievalQueryError,
+    RetrievalReportError,
+    RetrievalStoreError,
+    SemanticRetrievalError,
+    SemanticRetrievalResult,
+    TextSemanticHit,
+    retrieve_semantic,
+)
 
 __all__ = [
     "PdfExtractionResult",
@@ -62,4 +73,13 @@ __all__ = [
     "ReportWriteError",
     "build_index",
     "serialize_index_metadata",
+    "ImageSemanticHit",
+    "RetrievalInputError",
+    "RetrievalQueryError",
+    "RetrievalReportError",
+    "RetrievalStoreError",
+    "SemanticRetrievalError",
+    "SemanticRetrievalResult",
+    "TextSemanticHit",
+    "retrieve_semantic",
 ]
