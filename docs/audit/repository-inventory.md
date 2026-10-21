@@ -4,16 +4,21 @@ Audit basis: tracked files from `git ls-files`, inspected on branch `production-
 
 ## Scope and totals
 
+These totals are recalculated from the tracked file set at the current Phase
+1.1 starting commit (`bf2a491`). The earlier audit snapshot counted 388 files
+before the Phase 1 harness was committed; the current repository contains 408
+tracked files.
+
 | Category | Count | Bytes | Evidence |
 |---|---:|---:|---|
-| Tracked files | 388 | 560,908,671 | `git ls-files`; Python byte-count script |
+| Tracked files | 408 | 560,993,356 | `git ls-files`; Python byte-count script |
 | PDFs | 59 | 447,743,276 | suffix and byte scan |
 | PNG images | 100 | 93,218,729 | suffix and byte scan |
 | JPG figures | 202 | 18,297,296 | suffix and byte scan |
 | Notebooks | 7 | 1,275,119 | JSON parse succeeded for all seven |
-| Python | 2 | 315,363 | AST parse succeeded |
-| JSON snapshots | 12 | 33,035 | JSON files tracked under `data/results` |
-| Markdown/text/no-extension | 4 | 19,775 | README, requirements, license, `.gitignore`, `.python-version` |
+| Python | 12 | 334,140 | AST/source files, including Phase 1 harness |
+| JSON | 13 | 50,158 | Research snapshots plus Phase 1 manifest |
+| Markdown/text/no-extension | 14 | 74,638 | Root files, audit/architecture docs, and fixture README |
 | DOCX | 1 | 0 | `data/results/Metrics Results.docx`; tracked zero-byte artifact |
 
 The text/binary split from the scan is not a semantic classification: PDFs and images without NUL bytes can appear as text. Every tracked path was byte-readable; notebook JSON and Python AST parsing also succeeded. No unread tracked file was identified. The empty DOCX is readable as a zero-byte file, but has no document package to inspect.

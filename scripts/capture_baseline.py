@@ -4,12 +4,10 @@
 from __future__ import annotations
 
 import ast
-import dataclasses
 import hashlib
 import json
 import platform
 import subprocess
-import sys
 import argparse
 from importlib import metadata
 from pathlib import Path

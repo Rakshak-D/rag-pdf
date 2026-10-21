@@ -39,7 +39,7 @@ def test_valid_configuration_creates_only_explicit_temporary_directories(tmp_pat
     config = temporary_config(tmp_path)
     config.validate()
 
-    assert all(Path(path).is_dir() for path in (
+    configured_paths = tuple(Path(path) for path in (
         config.pdf_dir,
         config.images_dir,
         config.database_dir,
@@ -47,7 +47,14 @@ def test_valid_configuration_creates_only_explicit_temporary_directories(tmp_pat
         config.model_comparison_results_dir,
         config.retrieval_results_dir,
     ))
-    assert not (Path.cwd() / "data" / "database").exists() or config.database_dir != str(Path.cwd() / "data" / "database")
+    assert all(path.is_dir() for path in configured_paths)
+    assert all(path.is_relative_to(tmp_path) for path in configured_paths)
+
+
+def test_research_reset_default_is_recorded_without_adopting_it_for_production():
+    # This is the existing research default. The future workbench must choose
+    # an explicit, non-destructive policy; this phase does not change Config.
+    assert Config().reset_collections_on_start is True
 
 
 @pytest.mark.parametrize("field,value", [

@@ -50,7 +50,7 @@ Acceptance: UI can upload within policy, select an active index, run a query, in
 
 ## Proving `main` is unchanged
 
-At each phase run `git diff --name-only main -- notebooks` and `git diff --name-only main -- data`; both must remain empty for migration-only changes. Also compare `git hash-object` for every tracked research source against the pre-phase manifest and use a clean checkout of `main` as a reference. This audit itself adds only the seven requested documents on the current branch; it does not modify, merge, reset or force-push `main`.
+At each phase run `git diff --name-only main -- notebooks` and `git diff --name-only main -- data`; both must remain empty for migration-only changes. Also compare `git hash-object` for every tracked research source against the pre-phase manifest and use a clean checkout of `main` as a reference. The original audit added seven documents; Phase 1 subsequently added 20 baseline-harness files, including tests, scripts, fixtures, and documentation. This corrective work does not modify, merge, reset or force-push `main`.
 
 ## Proposed first implementation task
 
