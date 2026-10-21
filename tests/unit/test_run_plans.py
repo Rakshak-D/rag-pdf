@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -14,7 +15,12 @@ from backend.config import (
     index_fingerprint,
     run_configuration_fingerprint,
 )
-from backend.experiments import RunPlan, RunPlanIntegrityError, build_run_plan
+from backend.experiments import (
+    RUN_PLAN_SCHEMA_VERSION,
+    RunPlan,
+    RunPlanIntegrityError,
+    build_run_plan,
+)
 from notebooks.config import Config
 
 
@@ -69,6 +75,42 @@ def test_plan_serialization_is_stable_and_reconstructable():
     restored = RunPlan.from_serializable_json(serialized)
     assert restored.to_serializable_json() == serialized
     restored.verify_integrity()
+
+
+def test_supported_plan_schema_version_is_accepted():
+    plan = build_run_plan(safe_config(), MANIFEST_HASH)
+    assert plan.plan_schema_version == RUN_PLAN_SCHEMA_VERSION
+    assert RunPlan.model_validate(plan.model_dump(mode="json")).plan_schema_version == "1"
+
+
+def test_unsupported_plan_schema_version_is_rejected_by_model_and_loader():
+    plan = build_run_plan(safe_config(), MANIFEST_HASH)
+    payload = plan.model_dump(mode="json")
+    payload["plan_schema_version"] = "2"
+    with pytest.raises(ValidationError, match="unsupported plan_schema_version"):
+        RunPlan.model_validate(payload)
+    with pytest.raises(RunPlanIntegrityError, match="schema validation"):
+        RunPlan.from_serializable_json(json.dumps(payload))
+
+
+def _serialized_tamper(plan: RunPlan, field: str, value) -> str:
+    payload = plan.model_dump(mode="json")
+    payload[field] = value
+    return json.dumps(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("document_manifest_hash", "b" * 64, "index fingerprint mismatch"),
+        ("index_fingerprint", "b" * 64, "index fingerprint mismatch"),
+        ("run_fingerprint", "b" * 64, "run fingerprint mismatch"),
+    ],
+)
+def test_serialized_loader_rejects_modified_identity_values(field, value, message):
+    plan = build_run_plan(safe_config(), MANIFEST_HASH)
+    with pytest.raises(RunPlanIntegrityError, match=message):
+        RunPlan.from_serializable_json(_serialized_tamper(plan, field, value))
 
 
 def test_index_and_run_fingerprints_are_stable_for_identical_inputs():
@@ -140,6 +182,19 @@ def test_integrity_verification_detects_corrupt_configuration_snapshot():
         tampered.verify_integrity()
 
 
+def test_serialized_loader_rejects_invalid_configuration_snapshot():
+    plan = build_run_plan(safe_config(), MANIFEST_HASH)
+    payload = plan.model_dump(mode="json")
+    snapshot = json.loads(payload["resolved_config_json"])
+    snapshot["chunk_overlap_tokens"] = snapshot["chunk_max_tokens"]
+    payload["resolved_config_json"] = json.dumps(snapshot)
+    payload["configuration_snapshot_hash"] = hashlib.sha256(
+        payload["resolved_config_json"].encode("utf-8")
+    ).hexdigest()
+    with pytest.raises(RunPlanIntegrityError, match="snapshot"):
+        RunPlan.from_serializable_json(json.dumps(payload))
+
+
 def test_integrity_verification_detects_valid_but_tampered_safety_policy():
     plan = build_run_plan(safe_config(), MANIFEST_HASH)
     payload = plan.model_dump(mode="json")
@@ -149,6 +204,19 @@ def test_integrity_verification_detects_valid_but_tampered_safety_policy():
     tampered = RunPlan.model_validate(payload)
     with pytest.raises(RunPlanIntegrityError, match="snapshot hash"):
         tampered.verify_integrity()
+
+
+def test_serialized_loader_rejects_unsafe_destructive_policy():
+    plan = build_run_plan(safe_config(), MANIFEST_HASH)
+    payload = plan.model_dump(mode="json")
+    snapshot = json.loads(payload["resolved_config_json"])
+    snapshot["workbench_policy"]["allow_destructive_index_reset"] = False
+    payload["resolved_config_json"] = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    payload["configuration_snapshot_hash"] = hashlib.sha256(
+        payload["resolved_config_json"].encode("utf-8")
+    ).hexdigest()
+    with pytest.raises(RunPlanIntegrityError, match="safety validation"):
+        RunPlan.from_serializable_json(json.dumps(payload))
 
 
 def test_invalid_hashes_and_invalid_mapping_contracts_are_rejected():

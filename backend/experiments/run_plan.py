@@ -52,7 +52,17 @@ class RunPlan(BaseModel):
             raise ValueError("value must be exactly 64 hexadecimal characters")
         return value.lower()
 
-    @field_validator("plan_schema_version", "resolved_config_json")
+    @field_validator("plan_schema_version")
+    @classmethod
+    def validate_plan_schema_version(cls, value: str) -> str:
+        if value != RUN_PLAN_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported plan_schema_version {value!r}; "
+                f"supported version is {RUN_PLAN_SCHEMA_VERSION!r}"
+            )
+        return value
+
+    @field_validator("resolved_config_json")
     @classmethod
     def validate_non_empty(cls, value: str) -> str:
         if not value.strip():
@@ -87,13 +97,20 @@ class RunPlan(BaseModel):
         if not isinstance(payload, dict):
             raise RunPlanIntegrityError("serialized run plan must be a JSON object")
         try:
-            return cls.model_validate(payload)
+            plan = cls.model_validate(payload)
         except Exception as exc:
             raise RunPlanIntegrityError("serialized run plan failed schema validation") from exc
+        plan.verify_integrity()
+        return plan
 
     def verify_integrity(self) -> None:
         """Recompute both fingerprints from the stored snapshot and compare."""
 
+        if self.plan_schema_version != RUN_PLAN_SCHEMA_VERSION:
+            raise RunPlanIntegrityError(
+                f"unsupported plan_schema_version {self.plan_schema_version!r}; "
+                f"supported version is {RUN_PLAN_SCHEMA_VERSION!r}"
+            )
         actual_snapshot_hash = hashlib.sha256(self.resolved_config_json.encode("utf-8")).hexdigest()
         if actual_snapshot_hash != self.configuration_snapshot_hash:
             raise RunPlanIntegrityError(

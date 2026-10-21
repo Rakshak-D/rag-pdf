@@ -78,12 +78,21 @@ semantics and is not included in the run fingerprint.
 `RunPlan.verify_integrity()` reparses the stored configuration snapshot,
 recomputes the index and run fingerprints, and raises
 `RunPlanIntegrityError` on manifest, fingerprint, or snapshot corruption.
+`RunPlan.from_serializable_json()` performs the same verification before
+returning a plan, so ordinary deserialization cannot be mistaken for a
+verified plan. The supported `plan_schema_version` is checked during model
+validation and again during integrity verification; unknown versions are not
+interpreted as the current schema.
 `resolved_config()` always returns a newly parsed configuration object, so a
 caller cannot mutate the stored snapshot through the returned object.
 
-The plan proves only that the intended configuration and document identity are
-internally consistent. It does not prove immutable model weights, successful
-index construction, reproducible model outputs, or execution-engine behavior.
+These are consistency checks, not cryptographic authenticity. The hashes are
+unkeyed: a party able to rewrite a plan and recompute every related hash can
+create a self-consistent replacement. The current plan is not signed or
+tamper-proof. If later persistence/security requirements need stronger
+authenticity, use a trusted signature or an independently trusted stored digest.
+The plan also does not prove immutable model weights, successful index
+construction, reproducible model outputs, or execution-engine behavior.
 
 Mapping inputs to `canonical_index_definition()` and `index_fingerprint()` are
 intentionally legacy-only. A mapping containing `workbench_policy` is rejected
