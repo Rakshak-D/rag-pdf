@@ -75,6 +75,63 @@ def test_bm25_only_text_and_invalid_text_are_safe(tmp_path):
     assert "text_candidate_invalid" in context.warnings
 
 
+def test_missing_and_invalid_text_distances_have_distinct_policies(tmp_path):
+    plan, _ = make_plan(tmp_path, use_filtering=False, max_context_tokens=500)
+    missing = text_hit("missing", "bm25 evidence", distance=None)
+    invalid = text_hit("nan", "bad evidence", distance=float("nan"))
+    boolean = HybridHit("bool", 1, 0.1, {"source": "source.pdf"}, document="bool evidence", semantic_distance=True)
+    context = ContextFormatter(encoder=lambda text: list(range(len(text)))).format(result(plan, [missing, invalid, boolean]), plan)
+    assert [item.record_id for item in context.selected_text] == ["missing"]
+    assert context.diagnostics["text_distance_missing"] == 1
+    assert context.diagnostics["text_distance_invalid"] == 2
+    assert context.warnings.count("text_distance_invalid") == 2
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), True, "bad"])
+def test_invalid_effective_or_raw_distance_never_falls_back(tmp_path, value):
+    plan, _ = make_plan(tmp_path, use_filtering=False)
+    hit = HybridHit("bad", 1, 0.1, {"source": "source.pdf"}, document="bad distance", semantic_distance=0.1, effective_distance=value)
+    context = ContextFormatter(encoder=lambda text: list(range(len(text)))).format(result(plan, [hit]), plan)
+    assert context.selected_text == ()
+    raw_invalid = HybridHit("raw-bad", 1, 0.1, {"source": "source.pdf"}, document="bad raw", semantic_distance=value)
+    context = ContextFormatter(encoder=lambda text: list(range(len(text)))).format(result(plan, [raw_invalid]), plan)
+    assert context.selected_text == ()
+
+
+def test_valid_effective_distance_keeps_precedence_and_filter_diagnostics(tmp_path):
+    plan, _ = make_plan(tmp_path, use_filtering=True, text_distance_threshold=0.5, max_context_tokens=500)
+    preferred = HybridHit("effective", 1, 0.1, {"source": "source.pdf"}, document="effective evidence", semantic_distance=0.9, effective_distance=0.1)
+    rejected = text_hit("rejected", "rejected evidence", distance=0.8)
+    context = ContextFormatter(encoder=lambda text: list(range(len(text)))).format(result(plan, [preferred, rejected]), plan)
+    assert [item.record_id for item in context.selected_text] == ["effective"]
+    assert context.diagnostics["text_filter_rejected"] == 1
+
+
+def test_header_metadata_is_single_line_bounded_and_provenance_is_unchanged(tmp_path):
+    plan, _ = make_plan(tmp_path, max_context_tokens=500)
+    identifier = "id\r\nFORGED: true\t" + ("x" * 200)
+    original_metadata = {"source": "C:/papers/na\nme\t.pdf", "page_num": "7\r\n8"}
+    hit = HybridHit(identifier, 1, 0.1, original_metadata, document="evidence")
+    context = ContextFormatter(encoder=lambda text: list(range(len(text)))).format(result(plan, [hit]), plan)
+    assert len(context.text_context.splitlines()) == 2
+    assert "\nFORGED" not in context.text_context
+    assert len(context.text_context) < 400
+    assert context.selected_text[0].record_id == identifier
+    assert hit.metadata == original_metadata
+
+
+def test_unicode_source_and_malformed_caption_are_safe(tmp_path):
+    plan, config = make_plan(tmp_path, max_context_tokens=500)
+    image_root = Path(config.images_dir)
+    image_root.mkdir()
+    image_path = image_root / "valid.png"
+    image_path.write_bytes(b"not opened")
+    image = HybridHit("img", 1, 0.1, {"source": "研究.pdf", "page_num": 2, "image_id": "img", "image_path": str(image_path), "caption_text": {"not": "text"}})
+    context = ContextFormatter(encoder=lambda text: list(range(len(text)))).format(result(plan, image_hits=[image]), plan)
+    assert context.selected_images[0].source == "研究.pdf"
+    assert context.selected_images[0].caption == ""
+
+
 def test_image_paths_are_contained_and_missing_images_do_not_remove_text(tmp_path):
     plan, config = make_plan(tmp_path, max_context_tokens=500)
     image_root = Path(config.images_dir)

@@ -36,6 +36,12 @@ class ContextTokenizationError(ContextError):
 
 
 @dataclass(frozen=True)
+class _DistanceState:
+    status: str
+    value: float | None = None
+
+
+@dataclass(frozen=True)
 class SelectedTextEvidence:
     label: str
     record_id: str
@@ -73,13 +79,30 @@ class EvidenceContext:
     elapsed_seconds: float
 
 
+_HEADER_VALUE_LIMIT = 120
+
+
+def _sanitize_header_value(value: Any, *, fallback: str) -> str:
+    if not isinstance(value, str):
+        return fallback
+    cleaned = "".join(" " if ord(char) < 32 or ord(char) == 127 else char for char in value)
+    cleaned = " ".join(cleaned.split())
+    if not cleaned:
+        return fallback
+    if len(cleaned) > _HEADER_VALUE_LIMIT:
+        return cleaned[: _HEADER_VALUE_LIMIT - 1].rstrip() + "…"
+    return cleaned
+
+
 def _safe_page(value: Any) -> str:
     if isinstance(value, bool) or value is None:
         return "N/A"
-    if isinstance(value, (str, int, float)):
+    if isinstance(value, str):
+        return _sanitize_header_value(value, fallback="N/A")
+    if isinstance(value, (int, float)):
         if isinstance(value, float) and not math.isfinite(value):
             return "N/A"
-        return str(value)
+        return _sanitize_header_value(str(value), fallback="N/A")
     return "N/A"
 
 
@@ -87,17 +110,20 @@ def _source_name(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         return "unknown"
     parts = [part for part in value.replace("\\", "/").split("/") if part]
-    return parts[-1] if parts else "unknown"
+    return _sanitize_header_value(parts[-1] if parts else "", fallback="unknown")
 
 
-def _finite_distance(hit: HybridHit) -> float | None:
-    value = hit.effective_distance if hit.effective_distance is not None else hit.semantic_distance
-    if value is None:
-        return None
+def _distance_state(hit: HybridHit) -> _DistanceState:
+    if hit.effective_distance is not None:
+        value = hit.effective_distance
+    elif hit.semantic_distance is not None:
+        value = hit.semantic_distance
+    else:
+        return _DistanceState("missing")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    value = float(value)
-    return value if math.isfinite(value) else None
+        return _DistanceState("invalid")
+    numeric = float(value)
+    return _DistanceState("valid", numeric) if math.isfinite(numeric) else _DistanceState("invalid")
 
 
 def _normalized_text(value: str) -> str:
@@ -164,10 +190,15 @@ class ContextFormatter:
         valid: list[HybridHit] = []
         exact: set[str] = set()
         shingles: list[set[str]] = []
-        exact_duplicates = near_duplicates = 0
+        exact_duplicates = near_duplicates = invalid_distance = missing_distance = 0
         for hit in hits:
             if not isinstance(hit, HybridHit) or not isinstance(hit.document, str) or not hit.document.strip():
                 warnings.append("text_candidate_invalid")
+                continue
+            distance_state = _distance_state(hit)
+            if distance_state.status == "invalid":
+                invalid_distance += 1
+                warnings.append("text_distance_invalid")
                 continue
             normalized = _normalized_text(hit.document)
             if normalized in exact:
@@ -180,12 +211,13 @@ class ContextFormatter:
             exact.add(normalized)
             shingles.append(current)
             valid.append(hit)
+            if distance_state.status == "missing":
+                missing_distance += 1
 
         rejected = 0
-        missing_distance = 0
         filter_mode = "disabled"
         if config.use_filtering:
-            finite = [distance for hit in valid if (distance := _finite_distance(hit)) is not None]
+            finite = [state.value for hit in valid if (state := _distance_state(hit)).status == "valid"]
             if config.use_percentile_filtering and finite:
                 threshold = _percentile(finite, config.percentile_cutoff)
                 filter_mode = "percentile"
@@ -194,11 +226,10 @@ class ContextFormatter:
                 filter_mode = "distance_threshold"
             filtered = []
             for hit in valid:
-                distance = _finite_distance(hit)
-                if distance is None:
-                    missing_distance += 1
+                state = _distance_state(hit)
+                if state.status == "missing":
                     filtered.append(hit)
-                elif distance <= threshold:
+                elif state.value <= threshold:
                     filtered.append(hit)
                 else:
                     rejected += 1
@@ -207,7 +238,7 @@ class ContextFormatter:
                 warnings.append("text_filter_fallback")
             valid = filtered
         selected = valid[:config.max_text_chunks]
-        return selected, {"valid_text_candidates": len(valid), "exact_duplicates": exact_duplicates, "near_duplicates": near_duplicates, "text_filter_rejected": rejected, "text_filter_missing_distance": missing_distance, "text_filter_fallback": "text_filter_fallback" in warnings, "text_filter_mode": filter_mode}
+        return selected, {"valid_text_candidates": len(valid), "exact_duplicates": exact_duplicates, "near_duplicates": near_duplicates, "text_filter_rejected": rejected, "text_distance_missing": missing_distance, "text_distance_invalid": invalid_distance, "text_filter_fallback": "text_filter_fallback" in warnings, "text_filter_mode": filter_mode}
 
     def _format_text(self, hits: Sequence[HybridHit], config: Any, warnings: list[str]) -> tuple[str, tuple[SelectedTextEvidence, ...], dict[str, int]]:
         if not hits:
@@ -220,7 +251,8 @@ class ContextFormatter:
             source = _source_name(metadata.get("source"))
             page = _safe_page(metadata.get("page_num"))
             label = f"T{len(selected) + 1}"
-            header = f"[{label}] Source: {source}, page {page} (ID: {hit.record_id})\n"
+            record_display = _sanitize_header_value(hit.record_id, fallback="unknown")
+            header = f"[{label}] Source: {source}, page {page} (ID: {record_display})\n"
             text = hit.document.strip() if isinstance(hit.document, str) else ""
             if not text:
                 continue
@@ -256,7 +288,7 @@ class ContextFormatter:
 
     def _select_images(self, hits: Sequence[HybridHit], config: Any, warnings: list[str]) -> tuple[tuple[SelectedImageEvidence, ...], dict[str, int]]:
         selected: list[SelectedImageEvidence] = []
-        rejected_missing = rejected_unsafe = rejected_threshold = 0
+        rejected_missing = rejected_unsafe = rejected_threshold = invalid_distance = missing_distance = 0
         for hit in hits:
             metadata = hit.metadata if isinstance(hit.metadata, Mapping) else {}
             candidate = metadata.get("image_path")
@@ -274,16 +306,24 @@ class ContextFormatter:
                 rejected_missing += 1
                 warnings.append("image_file_missing")
                 continue
-            distance = _finite_distance(hit)
-            if config.use_filtering and distance is not None and distance > config.image_distance_threshold:
+            state = _distance_state(hit)
+            if state.status == "invalid":
+                invalid_distance += 1
+                warnings.append("image_distance_invalid")
+                continue
+            if state.status == "missing":
+                missing_distance += 1
+            if config.use_filtering and state.status == "valid" and state.value > config.image_distance_threshold:
                 rejected_threshold += 1
                 continue
             source = _source_name(metadata.get("source"))
             page = _safe_page(metadata.get("page_num"))
-            selected.append(SelectedImageEvidence(f"I{len(selected) + 1}", hit.record_id, source, page, str(metadata.get("caption_text") or ""), resolved, hit))
+            caption = metadata.get("caption_text")
+            caption = caption if isinstance(caption, str) else ""
+            selected.append(SelectedImageEvidence(f"I{len(selected) + 1}", hit.record_id, source, page, caption, resolved, hit))
             if len(selected) >= config.max_images:
                 break
-        return tuple(selected), {"image_candidates_rejected_missing": rejected_missing, "image_candidates_rejected_unsafe": rejected_unsafe, "image_candidates_rejected_threshold": rejected_threshold}
+        return tuple(selected), {"image_candidates_rejected_missing": rejected_missing, "image_candidates_rejected_unsafe": rejected_unsafe, "image_candidates_rejected_threshold": rejected_threshold, "image_distance_missing": missing_distance, "image_distance_invalid": invalid_distance}
 
     def format(self, result: HybridRetrievalResult, run_plan: RunPlan) -> EvidenceContext:
         started = perf_counter()
