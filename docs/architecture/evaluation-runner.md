@@ -51,6 +51,9 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | M3 | `HybridRetrievalResult.total_elapsed_seconds` | seconds, lower is better |
 | M5 | `100 * required pages found in retrieved pages / required pages` | percent, higher is better |
 | M9 | `len(context.text_context)` for non-empty context | characters, descriptive |
+| M6 | Stemmed ROUGE-1 F-measure against the selected reference | f-measure, higher is better |
+| M7 | Stemmed ROUGE-2 F-measure against the selected reference | f-measure, higher is better |
+| M8 | Stemmed ROUGE-L F-measure against the selected reference | f-measure, higher is better |
 | M16 | `GenerationResult.elapsed_seconds` for successful generation | seconds, lower is better |
 
 M5 is skipped when a case has no required pages. M9 is skipped for missing or
@@ -58,6 +61,20 @@ empty text context. Failed or unreached stages receive explicit failed/skipped
 observations. A measured value of `0.0` remains computed; missing data is never
 converted into zero. No other metrics or metric formulas are executed in this
 phase.
+
+For M6–M8, a stripped `BenchmarkCase.reference_text` is used as ground truth
+only when it is longer than 20 characters. Otherwise the formatted context is
+used as a `context_pseudoreference`, capped at
+`min(rouge_top_k_chunks, max_text_chunks)` chunks split on blank lines. Empty
+context has no eligible reference. One lazy stemmed scorer computes all three
+ROUGE variants. Missing responses/references are skipped, unavailable scorer
+dependencies are explicit unavailable observations, and scorer failures are
+explicit failed observations. A valid score of `0.0` remains computed.
+
+ROUGE overlap is not a factuality, entailment, completeness, or hallucination
+judge. Reference text exists only during transient metric calculation and is
+not copied into traces or reports. Aggregates use `mixed_reference` when their
+observations contain more than one reference kind.
 
 Latency values are runtime measurements and are not expected to be identical
 between executions. Trace and evaluation fingerprints retain only their

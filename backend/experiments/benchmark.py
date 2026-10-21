@@ -36,6 +36,7 @@ class BenchmarkCase:
     text_k: int | None = None
     image_k: int | None = None
     required_pages: tuple[str, ...] = ()
+    reference_text: str | None = None
 
     def __post_init__(self) -> None:
         _identity(self.case_id, label="case_id")
@@ -57,6 +58,13 @@ class BenchmarkCase:
             normalized.append(page)
         if len(set(normalized)) != len(normalized):
             raise BenchmarkContractError("required_pages must not contain duplicates")
+        if self.reference_text is not None and not isinstance(self.reference_text, str):
+            raise BenchmarkContractError("reference_text must be a string or None")
+        if isinstance(self.reference_text, str):
+            reference = self.reference_text.strip()
+            if len(reference) > 200_000:
+                raise BenchmarkContractError("reference_text is too long")
+            object.__setattr__(self, "reference_text", reference)
         object.__setattr__(self, "query", self.query.strip())
         object.__setattr__(self, "required_pages", tuple(normalized))
 

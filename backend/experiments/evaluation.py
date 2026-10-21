@@ -20,6 +20,7 @@ from backend.experiments.tracing import QueryTrace, _HASH_RE
 EVALUATION_SCHEMA_VERSION = "1"
 _ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
 _REFERENCE_KINDS = {"ground_truth", "context_pseudoreference", "retrieved_context", "no_reference", "not_applicable"}
+_AGGREGATE_REFERENCE_KINDS = _REFERENCE_KINDS | {"mixed_reference"}
 _DIRECTIONS = {"higher_is_better", "lower_is_better", "descriptive", "not_applicable"}
 
 
@@ -134,7 +135,7 @@ class MetricAggregate:
         if self.status == "no_eligible_values" and (self.value is not None or eligible != 0 or excluded == 0):
             raise EvaluationContractError("no_eligible_values aggregate has invalid counts or value")
         _value(self.value, label="aggregate value", required=self.status != "no_eligible_values")
-        if self.optimization_direction not in _DIRECTIONS or self.reference_kind not in _REFERENCE_KINDS:
+        if self.optimization_direction not in _DIRECTIONS or self.reference_kind not in _AGGREGATE_REFERENCE_KINDS:
             raise EvaluationContractError("aggregate provenance fields are invalid")
         _id(self.implementation_version, label="implementation_version")
         if self.model_identifier is not None:
@@ -205,9 +206,13 @@ def build_evaluation_report(
     for aggregate in aggregate_tuple:
         related = [item for item in observation_tuple if item.metric_id == aggregate.metric_id]
         if related:
-            for field in ("metric_name", "unit", "optimization_direction", "reference_kind", "implementation_version"):
+            for field in ("metric_name", "unit", "optimization_direction", "implementation_version"):
                 if any(getattr(item, field) != getattr(aggregate, field) for item in related):
                     raise EvaluationContractError(f"aggregate {aggregate.metric_id} metadata disagrees with observations")
+            observation_reference_kinds = {item.reference_kind for item in related}
+            expected_reference_kind = next(iter(observation_reference_kinds)) if len(observation_reference_kinds) == 1 else "mixed_reference"
+            if aggregate.reference_kind != expected_reference_kind:
+                raise EvaluationContractError(f"aggregate {aggregate.metric_id} reference kind disagrees with observations")
             model_values = {item.model_identifier for item in related if item.model_identifier is not None}
             if len(model_values) > 1:
                 raise EvaluationContractError(f"aggregate {aggregate.metric_id} has conflicting model identifiers")

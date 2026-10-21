@@ -15,6 +15,7 @@ from backend.engine.retrieval import HybridRetrievalResult, query_id_for
 from backend.experiments.benchmark import BenchmarkCase, BenchmarkSuite
 from backend.experiments.evaluation import MetricAggregate, MetricObservation, EvaluationReport, build_evaluation_report
 from backend.experiments.run_plan import RunPlan
+from backend.experiments.rouge_metrics import RougeScorerAdapter, RougeBatchResult, select_reference
 from backend.experiments.tracing import TraceFailure, QueryTrace, build_failed_query_trace, build_query_trace
 
 
@@ -94,9 +95,9 @@ class EvaluationRunner:
     @staticmethod
     def _pages(result: HybridRetrievalResult) -> set[str]:
         pages: set[str] = set()
-        for hit in (*result.text_hits, *result.image_hits):
+        for hit in result.text_hits:
             metadata = hit.metadata if isinstance(hit.metadata, dict) else {}
-            value = metadata.get("page_num")
+            value = metadata.get("page_num") or metadata.get("page")
             if isinstance(value, bool) or not isinstance(value, (str, int, float)):
                 continue
             page = str(value).strip()
@@ -104,7 +105,27 @@ class EvaluationRunner:
                 pages.add(page)
         return pages
 
-    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, model_identifier: str | None = None) -> list[MetricObservation]:
+    @staticmethod
+    def _rouge_metrics(trace_id: str, case: BenchmarkCase, context: EvidenceContext | None, generation: GenerationResult | None, config: object, scorer: RougeScorerAdapter) -> list[MetricObservation]:
+        names = (("M6", "ROUGE-1", "legacy-m6-v1", 0), ("M7", "ROUGE-2", "legacy-m7-v1", 1), ("M8", "ROUGE-L", "legacy-m8-v1", 2))
+        response = generation.response.strip() if generation is not None and generation.status == "succeeded" and isinstance(generation.response, str) else ""
+        if not response:
+            reason = "generation_failed" if generation is not None and generation.status == "failed" else "generation_not_reached"
+            result = RougeBatchResult("skipped", "no_reference", reason_code=reason)
+        else:
+            selection = select_reference(case.reference_text, context.text_context if context is not None else "", top_k_chunks=config.rouge_top_k_chunks, max_text_chunks=config.max_text_chunks)
+            if selection.text is None:
+                result = RougeBatchResult("skipped", selection.kind, reason_code="no_reference")
+            else:
+                result = scorer.score(selection.text, response, selection.kind)
+        observations: list[MetricObservation] = []
+        for metric_id, name, version, index in names:
+            value = result.values[index] if result.values is not None else None
+            note = "Stemmed ROUGE F-measure against a sufficiently long ground-truth answer or capped context pseudo-reference."
+            observations.append(_observation(trace_id, metric_id, name, result.status, value, "f-measure", "higher_is_better", result.reference_kind, version, result.reason_code, note))
+        return observations
+
+    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, model_identifier: str | None = None, config: object, rouge_scorer: RougeScorerAdapter) -> list[MetricObservation]:
         observations: list[MetricObservation] = []
         retrieval_available = retrieval is not None and (failure is None or failure.stage != "retrieval")
         if retrieval_available:
@@ -131,6 +152,7 @@ class EvaluationRunner:
             observations.append(_observation(trace_id, "M16", "End-to-end generation latency", "failed", None, "seconds", "lower_is_better", "no_reference", "legacy-m16-v1", reason, "Failed generation is excluded from the legacy latency metric.", model_identifier=model_identifier))
         else:
             observations.append(_observation(trace_id, "M16", "End-to-end generation latency", "skipped", None, "seconds", "lower_is_better", "no_reference", "legacy-m16-v1", "generation_not_reached", "Generation was not reached."))
+        observations.extend(self._rouge_metrics(trace_id, case, context, generation, config, rouge_scorer))
         return observations
 
     @staticmethod
@@ -143,7 +165,9 @@ class EvaluationRunner:
         value = sum(eligible) / len(eligible) if eligible else None
         status = "computed" if eligible and not (skipped or failed or unavailable) else "partial" if eligible else "no_eligible_values"
         sample = related[0]
-        return MetricAggregate(metric_id, sample.metric_name, status, value, sample.unit, sample.optimization_direction, sample.reference_kind, sample.implementation_version, len(eligible), skipped, failed, unavailable, model_identifier=model_identifier, methodology_note=sample.methodology_note)
+        reference_kinds = {item.reference_kind for item in related}
+        reference_kind = next(iter(reference_kinds)) if len(reference_kinds) == 1 else "mixed_reference"
+        return MetricAggregate(metric_id, sample.metric_name, status, value, sample.unit, sample.optimization_direction, reference_kind, sample.implementation_version, len(eligible), skipped, failed, unavailable, model_identifier=model_identifier, methodology_note=sample.methodology_note)
 
     def run(self, suite: BenchmarkSuite) -> EvaluationRunResult:
         cases = self._validate_suite(suite)
@@ -151,6 +175,7 @@ class EvaluationRunner:
         observations: list[MetricObservation] = []
         outcomes: list[EvaluationCaseOutcome] = []
         config = self._plan.resolved_config()
+        rouge_scorer = RougeScorerAdapter()
         for case in cases:
             text_k = case.text_k if "text" in case.modalities else None
             image_k = case.image_k if "image" in case.modalities else None
@@ -174,7 +199,7 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("retrieval", "retrieval_failed", exc)
                 trace = build_failed_query_trace(self._plan, query=case.query, modalities=case.modalities, text_k=text_k, image_k=image_k, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None))
+                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "retrieval", trace.trace_id, failure.error_code)); continue
             try:
                 context = self._context_formatter.format(retrieval_result, self._plan)
@@ -185,7 +210,7 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("context", "context_failed", exc)
                 trace = build_query_trace(retrieval_result, self._plan, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None))
+                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "context", trace.trace_id, failure.error_code)); continue
             generation_attempted = True
             reached = "generation"
@@ -203,10 +228,10 @@ class EvaluationRunner:
                 generation = None
                 failure = _failure("generation", "generation_failed", exc, attempts=getattr(exc, "attempts", None), elapsed=getattr(exc, "elapsed_seconds", None))
                 trace = build_query_trace(retrieval_result, self._plan, context=context, failure=failure)
-            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, model_identifier=config.llm_model if generation_attempted else None))
+            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, model_identifier=config.llm_model if generation_attempted else None, config=config, rouge_scorer=rouge_scorer))
             traces.append(trace)
             outcomes.append(EvaluationCaseOutcome(case.case_id, "succeeded" if trace.status == "succeeded" else "failed", reached, trace.trace_id, trace.error_code))
         m16_model = next((item.model_identifier for item in observations if item.metric_id == "M16" and item.status == "computed" and item.model_identifier is not None), None)
-        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else None) for metric_id in ("M3", "M5", "M9", "M16")]
+        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else None) for metric_id in ("M3", "M5", "M6", "M7", "M8", "M9", "M16")]
         report = build_evaluation_report(traces, observations, aggregates, run_fingerprint=self._plan.run_fingerprint, benchmark_id=suite.benchmark_id, benchmark_version=suite.benchmark_version)
         return EvaluationRunResult(report, tuple(traces), tuple(outcomes))

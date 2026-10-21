@@ -61,7 +61,15 @@ evaluation fingerprint from canonical report data. It excludes timestamps and
 mutable state and, like the trace hash, is not a cryptographic authenticity
 mechanism.
 
+Aggregates may use `mixed_reference` when related observations contain more
+than one precise reference kind. Individual observations may use
+`ground_truth` or `context_pseudoreference`, but never `mixed_reference`.
+Aggregate units, directions, formula versions, names, and model identifiers
+remain strictly validated.
+
 The existing notebook formulas and metric IDs remain the methodology source of
 truth described in `docs/audit/evaluation-metrics.md`. These contracts record
-their provenance and limitations but do not port or execute ROUGE, BLEU,
-METEOR, BERTScore, FCD, faithfulness, coverage, latency, or resource metrics.
+their provenance and limitations; the evaluation runner ports only the audited
+M6–M8 ROUGE formulas in addition to the existing bounded metrics. BLEU,
+METEOR, BERTScore, FCD, faithfulness, and other later metrics remain out of
+scope.

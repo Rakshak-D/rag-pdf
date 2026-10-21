@@ -43,9 +43,25 @@ def test_runner_completes_and_aggregates_four_metrics(tmp_path):
     output = runner.run(suite)
     assert output.outcomes[0].status == "succeeded"
     assert output.traces[0].status == "succeeded"
-    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M9", "M16"}
+    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M16"}
+    rouge1 = next(item for item in output.report.observations if item.metric_id == "M6")
+    assert rouge1.status == "computed" and rouge1.reference_kind == "context_pseudoreference"
+    assert "supported [T1]" not in repr(output.report)
     assert output.report.aggregates[1].value == 100.0
     assert output.report.aggregates[1].eligible_count == 1
+
+
+def test_m5_uses_text_pages_and_page_fallback_only(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+    image = HybridHit("image-1", 1, 0.1, {"page_num": 99}, caption="image", sources=("semantic",))
+    text_with_fallback = HybridHit("chunk-2", 1, 0.2, {"page": 7}, document="page fallback", sources=("semantic",))
+    changed = result.__class__(result.query_id, result.index_fingerprint, result.document_manifest_hash, result.modalities, result.effective_text_k, result.effective_image_k, (text_with_fallback,), (image,), result.fusion_strategy, result.effective_weights, result.diagnostics, result.modality_timings, result.total_elapsed_seconds, query_text=query)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5, required_pages=("7",)),))
+    output = EvaluationRunner(plan, lambda *_: changed, formatter, generation).run(suite)
+    assert next(item for item in output.report.observations if item.metric_id == "M5").value == 100.0
+    suite_image_page = BenchmarkSuite("bench2", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5, required_pages=("99",)),))
+    output_image_page = EvaluationRunner(plan, lambda *_: changed, formatter, generation).run(suite_image_page)
+    assert next(item for item in output_image_page.report.observations if item.metric_id == "M5").value == 0.0
 
 
 def test_runner_continues_after_retrieval_failure(tmp_path):

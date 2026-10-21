@@ -7,6 +7,7 @@ import pytest
 from backend.experiments import EvaluationContractError, MetricAggregate, MetricObservation, build_evaluation_report
 from tests.unit.test_query_tracing import chain
 from backend.experiments import build_query_trace
+from backend.engine.retrieval import query_id_for
 
 
 def report_inputs(tmp_path):
@@ -75,3 +76,21 @@ def test_aggregate_model_identifier_must_match_computed_observations(tmp_path):
     aggregate = MetricAggregate("m1", "Metric", "computed", 1.0, "score", "higher_is_better", "no_reference", "v1", 1, 0, 0, 0, model_identifier="model-b")
     with pytest.raises(EvaluationContractError):
         build_evaluation_report([trace], [observation], [aggregate], run_fingerprint=plan.run_fingerprint, benchmark_id="bench", benchmark_version="1")
+
+
+def test_mixed_reference_kinds_require_mixed_aggregate(tmp_path):
+    from tests.unit.test_query_tracing import chain
+    plan, retrieval, _, _ = chain(tmp_path)
+    trace = build_query_trace(retrieval, plan)
+    retrieval_two = retrieval.__class__(query_id_for("Another question", plan, retrieval.modalities, 5, None), plan.index_fingerprint, plan.document_manifest_hash, retrieval.modalities, 5, None, retrieval.text_hits, (), retrieval.fusion_strategy, retrieval.effective_weights, retrieval.diagnostics, retrieval.modality_timings, retrieval.total_elapsed_seconds, query_text="Another question")
+    trace_two = build_query_trace(retrieval_two, plan)
+    observation_gt = MetricObservation(trace.trace_id, "m1", "Metric", "computed", 0.5, "f-measure", "higher_is_better", "ground_truth", "v1")
+    observation_context = MetricObservation(trace_two.trace_id, "m1", "Metric", "computed", 0.25, "f-measure", "higher_is_better", "context_pseudoreference", "v1")
+    aggregate_mixed = MetricAggregate("m1", "Metric", "computed", 0.375, "f-measure", "higher_is_better", "mixed_reference", "v1", 2, 0, 0, 0)
+    report = build_evaluation_report([trace, trace_two], [observation_gt, observation_context], [aggregate_mixed], run_fingerprint=plan.run_fingerprint, benchmark_id="bench", benchmark_version="1")
+    assert report.aggregates[0].reference_kind == "mixed_reference"
+    wrong_aggregate = MetricAggregate("m1", "Metric", "computed", 0.375, "f-measure", "higher_is_better", "ground_truth", "v1", 2, 0, 0, 0)
+    with pytest.raises(EvaluationContractError):
+        build_evaluation_report([trace, trace_two], [observation_gt, observation_context], [wrong_aggregate], run_fingerprint=plan.run_fingerprint, benchmark_id="bench", benchmark_version="1")
+    with pytest.raises(EvaluationContractError):
+        MetricObservation(trace.trace_id, "m3", "Metric", "computed", 0.1, "f-measure", "higher_is_better", "mixed_reference", "v1")
