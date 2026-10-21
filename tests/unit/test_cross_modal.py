@@ -35,6 +35,28 @@ def test_malformed_relationships_and_same_filename_different_sources_do_not_boos
     assert image_out[0].cross_modal_boost == 0.0
 
 
+def test_same_document_basename_fallback_requires_matching_source():
+    text = HybridHit("chunk", 1, 0.5, {"source": "report.pdf", "related_image_ids": ["page_1_img_2.png"]}, document="evidence")
+    image = HybridHit("img", 1, 0.4, {"image_path": "C:/report/page_1_img_2.png", "source": "report.pdf"})
+    assert apply_cross_modal_boosts((text,), (image,), config())[0][0].cross_modal_boost == 0.1
+
+
+def test_cross_document_bare_and_path_references_do_not_match_same_basename():
+    image = HybridHit("img", 1, 0.4, {"image_path": "C:/two/page_1_img_2.png", "source": "two.pdf"})
+    for reference in ("page_1_img_2.png", "C:/one/page_1_img_2.png"):
+        text = HybridHit("chunk", 1, 0.5, {"source": "one.pdf", "related_image_ids": [reference]}, document="evidence")
+        assert apply_cross_modal_boosts((text,), (image,), config())[0][0].cross_modal_boost == 0.0
+
+
+def test_missing_source_metadata_is_conservative_for_basename_but_not_stable_id():
+    basename_text = HybridHit("chunk", 1, 0.5, {"related_image_ids": ["page_1_img_2.png"]}, document="evidence")
+    image = HybridHit("img", 1, 0.4, {"image_path": "C:/report/page_1_img_2.png"})
+    assert apply_cross_modal_boosts((basename_text,), (image,), config())[0][0].cross_modal_boost == 0.0
+    stable_text = HybridHit("chunk", 1, 0.5, {"related_image_ids": ["report_p1_i2"]}, document="evidence")
+    stable_image = HybridHit("report_p1_i2", 1, 0.4, {"image_id": "report_p1_i2"})
+    assert apply_cross_modal_boosts((stable_text,), (stable_image,), config())[0][0].cross_modal_boost == 0.1
+
+
 def test_disabled_boost_is_identity():
     text = HybridHit("chunk", 1, 0.5, {"related_image_ids": ["img"]}, document="evidence")
     image = HybridHit("img", 1, 0.4, {"image_id": "img"})

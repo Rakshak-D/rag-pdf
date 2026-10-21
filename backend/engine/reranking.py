@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import replace
 import math
 from collections.abc import Callable, Sequence
+from numbers import Real
 from typing import Any
+
+import numpy as np
 
 
 class RerankerError(RuntimeError):
@@ -83,14 +86,18 @@ class CrossEncoderReranker:
         except Exception as exc:
             raise RerankerInferenceError("cross-encoder inference failed") from exc
         try:
-            result = list(scores)
+            array = np.asarray(scores)
         except (TypeError, ValueError) as exc:
-            raise RerankerInferenceError("cross-encoder returned a non-sequence") from exc
-        if len(result) != len(values):
+            raise RerankerInferenceError("cross-encoder returned a non-numeric sequence") from exc
+        if array.ndim == 2 and array.shape[1] == 1:
+            array = array.reshape(-1)
+        elif array.ndim != 1:
+            raise RerankerInferenceError("cross-encoder returned an ambiguous score shape")
+        if len(array) != len(values):
             raise RerankerInferenceError("cross-encoder returned the wrong number of scores")
         validated: list[float] = []
-        for score in result:
-            if isinstance(score, bool) or not isinstance(score, (int, float)):
+        for score in array.tolist():
+            if isinstance(score, bool) or not isinstance(score, Real):
                 raise RerankerInferenceError("cross-encoder returned a non-numeric score")
             value = float(score)
             if not math.isfinite(value):
@@ -124,9 +131,10 @@ class CrossEncoderReranker:
             has_fused = True
         boosts = [float(getattr(item, "cross_modal_boost", 0.0) or 0.0) for item in candidates]
         boost_norm = normalize_scores(boosts, neutral=0.0) if any(value > 0 for value in boosts) else [0.0] * len(candidates)
-        ranked: list[tuple[Any, float, float]] = []
+        ranked: list[tuple[Any, float, float, float]] = []
         for index, (item, score, ce, fn, bn) in enumerate(zip(candidates, raw, ce_norm, fused_norm, boost_norm)):
             final = self.config.reranker_ce_weight * ce + self.config.reranker_fused_weight * fn + self.config.reranker_boost_weight * bn if has_fused else ce
-            ranked.append((replace(item, reranker_score=score, reranker_normalized_score=ce, normalized_fused_score=fn, normalized_cross_modal_boost=bn, final_rank_score=round(float(final), 6), reranker_applied=True), float(final), float(getattr(item, "fused_score", 0.0) or 0.0)))
-        ranked.sort(key=lambda entry: (-entry[1], -entry[2]))
+            original_fused = float(getattr(item, "fused_score", 0.0) or 0.0)
+            ranked.append((replace(item, reranker_score=score, reranker_normalized_score=ce, normalized_fused_score=fn, normalized_cross_modal_boost=bn, final_rank_score=round(float(final), 6), reranker_applied=True), float(final), original_fused, float(score)))
+        ranked.sort(key=lambda entry: (-entry[1], -entry[2], -entry[3]))
         return [entry[0] for entry in ranked[:top_k]]

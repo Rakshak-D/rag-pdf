@@ -503,6 +503,7 @@ def retrieve_hybrid(query: str, run_plan: RunPlan, storage_root: str | Path, *, 
         text_hits, image_hits, warnings, boost_diag = apply_cross_modal_boosts(text_hits, image_hits, config)
         diagnostics["cross_modal"] = boost_diag
         rerank_elapsed = 0.0
+        candidate_pool_size = len(text_hits)
         if config.use_reranker and text_hits:
             rerank_started = perf_counter()
             try:
@@ -513,10 +514,10 @@ def retrieve_hybrid(query: str, run_plan: RunPlan, storage_root: str | Path, *, 
             except Exception as exc:
                 raise HybridRetrievalError("cross-encoder reranking failed") from exc
             rerank_elapsed = max(0.0, perf_counter() - rerank_started)
-            diagnostics["reranking"] = {"candidate_pool_size": len(text_hits), "final_result_count": len(text_hits), "enabled": True}
+            diagnostics["reranking"] = {"candidate_pool_size": candidate_pool_size, "final_result_count": len(text_hits), "enabled": True}
         else:
             text_hits = tuple(sorted(text_hits, key=lambda hit: (-(hit.boosted_fused_score if hit.boosted_fused_score is not None else hit.fused_score))))[:tk] if text_hits else ()
-            diagnostics["reranking"] = {"candidate_pool_size": len(text_hits), "final_result_count": len(text_hits), "enabled": False}
+            diagnostics["reranking"] = {"candidate_pool_size": candidate_pool_size, "final_result_count": len(text_hits), "enabled": False}
         image_hits = tuple(image_hits[:ik]) if ik is not None else image_hits
         text_hits = tuple(replace(hit, rank=index + 1) for index, hit in enumerate(text_hits))
         image_hits = tuple(replace(hit, rank=index + 1) for index, hit in enumerate(image_hits))

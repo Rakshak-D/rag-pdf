@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 
@@ -19,7 +19,7 @@ def _identity_from_path(value: str) -> str | None:
     match = re.fullmatch(r"page_(\d+)_img_(\d+)\.png", parts[-1], flags=re.IGNORECASE)
     if not match:
         return None
-    return f"{parts[-2]}_p{int(match.group(1))}_i{int(match.group(2))}"
+    return f"{parts[-2].casefold()}_p{int(match.group(1))}_i{int(match.group(2))}"
 
 
 def _source_stem(value: Any) -> str | None:
@@ -29,21 +29,22 @@ def _source_stem(value: Any) -> str | None:
     return name.rsplit(".", 1)[0].casefold()
 
 
-def _image_keys(metadata: Mapping[str, Any]) -> tuple[set[str], str | None]:
-    keys: set[str] = set()
+def _image_keys(metadata: Mapping[str, Any]) -> tuple[set[str], set[str], set[str], str | None]:
+    stable: set[str] = set()
+    derived: set[str] = set()
+    basenames: set[str] = set()
     image_id = metadata.get("image_id")
     if isinstance(image_id, str) and image_id.strip():
-        keys.add(image_id)
-        keys.add(image_id.replace("\\", "/").split("/")[-1])
+        stable.add(image_id.casefold())
     image_path = metadata.get("image_path")
     if isinstance(image_path, str) and image_path.strip():
         parts = _path_parts(image_path)
         if parts:
-            keys.add(parts[-1])
+            basenames.add(parts[-1].casefold())
         identity = _identity_from_path(image_path)
         if identity:
-            keys.add(identity)
-    return {key for key in keys if key}, _source_stem(metadata.get("source"))
+            derived.add(identity.casefold())
+    return stable, derived, basenames, _source_stem(metadata.get("source"))
 
 
 def _related(metadata: Mapping[str, Any]) -> tuple[list[str], bool]:
@@ -55,18 +56,24 @@ def _related(metadata: Mapping[str, Any]) -> tuple[list[str], bool]:
     return [value for value in value if isinstance(value, str) and value.strip()], any(not isinstance(value, str) for value in value)
 
 
-def _matches(reference: str, image_keys: set[str], image_source: str | None, text_source: str | None) -> bool:
+def _matches(reference: str, stable: set[str], derived: set[str], basenames: set[str], image_source: str | None, text_source: str | None) -> bool:
     normalized = reference.replace("\\", "/")
-    candidates = {reference, normalized, normalized.split("/")[-1]}
-    identity = _identity_from_path(normalized)
-    if identity:
-        candidates.add(identity)
-    if candidates & image_keys:
-        basename_match = normalized.split("/")[-1] in image_keys and "/" not in normalized
-        if basename_match and image_source and text_source and image_source != text_source:
-            return False
+    folded = normalized.casefold()
+    # Stable IDs are the strongest evidence and do not depend on a path.
+    if folded in stable:
         return True
-    return False
+    identity = _identity_from_path(normalized)
+    if identity and identity.casefold() in derived:
+        identity_source = identity.split("_p", 1)[0]
+        return not text_source or text_source == identity_source == (image_source or identity_source)
+    # A basename is weak evidence.  Require source metadata on both sides and
+    # require the reference's directory (when present) to agree as well.
+    basename = folded.split("/")[-1]
+    if basename not in basenames or not image_source or not text_source:
+        return False
+    reference_parts = _path_parts(normalized)
+    reference_source = reference_parts[-2].casefold() if len(reference_parts) > 1 else None
+    return image_source == text_source and (reference_source is None or reference_source == image_source)
 
 
 def apply_cross_modal_boosts(text_hits: Sequence[Any], image_hits: Sequence[Any], config: Any) -> tuple[tuple[Any, ...], tuple[Any, ...], tuple[str, ...], dict[str, Any]]:
@@ -75,8 +82,8 @@ def apply_cross_modal_boosts(text_hits: Sequence[Any], image_hits: Sequence[Any]
     image_info = []
     for hit in image_hits:
         metadata = hit.metadata if isinstance(hit.metadata, Mapping) else {}
-        keys, source = _image_keys(metadata)
-        image_info.append((hit, keys, source))
+        stable, derived, basenames, source = _image_keys(metadata)
+        image_info.append((hit, stable, derived, basenames, source))
     warnings: list[str] = []
     text_updates = []
     matched_image_ids: set[str] = set()
@@ -85,7 +92,8 @@ def apply_cross_modal_boosts(text_hits: Sequence[Any], image_hits: Sequence[Any]
         refs, malformed = _related(metadata)
         if malformed:
             warnings.append(f"text candidate {hit.record_id} has malformed related_image_ids")
-        matched = {image.record_id for image, keys, source in image_info if any(_matches(ref, keys, source, _source_stem(metadata.get("source"))) for ref in refs)}
+        text_source = _source_stem(metadata.get("source"))
+        matched = {image.record_id for image, stable, derived, basenames, source in image_info if any(_matches(ref, stable, derived, basenames, source, text_source) for ref in refs)}
         matched_image_ids.update(matched)
         count = len(matched)
         boost = min(config.cross_modal_max_boost, count * config.cross_modal_boost_per_overlap)
@@ -94,7 +102,7 @@ def apply_cross_modal_boosts(text_hits: Sequence[Any], image_hits: Sequence[Any]
         fused = hit.fused_score * min(1.0 + count * 0.05, 1.10) if count else hit.fused_score
         text_updates.append(replace(hit, cross_modal_boost=round(float(boost), 3), boosted_fused_score=float(fused), effective_distance=effective_distance, effective_similarity=(1.0 - effective_distance) if effective_distance is not None else None))
     image_updates = []
-    for hit, keys, source in image_info:
+    for hit, stable, derived, basenames, source in image_info:
         matched = any(hit.record_id == image_id for image_id in matched_image_ids)
         boost = min(config.cross_modal_max_boost, config.cross_modal_boost_per_overlap) if matched else 0.0
         distance = hit.semantic_distance
