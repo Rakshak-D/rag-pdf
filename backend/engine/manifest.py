@@ -385,13 +385,16 @@ def stage_document_snapshot(
     """Copy and verify a manifest-identified PDF corpus into owned storage."""
 
     expected = _validated_manifest(manifest)
-    source_candidate, owned_root = resolve_disjoint_paths(
+    _, owned_root = resolve_disjoint_paths(
         input_dir,
         storage_root,
         first_label="PDF source root",
         second_label="snapshot storage root",
     )
-    source_root = _source_root(source_candidate)
+    # Validate the caller's original path before using a canonical path for
+    # source containment and staging.  Resolving first would hide a symlinked
+    # source root from _source_root's explicit rejection.
+    source_root = _source_root(input_dir)
     verify_document_manifest(source_root, expected)
 
     final_root = resolve_owned_path(owned_root, Path("snapshots") / expected.content_hash)

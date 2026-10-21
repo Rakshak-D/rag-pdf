@@ -218,3 +218,19 @@ def test_snapshot_rejects_symlinked_input_directory_when_supported(tmp_path):
         pytest.skip("symlinks are unavailable in this environment")
     with pytest.raises(ManifestValidationError, match="symlinked directory"):
         build_document_manifest(source)
+
+
+def test_snapshot_staging_rejects_symlinked_source_root_before_storage_creation(tmp_path):
+    source = tmp_path / "source"
+    write_pdf_bytes(source, "a.pdf", b"source")
+    manifest = build_document_manifest(source)
+    linked_source = tmp_path / "linked-source"
+    try:
+        linked_source.symlink_to(source, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are unavailable in this environment")
+
+    storage = tmp_path / "owned"
+    with pytest.raises(ManifestValidationError, match="symlinked source root"):
+        stage_document_snapshot(linked_source, manifest, storage)
+    assert not storage.exists()
