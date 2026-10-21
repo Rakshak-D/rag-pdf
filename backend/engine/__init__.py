@@ -43,7 +43,13 @@ from .retrieval import (
     SemanticRetrievalResult,
     TextSemanticHit,
     retrieve_semantic,
+    HybridHit,
+    HybridRetrievalError,
+    HybridRetrievalResult,
+    retrieve_hybrid,
 )
+from .bm25 import BM25Error, BM25Index
+from .fusion import FusionEngine, FusionError
 
 __all__ = [
     "PdfExtractionResult",
@@ -82,4 +88,12 @@ __all__ = [
     "SemanticRetrievalResult",
     "TextSemanticHit",
     "retrieve_semantic",
+    "HybridHit",
+    "HybridRetrievalError",
+    "HybridRetrievalResult",
+    "retrieve_hybrid",
+    "BM25Error",
+    "BM25Index",
+    "FusionEngine",
+    "FusionError",
 ]

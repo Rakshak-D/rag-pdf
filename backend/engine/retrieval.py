@@ -16,6 +16,8 @@ from backend.embeddings.image import ImageEmbeddingAdapter
 from backend.embeddings.text import TextEmbeddingAdapter
 from backend.experiments.run_plan import RunPlan
 from backend.vectorstore import ChromaVectorStore
+from backend.engine.bm25 import BM25Index, BM25Error
+from backend.engine.fusion import FusionEngine, FusionError
 
 
 Modality = Literal["text", "image"]
@@ -41,6 +43,9 @@ class RetrievalStoreError(SemanticRetrievalError):
 
 class RetrievalQueryError(SemanticRetrievalError):
     """Raised when query embedding or result validation fails."""
+
+class HybridRetrievalError(SemanticRetrievalError):
+    """Raised when lexical/semantic hybrid retrieval cannot complete."""
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,37 @@ class SemanticRetrievalResult:
     modality_timings: tuple[tuple[Modality, float], ...]
     total_elapsed_seconds: float
     warnings: tuple[str, ...] = ()
+
+@dataclass(frozen=True)
+class HybridHit:
+    record_id: str
+    rank: int
+    fused_score: float
+    metadata: Mapping[str, Any]
+    document: str | None = None
+    caption: str | None = None
+    bm25_rank: int | None = None
+    bm25_score: float | None = None
+    semantic_rank: int | None = None
+    semantic_distance: float | None = None
+    semantic_similarity: float | None = None
+    sources: tuple[str, ...] = ()
+
+@dataclass(frozen=True)
+class HybridRetrievalResult:
+    query_id: str
+    index_fingerprint: str
+    document_manifest_hash: str
+    modalities: tuple[Modality, ...]
+    effective_text_k: int | None
+    effective_image_k: int | None
+    text_hits: tuple[HybridHit, ...]
+    image_hits: tuple[HybridHit, ...]
+    fusion_strategy: str
+    effective_weights: tuple[float, float]
+    diagnostics: Mapping[str, Any]
+    modality_timings: tuple[tuple[Modality, float], ...]
+    total_elapsed_seconds: float
 
 
 @dataclass(frozen=True)
@@ -395,3 +431,56 @@ def retrieve_semantic(
         modality_timings=tuple(timings),
         total_elapsed_seconds=max(0.0, perf_counter() - started),
     )
+
+
+def _hybrid_hits(fused: Mapping[str, Any], bm: Mapping[str, Any], sem: Mapping[str, Any], *, limit: int, image: bool) -> tuple[HybridHit, ...]:
+    ids = fused.get("ids", [[]])[0]; scores = fused.get("fused_scores", [[]])[0]
+    bi = {x: i for i, x in enumerate(bm.get("ids", [[]])[0])}; si = {x: i for i, x in enumerate(sem.get("ids", [[]])[0])}
+    out = []
+    for rank, (identifier, score) in enumerate(zip(ids[:limit], scores[:limit]), 1):
+        if not isinstance(identifier, str) or not identifier or not isinstance(score, (int, float)) or not math.isfinite(float(score)):
+            raise RetrievalQueryError("fusion returned an invalid result")
+        i, j = bi.get(identifier), si.get(identifier); meta = (bm.get("metadatas", [[]])[0][i] if i is not None else sem.get("metadatas", [[]])[0][j])
+        meta = _decode_metadata(meta)
+        doc = (bm.get("documents", [[]])[0][i] if i is not None else sem.get("documents", [[]])[0][j])
+        raw_scores = bm.get("scores", [])
+        raw_scores = raw_scores[0] if raw_scores and isinstance(raw_scores[0], list) else raw_scores
+        out.append(HybridHit(identifier, rank, float(score), meta, None if image else doc, meta.get("caption_text") if image else None, i + 1 if i is not None else None, raw_scores[i] if i is not None else None, j + 1 if j is not None else None, sem.get("distances", [[]])[0][j] if j is not None else None, 1.0 - float(sem.get("distances", [[]])[0][j]) if j is not None else None, tuple(x for x, present in (("bm25", i is not None), ("semantic", j is not None)) if present)))
+    return tuple(out)
+
+
+def retrieve_hybrid(query: str, run_plan: RunPlan, storage_root: str | Path, *, build_report_path: str | Path, modalities: Sequence[str] = ("text", "image"), text_adapter: Any = None, image_adapter: Any = None, text_k: int | None = None, image_k: int | None = None) -> HybridRetrievalResult:
+    """Retrieve and fuse lexical and semantic candidates independently per modality."""
+    started = perf_counter()
+    if not isinstance(run_plan, RunPlan): raise TypeError("retrieve_hybrid requires a RunPlan")
+    run_plan.verify_integrity(); config = run_plan.resolved_config(); q = _validate_query(query); requested = _validate_modalities(modalities)
+    tk = _validate_k(text_k, label="text_k", default=config.text_k) if "text" in requested else None; ik = _validate_k(image_k, label="image_k", default=config.image_k) if "image" in requested else None
+    report = _validate_build_report(storage_root, build_report_path, run_plan); _validate_adapter_configuration(text_adapter, config, modality="text"); _validate_adapter_configuration(image_adapter, config, modality="image")
+    store = None; timings=[]; text_hits=(); image_hits=(); diagnostics={}; effective=(config.bm25_weight, config.semantic_weight); strategy=config.fusion_type
+    try:
+        try: store=ChromaVectorStore.open_existing(storage_root, run_plan)
+        except Exception as exc: raise RetrievalStoreError("could not open the referenced existing index") from exc
+        if store.count("text") != report.text_records_persisted or store.count("image") != report.image_records_persisted: raise RetrievalReportError("persisted collection counts do not match the successful build report")
+        engine=FusionEngine(config)
+        for modality, k, adapter in (("text",tk,text_adapter),("image",ik,image_adapter)):
+            if modality not in requested: continue
+            t0=perf_counter(); records=store.read_records(modality); n=len(records.ids)
+            if not n: timings.append((modality, perf_counter()-t0)); continue
+            docs=[(d or "") if modality=="text" else str(m.get("caption_text") or identifier) for identifier,d,m in zip(records.ids,records.documents,records.metadatas)]
+            try: bm=BM25Index(docs, records.ids, records.metadatas).query(q, min(n, max(k or 1, 20)))
+            except BM25Error as exc: raise HybridRetrievalError(f"{modality} BM25 retrieval failed") from exc
+            if adapter is None: adapter = TextEmbeddingAdapter(config) if modality=="text" else ImageEmbeddingAdapter(config)
+            try:
+                vector=adapter.embed_query(q); sem_raw=store.query_text(vector, min(n, max(k or 1, 20))) if modality=="text" else store.query_image(vector, min(n, max(k or 1, 20)))
+                sem = {"ids": sem_raw["ids"], "documents": sem_raw.get("documents", [[None]*len(sem_raw["ids"][0])]), "metadatas": sem_raw["metadatas"], "distances": sem_raw["distances"]}
+                _outer_query_values(sem, "ids"); _outer_query_values(sem, "distances")
+            except Exception as exc: raise RetrievalQueryError(f"{modality} semantic retrieval failed") from exc
+            bw, sw, diag=engine.adaptive_weights(q,bm); effective=(bw,sw); diagnostics[modality]=diag
+            fused, stats=(engine.fuse(bm,sem,bw,sw,k or n) if config.use_weighted_fusion else engine.rrf(bm,sem,bw,sw,k or n)); diagnostics[modality]={**diag,**stats}
+            hits=_hybrid_hits(fused,bm,sem,limit=k or n,image=modality=="image")
+            if modality=="text": text_hits=hits
+            else: image_hits=hits
+            timings.append((modality,perf_counter()-t0))
+    finally:
+        if store is not None: store.close()
+    return HybridRetrievalResult(_query_id(q,run_plan,requested,tk,ik),run_plan.index_fingerprint,run_plan.document_manifest_hash,requested,tk,ik,text_hits,image_hits,strategy,effective,diagnostics,tuple(timings),perf_counter()-started)

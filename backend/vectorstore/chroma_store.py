@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import uuid
 from typing import Any
+from dataclasses import dataclass
 
 import chromadb
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -47,6 +48,12 @@ class ChromaStoreInputError(ChromaStoreError, ValueError):
 
 class ChromaStoreStateError(ChromaStoreError):
     """Raised when persistent store state is incomplete or incompatible."""
+
+@dataclass(frozen=True)
+class StoredRecords:
+    ids: tuple[str, ...]
+    documents: tuple[str | None, ...]
+    metadatas: tuple[Mapping[str, Any], ...]
 
 
 class _IndexStoreManifest(BaseModel):
@@ -466,3 +473,23 @@ class ChromaVectorStore:
     def ids(self, modality: str) -> list[str]:
         result = self._collection(modality).get(include=[])
         return list(result["ids"])
+
+    def read_records(self, modality: str, page_size: int = 1000) -> StoredRecords:
+        """Read the complete aligned corpus without requesting embeddings."""
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or page_size <= 0:
+            raise ChromaStoreInputError("page_size must be a positive integer")
+        collection = self._collection(modality)
+        ids: list[str] = []; docs: list[str | None] = []; metas: list[Mapping[str, Any]] = []
+        offset = 0
+        while True:
+            try:
+                page = collection.get(include=["documents", "metadatas"], limit=page_size, offset=offset)
+            except Exception as exc:
+                raise ChromaStoreStateError(f"could not read {modality} corpus: {exc}") from exc
+            pids = list(page.get("ids") or []); pdocs = list(page.get("documents") or [None] * len(pids)); pmetas = list(page.get("metadatas") or [{}] * len(pids))
+            if not (len(pids) == len(pdocs) == len(pmetas)):
+                raise ChromaStoreStateError(f"{modality} corpus page fields are misaligned")
+            if any(i in ids for i in pids): raise ChromaStoreStateError(f"duplicate {modality} record returned by Chroma")
+            ids.extend(pids); docs.extend(pdocs); metas.extend(dict(m or {}) for m in pmetas); offset += len(pids)
+            if len(pids) < page_size: break
+        return StoredRecords(tuple(ids), tuple(docs), tuple(metas))

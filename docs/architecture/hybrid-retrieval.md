@@ -1,0 +1,11 @@
+# Hybrid retrieval
+
+`retrieve_hybrid()` is the report-gated lexical/semantic retrieval boundary. It verifies a `RunPlan`, the exact successful build report, the versioned Chroma index, and persisted collection counts before loading a query model. Text and image retrieval remain independent; their scores are never globally ranked or compared across embedding spaces.
+
+For text records BM25 uses the persisted chunk document. For image records it uses `caption_text`, falling back to the stable image ID when no caption is available. The port preserves the research preprocessing contract: safe tokenization without downloading NLTK data, English and domain stopwords, letter/digit separation, stemming, observed morphological expansion, positive-score ranking, and lexical-overlap fallback. The lexical index is rebuilt in memory from the persisted corpus for every query; there is no persistent BM25 cache yet.
+
+Semantic candidates use the existing lazy text or OpenCLIP query adapter and the existing Chroma cosine-distance query. A semantic similarity is the diagnostic value `1 - distance`, not a probability. Weighted fusion min-max normalizes the two candidate score lists before applying the resolved weights. RRF instead uses one-based candidate rank and the configured RRF constant. Adaptive weighting preserves the research query classes (`keyword`, `semantic`, and `balanced`) and returns semantic-only weights when no positive BM25 signal exists. Raw BM25 scores, semantic distances/similarities, and fused scores are kept in separate fields.
+
+The result contains separate typed text and image hits, stable IDs, ranks, metadata, source indicators, timings, effective weights, and per-modality diagnostics. Empty collections return empty hits without loading a query model. Malformed Chroma records, distances, or fusion outputs fail with a typed retrieval error; failed modalities are not silently omitted.
+
+The query path is non-creating and never chooses a latest report or repairs an index. A successful report and matching counts do not prove that vector contents were not changed after the build, and there is no active-index registry or promotion transaction. BM25 mode dispatch, reranking, cross-modal boosting, context selection, generation, evaluation, SQLite persistence, API, and UI remain future work.
