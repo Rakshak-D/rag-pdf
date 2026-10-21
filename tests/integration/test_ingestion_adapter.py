@@ -169,6 +169,52 @@ def test_image_output_must_remain_under_owned_storage_root(tmp_path):
     assert not (tmp_path / "outside-images").exists()
 
 
+@pytest.mark.parametrize("layout", ["equal", "storage-child", "source-child"])
+def test_extraction_rejects_overlapping_source_and_storage_before_side_effects(tmp_path, layout):
+    if layout == "equal":
+        pdf_dir = tmp_path / "pdfs"
+        write_pdf(pdf_dir / "document.pdf", "A valid PDF with enough deterministic text.")
+        storage = pdf_dir
+    elif layout == "storage-child":
+        pdf_dir = tmp_path / "pdfs"
+        write_pdf(pdf_dir / "document.pdf", "A valid PDF with enough deterministic text.")
+        storage = pdf_dir / "owned"
+    else:
+        storage = tmp_path / "owned"
+        pdf_dir = storage / "pdfs"
+        write_pdf(pdf_dir / "document.pdf", "A valid PDF with enough deterministic text.")
+
+    with pytest.raises(PathContainmentError, match="must be disjoint"):
+        extract_pdfs(make_config(tmp_path), pdf_dir, storage)
+    assert not (storage / "snapshots").exists()
+
+
+def test_image_output_inside_current_snapshot_is_rejected_before_storage_creation(tmp_path):
+    pdf_dir = tmp_path / "pdfs"
+    write_pdf(pdf_dir / "document.pdf", "A valid PDF with enough deterministic text.")
+    storage = tmp_path / "owned"
+    manifest = build_document_manifest(pdf_dir)
+    config = make_config(
+        tmp_path,
+        images_dir=storage / "snapshots" / manifest.content_hash / "images",
+    )
+
+    with pytest.raises(PathContainmentError, match="reserved snapshot namespace"):
+        extract_pdfs(config, pdf_dir, storage)
+    assert not storage.exists()
+
+
+def test_stem_that_enters_snapshot_namespace_is_rejected_before_side_effects(tmp_path):
+    pdf_dir = tmp_path / "pdfs"
+    write_pdf(pdf_dir / "snapshots.pdf", "A valid PDF with enough deterministic text.")
+    storage = tmp_path / "owned"
+    config = make_config(tmp_path, images_dir=Path("."))
+
+    with pytest.raises(PathContainmentError, match="reserved snapshot namespace"):
+        extract_pdfs(config, pdf_dir, storage)
+    assert not storage.exists()
+
+
 def test_verified_run_plan_is_the_execution_boundary(tmp_path):
     pdf_dir = tmp_path / "pdfs"
     write_pdf(pdf_dir / "planned.pdf", "A planned PDF with enough deterministic text.")

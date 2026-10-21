@@ -33,6 +33,12 @@ module.
 `extract_pdfs()` receives a caller-owned `storage_root`. The configured
 `images_dir` and each PDF-stem subdirectory are resolved with
 `resolve_owned_path()` before output directories or image files are created.
+The PDF source root and storage root must be disjoint; equal roots and nested
+source/storage roots are rejected before manifest discovery or staging.
+`storage_root/snapshots/` is reserved for immutable source snapshots, so both
+the common image root and every derived PDF-stem image directory are rejected
+if they enter that namespace. A dedicated image directory elsewhere under the
+owned storage root remains valid.
 Existing image paths are not overwritten. PDF input is a local configured
 directory in this phase, not an upload path or quarantine policy.
 

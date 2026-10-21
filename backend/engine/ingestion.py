@@ -21,7 +21,7 @@ import pymupdf
 import tiktoken
 from langchain_core.documents import Document
 
-from backend.config.paths import resolve_owned_path
+from backend.config.paths import PathContainmentError, resolve_disjoint_paths, resolve_owned_path
 from backend.config.schema import ResolvedRunConfig
 from backend.experiments.run_plan import RunPlan
 from backend.engine.manifest import (
@@ -273,6 +273,29 @@ def _reject_duplicate_stems(manifest: DocumentManifest) -> None:
         )
 
 
+def _validate_image_output_paths(
+    config: ResolvedRunConfig,
+    storage_root: str | Path,
+    manifest: DocumentManifest,
+) -> None:
+    """Reject image destinations that overlap the reserved snapshot namespace."""
+
+    owned_root = Path(storage_root).expanduser().resolve(strict=False)
+    images_root = resolve_owned_path(owned_root, config.images_dir)
+    snapshots_root = resolve_owned_path(owned_root, "snapshots")
+
+    def reject_snapshot_overlap(candidate: Path, label: str) -> None:
+        if candidate == snapshots_root or candidate.is_relative_to(snapshots_root):
+            raise PathContainmentError(
+                f"{label} enters reserved snapshot namespace: {candidate}"
+            )
+
+    reject_snapshot_overlap(images_root, "image output root")
+    for entry in manifest.entries:
+        image_dir = resolve_owned_path(images_root, Path(entry.relative_path).stem)
+        reject_snapshot_overlap(image_dir, f"image output for {entry.relative_path}")
+
+
 def extract_pdfs(
     config_or_plan: ResolvedRunConfig | RunPlan,
     input_dir: str | Path,
@@ -281,8 +304,15 @@ def extract_pdfs(
     """Bind extraction to a verified manifest and immutable source snapshot."""
 
     config = _execution_config(config_or_plan)
+    resolve_disjoint_paths(
+        input_dir,
+        storage_root,
+        first_label="PDF source root",
+        second_label="extraction storage root",
+    )
     manifest = build_document_manifest(input_dir)
     _reject_duplicate_stems(manifest)
+    _validate_image_output_paths(config, storage_root, manifest)
     if isinstance(config_or_plan, RunPlan):
         if manifest.content_hash != config_or_plan.document_manifest_hash:
             raise ManifestMismatchError(

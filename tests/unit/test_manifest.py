@@ -18,6 +18,7 @@ from backend.engine.manifest import (
     stage_document_snapshot,
     verify_document_manifest,
 )
+from backend.config import PathContainmentError
 
 
 def write_pdf_bytes(root: Path, relative: str, content: bytes = b"%PDF-1.4\nfixture") -> Path:
@@ -137,6 +138,26 @@ def test_staging_preserves_nested_paths_and_reuses_verified_snapshot(tmp_path):
     assert (snapshot / "nested" / "a.pdf").read_bytes() == b"nested bytes"
     assert (snapshot / "b.pdf").read_bytes() == b"root bytes"
     assert stage_document_snapshot(source, manifest, storage) == snapshot
+
+
+@pytest.mark.parametrize("layout", ["equal", "storage-child", "source-child"])
+def test_snapshot_staging_rejects_overlapping_source_and_storage_roots(tmp_path, layout):
+    source = tmp_path / "source"
+    write_pdf_bytes(source, "a.pdf", b"source")
+    manifest = build_document_manifest(source)
+    if layout == "equal":
+        storage = source
+    elif layout == "storage-child":
+        storage = source / "owned"
+    else:
+        storage = tmp_path / "owned"
+        source = storage / "source"
+        write_pdf_bytes(source, "a.pdf", b"source")
+        manifest = build_document_manifest(source)
+
+    with pytest.raises(PathContainmentError, match="must be disjoint"):
+        stage_document_snapshot(source, manifest, storage)
+    assert not (storage / "snapshots").exists()
 
 
 def test_corrupt_existing_snapshot_is_not_overwritten(tmp_path):

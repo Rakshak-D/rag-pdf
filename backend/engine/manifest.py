@@ -14,7 +14,11 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.config.paths import PathContainmentError, resolve_owned_path
+from backend.config.paths import (
+    PathContainmentError,
+    resolve_disjoint_paths,
+    resolve_owned_path,
+)
 
 
 MANIFEST_SCHEMA_VERSION = "1"
@@ -381,10 +385,15 @@ def stage_document_snapshot(
     """Copy and verify a manifest-identified PDF corpus into owned storage."""
 
     expected = _validated_manifest(manifest)
-    source_root = _source_root(input_dir)
+    source_candidate, owned_root = resolve_disjoint_paths(
+        input_dir,
+        storage_root,
+        first_label="PDF source root",
+        second_label="snapshot storage root",
+    )
+    source_root = _source_root(source_candidate)
     verify_document_manifest(source_root, expected)
 
-    owned_root = Path(storage_root).expanduser().resolve(strict=False)
     final_root = resolve_owned_path(owned_root, Path("snapshots") / expected.content_hash)
     if final_root.exists():
         if not final_root.is_dir():

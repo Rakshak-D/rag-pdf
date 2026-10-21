@@ -30,6 +30,12 @@ cryptographic authenticity mechanism.
 
 ## Verification and staging
 
+The PDF source root and caller-owned snapshot/extraction storage root must be
+disjoint resolved directory trees. Equal roots and either root nested beneath
+the other are rejected before manifest discovery, directory creation, or file
+copying. This prevents staged PDFs from becoming part of a later recursive
+source discovery pass.
+
 `verify_document_manifest()` rebuilds the current manifest and compares the
 exact relative file set, sizes, content hashes, and document identities. It
 raises `ManifestMismatchError` with added, missing, changed, or unsafe paths;
@@ -49,6 +55,12 @@ The ingestion adapter builds this manifest for both direct resolved-config
 calls and RunPlan calls. For a RunPlan, the current hash must equal the plan's
 hash before staging or image-output creation. Extraction then reads the staged
 snapshot and returns the actual manifest hash used.
+
+`storage_root/snapshots/` is reserved for immutable source snapshots. The
+configured image root and every PDF-stem image directory are resolved with
+`resolve_owned_path()` and rejected if they alias or reside in that reserved
+namespace. Dedicated image directories elsewhere under the owned storage root
+remain valid.
 
 ## Duplicate-stem restriction and limits
 
