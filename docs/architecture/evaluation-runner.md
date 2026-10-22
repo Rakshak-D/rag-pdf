@@ -63,12 +63,13 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | M16 | `GenerationResult.elapsed_seconds` for successful generation | seconds, lower is better |
 | M17 | positive generation-invocation count divided by the sum of positive invocation durations | queries/second, higher is better |
 | M18 | arithmetic mean of normalized process-CPU samples during generation | percent, lower is better |
+| M19 | arithmetic mean of per-case sampled process RSS averages | GB, lower is better |
 
 M5 is skipped when a case has no required pages. M9 is skipped for missing or
 empty text context. Failed or unreached stages receive explicit failed/skipped
 observations. A measured value of `0.0` remains computed; missing data is never
-converted into zero. M17 and M18 are the sequential generation-invocation and
-process-CPU metrics described below; M19 remains outside this runner.
+converted into zero. M17, M18, and M19 are the sequential generation,
+process-CPU, and process-RSS metrics described below.
 
 For M6–M8, a stripped `BenchmarkCase.reference_text` is used as ground truth
 only when it is longer than 20 characters. Otherwise the formatted context is
@@ -199,7 +200,21 @@ stopped in a bounded, event-driven shutdown path and cannot alter generation or
 trace outcomes. Valid samples may still produce M18 when generation returns a
 failed result or raises. M18 measures current-process CPU, not model-only CPU,
 GPU utilization, or whole-system CPU consumption. It does not collect RSS or
-GPU telemetry; M19 remains out of scope.
+GPU telemetry.
+
+M19 preserves the audited sampled process-RSS metric. A bounded monitor samples
+`memory_info().rss` from the current Python process every 0.05 seconds during
+generation and converts each byte count with `rss / (1024 ** 3)`, retaining the
+legacy `GB` label and binary conversion. Each case computes the arithmetic mean
+of its valid converted samples, and the report aggregate is the arithmetic mean
+of those eligible per-case averages. Missing samples are `unavailable`, while
+invalid RSS values and monitor startup/shutdown failures are explicit failures;
+a measured zero remains computed. Valid samples may still produce M19 when
+generation returns a failed result or raises. RAM-monitor failures do not alter
+generation, M17, M18, or other metric outcomes. M19 measures current-process
+RSS, not total machine memory, model-weight size, CUDA VRAM, or model-only
+memory, and raw samples are not stored in traces or reports. M16–M18 retain
+their existing formulas; no additional RAM or GPU telemetry is collected.
 
 Latency values are runtime measurements and are not expected to be identical
 between executions. Trace and evaluation fingerprints retain only their

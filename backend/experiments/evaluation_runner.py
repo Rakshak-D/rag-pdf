@@ -23,6 +23,7 @@ from backend.experiments.faithfulness_metrics import FaithfulnessMetricAdapter, 
 from backend.experiments.gt_coverage_metrics import GtCoverageMetricAdapter, GtCoverageResult
 from backend.experiments.throughput_metrics import ThroughputMetricAdapter
 from backend.experiments.cpu_metrics import CpuUsageMetricAdapter, CpuUsageResult, ProcessCpuMonitor
+from backend.experiments.memory_metrics import ProcessRamMonitor, RamUsageMetricAdapter, RamUsageResult
 from backend.experiments.tracing import TraceFailure, QueryTrace, build_failed_query_trace, build_query_trace
 
 
@@ -70,7 +71,7 @@ def _observation(trace_id: str, metric_id: str, name: str, status: str, value: f
 class EvaluationRunner:
     """Run at most 100 supplied benchmark cases synchronously and in memory."""
 
-    def __init__(self, run_plan: RunPlan, retrieval: Callable[[BenchmarkCase, RunPlan], HybridRetrievalResult], context_formatter: ContextFormatter, generation_adapter: LocalGenerationAdapter, *, text_embedder: object | None = None, clock: Callable[[], float] = perf_counter, cpu_monitor_factory=None) -> None:
+    def __init__(self, run_plan: RunPlan, retrieval: Callable[[BenchmarkCase, RunPlan], HybridRetrievalResult], context_formatter: ContextFormatter, generation_adapter: LocalGenerationAdapter, *, text_embedder: object | None = None, clock: Callable[[], float] = perf_counter, cpu_monitor_factory=None, ram_monitor_factory=None) -> None:
         if not isinstance(run_plan, RunPlan) or not callable(retrieval) or not hasattr(context_formatter, "format") or not hasattr(generation_adapter, "generate"):
             raise EvaluationRunnerError("runner requires a RunPlan and callable pipeline components")
         try:
@@ -84,6 +85,7 @@ class EvaluationRunner:
         self._text_embedder = text_embedder
         self._clock = clock
         self._cpu_monitor_factory = cpu_monitor_factory or (lambda: ProcessCpuMonitor())
+        self._ram_monitor_factory = ram_monitor_factory or (lambda: ProcessRamMonitor())
 
     def _validate_suite(self, suite: BenchmarkSuite) -> tuple[BenchmarkCase, ...]:
         if not isinstance(suite, BenchmarkSuite):
@@ -210,7 +212,7 @@ class EvaluationRunner:
             result = scorer.score(context.text_context, generation.response, "retrieved_context")
         return _observation(trace_id, "M15", "GT Coverage / Context Utilization", result.status, result.value, "percent", "higher_is_better", reference_kind, "legacy-m15-v1", result.reason_code, "Reference coverage using semantic sentence similarity when an embedder is injected, otherwise lexical multiset term-frequency overlap; not a factuality test.", model_identifier=result.model_identifier)
 
-    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, generation_elapsed: object | None = None, generation_timing_error: str | None = None, cpu_measurement: object | None = None, model_identifier: str | None = None, config: object, rouge_scorer: RougeScorerAdapter, nltk_scorer: NltkMetricsAdapter, bertscore_scorer: BertScoreAdapter, fcd_scorer: FcdMetricAdapter, faithfulness_scorer: FaithfulnessMetricAdapter, gt_coverage_scorer: GtCoverageMetricAdapter, throughput_scorer: ThroughputMetricAdapter, cpu_scorer: CpuUsageMetricAdapter) -> list[MetricObservation]:
+    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, generation_elapsed: object | None = None, generation_timing_error: str | None = None, cpu_measurement: object | None = None, ram_measurement: object | None = None, model_identifier: str | None = None, config: object, rouge_scorer: RougeScorerAdapter, nltk_scorer: NltkMetricsAdapter, bertscore_scorer: BertScoreAdapter, fcd_scorer: FcdMetricAdapter, faithfulness_scorer: FaithfulnessMetricAdapter, gt_coverage_scorer: GtCoverageMetricAdapter, throughput_scorer: ThroughputMetricAdapter, cpu_scorer: CpuUsageMetricAdapter, ram_scorer: RamUsageMetricAdapter) -> list[MetricObservation]:
         observations: list[MetricObservation] = []
         retrieval_available = retrieval is not None and (failure is None or failure.stage != "retrieval")
         if retrieval_available:
@@ -245,6 +247,7 @@ class EvaluationRunner:
         observations.append(self._gt_coverage_metric(trace_id, case, context, generation, gt_coverage_scorer))
         observations.append(self._throughput_metric(trace_id, generation_attempted, generation_elapsed, generation_timing_error, throughput_scorer))
         observations.append(self._cpu_metric(trace_id, generation_attempted, cpu_measurement, cpu_scorer))
+        observations.append(self._ram_metric(trace_id, generation_attempted, ram_measurement, ram_scorer))
         return observations
 
     @staticmethod
@@ -268,6 +271,11 @@ class EvaluationRunner:
     def _cpu_metric(trace_id: str, generation_attempted: bool, measurement: object | None, scorer: CpuUsageMetricAdapter) -> MetricObservation:
         result = scorer.result(measurement, attempted=generation_attempted)
         return _observation(trace_id, "M18", "Process CPU Usage", result.status, result.value, "percent", "lower_is_better", "not_applicable", "legacy-m18-v1", result.reason_code, "Average sampled CPU percentage for the current Python process during generation, normalized by logical CPU count.")
+
+    @staticmethod
+    def _ram_metric(trace_id: str, generation_attempted: bool, measurement: object | None, scorer: RamUsageMetricAdapter) -> MetricObservation:
+        result = scorer.result(measurement, attempted=generation_attempted)
+        return _observation(trace_id, "M19", "Process RAM Usage", result.status, result.value, "GB", "lower_is_better", "not_applicable", "legacy-m19-v1", result.reason_code, "Average sampled RSS for the current Python process during generation, converted from bytes using 1024 ** 3.")
 
     @staticmethod
     def _aggregate(metric_id: str, observations: Sequence[MetricObservation], *, model_identifier: str | None = None) -> MetricAggregate:
@@ -319,6 +327,7 @@ class EvaluationRunner:
         gt_coverage_scorer = GtCoverageMetricAdapter(self._text_embedder)
         throughput_scorer = ThroughputMetricAdapter()
         cpu_scorer = CpuUsageMetricAdapter()
+        ram_scorer = RamUsageMetricAdapter()
         for case in cases:
             text_k = case.text_k if "text" in case.modalities else None
             image_k = case.image_k if "image" in case.modalities else None
@@ -342,7 +351,7 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("retrieval", "retrieval_failed", exc)
                 trace = build_failed_query_trace(self._plan, query=case.query, modalities=case.modalities, text_k=text_k, image_k=image_k, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer))
+                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer, ram_scorer=ram_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "retrieval", trace.trace_id, failure.error_code)); continue
             try:
                 context = self._context_formatter.format(retrieval_result, self._plan)
@@ -353,7 +362,7 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("context", "context_failed", exc)
                 trace = build_query_trace(retrieval_result, self._plan, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer))
+                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer, ram_scorer=ram_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "context", trace.trace_id, failure.error_code)); continue
             generation_attempted = True
             reached = "generation"
@@ -361,6 +370,10 @@ class EvaluationRunner:
             cpu_monitor_started = False
             cpu_measurement = None
             cpu_start_failed = False
+            ram_monitor = None
+            ram_monitor_started = False
+            ram_measurement = None
+            ram_start_failed = False
             try:
                 cpu_monitor = self._cpu_monitor_factory()
                 if not callable(getattr(cpu_monitor, "start", None)) or not callable(getattr(cpu_monitor, "stop", None)):
@@ -370,6 +383,15 @@ class EvaluationRunner:
             except Exception:
                 cpu_start_failed = True
                 cpu_measurement = CpuUsageResult("failed", reason_code="cpu_monitor_start_failed")
+            try:
+                ram_monitor = self._ram_monitor_factory()
+                if not callable(getattr(ram_monitor, "start", None)) or not callable(getattr(ram_monitor, "stop", None)):
+                    raise EvaluationRunnerError("ram monitor has an invalid interface")
+                ram_monitor_started = True
+                ram_monitor.start()
+            except Exception:
+                ram_start_failed = True
+                ram_measurement = RamUsageResult("failed", reason_code="ram_monitor_start_failed")
             generation_start, generation_timing_error = self._read_generation_clock(self._clock)
             generation_end = None
             generation_elapsed = None
@@ -391,6 +413,14 @@ class EvaluationRunner:
                         except Exception:
                             if not cpu_start_failed:
                                 cpu_measurement = CpuUsageResult("failed", reason_code="cpu_monitor_shutdown_failed")
+                    if ram_monitor_started:
+                        try:
+                            stopped_measurement = ram_monitor.stop()
+                            if not ram_start_failed:
+                                ram_measurement = stopped_measurement
+                        except Exception:
+                            if not ram_start_failed:
+                                ram_measurement = RamUsageResult("failed", reason_code="ram_monitor_shutdown_failed")
                 if generation_timing_error is None:
                     try:
                         generation_elapsed = generation_end - generation_start
@@ -410,13 +440,13 @@ class EvaluationRunner:
                 generation = None
                 failure = _failure("generation", "generation_failed", exc, attempts=getattr(exc, "attempts", None), elapsed=getattr(exc, "elapsed_seconds", None))
                 trace = build_query_trace(retrieval_result, self._plan, context=context, failure=failure)
-            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, generation_elapsed=generation_elapsed, generation_timing_error=generation_timing_error, cpu_measurement=cpu_measurement, model_identifier=config.llm_model if generation_attempted else None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer))
+            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, generation_elapsed=generation_elapsed, generation_timing_error=generation_timing_error, cpu_measurement=cpu_measurement, ram_measurement=ram_measurement, model_identifier=config.llm_model if generation_attempted else None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer, ram_scorer=ram_scorer))
             traces.append(trace)
             outcomes.append(EvaluationCaseOutcome(case.case_id, "succeeded" if trace.status == "succeeded" else "failed", reached, trace.trace_id, trace.error_code))
         m16_model = next((item.model_identifier for item in observations if item.metric_id == "M16" and item.status == "computed" and item.model_identifier is not None), None)
         m12_model = next((item.model_identifier for item in observations if item.metric_id == "M12" and item.status == "computed" and item.model_identifier is not None), None)
         m13_model = next((item.model_identifier for item in observations if item.metric_id == "M13" and item.status == "computed" and item.model_identifier is not None), None)
         m15_model = next((item.model_identifier for item in observations if item.metric_id == "M15" and item.status == "computed" and item.model_identifier is not None), None)
-        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else m12_model if metric_id == "M12" else m13_model if metric_id == "M13" else m15_model if metric_id == "M15" else None) for metric_id in ("M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18")]
+        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else m12_model if metric_id == "M12" else m13_model if metric_id == "M13" else m15_model if metric_id == "M15" else None) for metric_id in ("M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18", "M19")]
         report = build_evaluation_report(traces, observations, aggregates, run_fingerprint=self._plan.run_fingerprint, benchmark_id=suite.benchmark_id, benchmark_version=suite.benchmark_version)
         return EvaluationRunResult(report, tuple(traces), tuple(outcomes))

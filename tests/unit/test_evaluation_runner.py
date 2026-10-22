@@ -10,6 +10,7 @@ from backend.engine.generation import GenerationResult, LocalGenerationAdapter
 from backend.engine.retrieval import HybridHit, HybridRetrievalResult, query_id_for
 from backend.experiments import BenchmarkCase, BenchmarkSuite, EvaluationRunner, EvaluationRunnerError, build_run_plan
 from backend.experiments.cpu_metrics import CpuUsageResult
+from backend.experiments.memory_metrics import RamUsageResult
 from notebooks.config import Config
 
 
@@ -44,7 +45,7 @@ def test_runner_completes_and_aggregates_audited_metrics(tmp_path):
     output = runner.run(suite)
     assert output.outcomes[0].status == "succeeded"
     assert output.traces[0].status == "succeeded"
-    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18"}
+    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18", "M19"}
     rouge1 = next(item for item in output.report.observations if item.metric_id == "M6")
     assert rouge1.status == "computed" and rouge1.reference_kind == "context_pseudoreference"
     assert "supported [T1]" not in repr(output.report)
@@ -356,3 +357,66 @@ def test_m18_monitor_failure_does_not_change_generation_or_m17(tmp_path):
     m17 = next(item for item in output.report.observations if item.metric_id == "M17")
     assert m18.status == "failed" and m18.reason_code == "cpu_monitor_start_failed"
     assert m17.status == "computed" and m17.value == 0.5
+
+
+def test_m19_monitor_lifecycle_is_outside_m17_and_isolated_from_cpu(tmp_path):
+    plan, query, result, formatter, _ = setup_chain(tmp_path)
+    events = []
+
+    class Monitor:
+        def __init__(self, name, value):
+            self.name = name
+            self.value = value
+        def start(self):
+            events.append(self.name + "-start")
+        def stop(self):
+            events.append(self.name + "-stop")
+            return self.value
+
+    class Generation:
+        def generate(self, context, supplied_plan):
+            events.append("generation")
+            return setup_chain(tmp_path)[4].generate(context, supplied_plan)
+
+    ticks = iter((10.0, 12.0))
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(
+        plan,
+        lambda *_: result,
+        formatter,
+        Generation(),
+        clock=lambda: (events.append("clock") or next(ticks)),
+        cpu_monitor_factory=lambda: Monitor("cpu", CpuUsageResult("computed", 25.0)),
+        ram_monitor_factory=lambda: Monitor("ram", RamUsageResult("computed", 2.0)),
+    ).run(suite)
+    m18 = next(item for item in output.report.observations if item.metric_id == "M18")
+    m19 = next(item for item in output.report.observations if item.metric_id == "M19")
+    aggregate = next(item for item in output.report.aggregates if item.metric_id == "M19")
+    assert events == ["cpu-start", "ram-start", "clock", "generation", "clock", "cpu-stop", "ram-stop"]
+    assert m18.status == "computed" and m18.value == 25.0
+    assert m19.status == "computed" and m19.value == 2.0
+    assert aggregate.value == 2.0 and aggregate.reference_kind == "not_applicable"
+
+
+def test_m19_start_failure_does_not_change_cpu_or_generation(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+
+    class RamMonitor:
+        def start(self):
+            raise RuntimeError("private ram detail")
+        def stop(self):
+            raise AssertionError("stop should not be called")
+
+    class CpuMonitor:
+        def start(self):
+            pass
+        def stop(self):
+            return CpuUsageResult("computed", 10.0)
+
+    ticks = iter((1.0, 3.0))
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, generation, clock=lambda: next(ticks), cpu_monitor_factory=CpuMonitor, ram_monitor_factory=RamMonitor).run(suite)
+    m18 = next(item for item in output.report.observations if item.metric_id == "M18")
+    m19 = next(item for item in output.report.observations if item.metric_id == "M19")
+    assert m18.status == "computed" and m18.value == 10.0
+    assert m19.status == "failed" and m19.reason_code == "ram_monitor_start_failed"
