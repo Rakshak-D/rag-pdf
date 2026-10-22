@@ -20,6 +20,7 @@ from backend.experiments.nltk_metrics import NltkMetricResult, NltkMetricsAdapte
 from backend.experiments.bertscore_metrics import BertScoreAdapter, BertScoreResult
 from backend.experiments.fcd_metrics import FcdMetricAdapter, FcdResult
 from backend.experiments.faithfulness_metrics import FaithfulnessMetricAdapter, FaithfulnessResult
+from backend.experiments.gt_coverage_metrics import GtCoverageMetricAdapter, GtCoverageResult
 from backend.experiments.tracing import TraceFailure, QueryTrace, build_failed_query_trace, build_query_trace
 
 
@@ -188,7 +189,25 @@ class EvaluationRunner:
             result = scorer.score(context.text_context, generation.response)
         return _observation(trace_id, "M14", "Faithfulness (term overlap)", result.status, result.value, "percent", "higher_is_better", "retrieved_context", "legacy-m14-v1", result.reason_code, "Lexical term-overlap heuristic; not an entailment or factuality test.")
 
-    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, model_identifier: str | None = None, config: object, rouge_scorer: RougeScorerAdapter, nltk_scorer: NltkMetricsAdapter, bertscore_scorer: BertScoreAdapter, fcd_scorer: FcdMetricAdapter, faithfulness_scorer: FaithfulnessMetricAdapter) -> list[MetricObservation]:
+    @staticmethod
+    def _gt_coverage_metric(trace_id: str, case: BenchmarkCase, context: EvidenceContext | None, generation: GenerationResult | None, scorer: GtCoverageMetricAdapter) -> MetricObservation:
+        reference = case.reference_text.strip() if isinstance(case.reference_text, str) else ""
+        reference_kind = "ground_truth" if reference else "retrieved_context" if context is not None and isinstance(context.text_context, str) and context.text_context.strip() else "no_reference"
+        if generation is None:
+            result = GtCoverageResult("skipped", reason_code="generation_not_reached")
+        elif generation.status == "failed":
+            result = GtCoverageResult("skipped", reason_code="generation_failed")
+        elif not isinstance(generation.response, str) or not generation.response.strip():
+            result = GtCoverageResult("skipped", reason_code="empty_response")
+        elif reference:
+            result = scorer.score(reference, generation.response, "ground_truth")
+        elif context is None or not isinstance(context.text_context, str) or not context.text_context.strip():
+            result = GtCoverageResult("skipped", reason_code="no_reference")
+        else:
+            result = scorer.score(context.text_context, generation.response, "retrieved_context")
+        return _observation(trace_id, "M15", "GT Coverage / Context Utilization", result.status, result.value, "percent", "higher_is_better", reference_kind, "legacy-m15-v1", result.reason_code, "Reference coverage using semantic sentence similarity when an embedder is injected, otherwise lexical multiset term-frequency overlap; not a factuality test.", model_identifier=result.model_identifier)
+
+    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, model_identifier: str | None = None, config: object, rouge_scorer: RougeScorerAdapter, nltk_scorer: NltkMetricsAdapter, bertscore_scorer: BertScoreAdapter, fcd_scorer: FcdMetricAdapter, faithfulness_scorer: FaithfulnessMetricAdapter, gt_coverage_scorer: GtCoverageMetricAdapter) -> list[MetricObservation]:
         observations: list[MetricObservation] = []
         retrieval_available = retrieval is not None and (failure is None or failure.stage != "retrieval")
         if retrieval_available:
@@ -220,6 +239,7 @@ class EvaluationRunner:
         observations.append(self._bertscore_metric(trace_id, case, generation, bertscore_scorer))
         observations.append(self._fcd_metric(trace_id, case, context, generation, fcd_scorer))
         observations.append(self._faithfulness_metric(trace_id, context, generation, faithfulness_scorer))
+        observations.append(self._gt_coverage_metric(trace_id, case, context, generation, gt_coverage_scorer))
         return observations
 
     @staticmethod
@@ -247,6 +267,7 @@ class EvaluationRunner:
         bertscore_scorer = BertScoreAdapter()
         fcd_scorer = FcdMetricAdapter(self._text_embedder)
         faithfulness_scorer = FaithfulnessMetricAdapter()
+        gt_coverage_scorer = GtCoverageMetricAdapter(self._text_embedder)
         for case in cases:
             text_k = case.text_k if "text" in case.modalities else None
             image_k = case.image_k if "image" in case.modalities else None
@@ -270,7 +291,7 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("retrieval", "retrieval_failed", exc)
                 trace = build_failed_query_trace(self._plan, query=case.query, modalities=case.modalities, text_k=text_k, image_k=image_k, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer))
+                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "retrieval", trace.trace_id, failure.error_code)); continue
             try:
                 context = self._context_formatter.format(retrieval_result, self._plan)
@@ -281,7 +302,7 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("context", "context_failed", exc)
                 trace = build_query_trace(retrieval_result, self._plan, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer))
+                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "context", trace.trace_id, failure.error_code)); continue
             generation_attempted = True
             reached = "generation"
@@ -299,12 +320,13 @@ class EvaluationRunner:
                 generation = None
                 failure = _failure("generation", "generation_failed", exc, attempts=getattr(exc, "attempts", None), elapsed=getattr(exc, "elapsed_seconds", None))
                 trace = build_query_trace(retrieval_result, self._plan, context=context, failure=failure)
-            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, model_identifier=config.llm_model if generation_attempted else None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer))
+            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, model_identifier=config.llm_model if generation_attempted else None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer))
             traces.append(trace)
             outcomes.append(EvaluationCaseOutcome(case.case_id, "succeeded" if trace.status == "succeeded" else "failed", reached, trace.trace_id, trace.error_code))
         m16_model = next((item.model_identifier for item in observations if item.metric_id == "M16" and item.status == "computed" and item.model_identifier is not None), None)
         m12_model = next((item.model_identifier for item in observations if item.metric_id == "M12" and item.status == "computed" and item.model_identifier is not None), None)
         m13_model = next((item.model_identifier for item in observations if item.metric_id == "M13" and item.status == "computed" and item.model_identifier is not None), None)
-        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else m12_model if metric_id == "M12" else m13_model if metric_id == "M13" else None) for metric_id in ("M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M16")]
+        m15_model = next((item.model_identifier for item in observations if item.metric_id == "M15" and item.status == "computed" and item.model_identifier is not None), None)
+        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else m12_model if metric_id == "M12" else m13_model if metric_id == "M13" else m15_model if metric_id == "M15" else None) for metric_id in ("M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16")]
         report = build_evaluation_report(traces, observations, aggregates, run_fingerprint=self._plan.run_fingerprint, benchmark_id=suite.benchmark_id, benchmark_version=suite.benchmark_version)
         return EvaluationRunResult(report, tuple(traces), tuple(outcomes))

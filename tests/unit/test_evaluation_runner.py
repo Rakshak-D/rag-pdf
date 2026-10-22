@@ -43,7 +43,7 @@ def test_runner_completes_and_aggregates_audited_metrics(tmp_path):
     output = runner.run(suite)
     assert output.outcomes[0].status == "succeeded"
     assert output.traces[0].status == "succeeded"
-    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M16"}
+    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16"}
     rouge1 = next(item for item in output.report.observations if item.metric_id == "M6")
     assert rouge1.status == "computed" and rouge1.reference_kind == "context_pseudoreference"
     assert "supported [T1]" not in repr(output.report)
@@ -123,6 +123,16 @@ def test_faithfulness_is_lexical_and_has_no_model_identifier(tmp_path):
     assert observation.model_identifier is None
     assert aggregate.model_identifier is None
     assert "factuality" in (observation.methodology_note or "").lower()
+
+
+def test_gt_coverage_uses_lexical_fallback_without_embedder_and_m13_stays_unavailable(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5, reference_text="The answer is in the evidence."),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, generation).run(suite)
+    m15 = next(item for item in output.report.observations if item.metric_id == "M15")
+    m13 = next(item for item in output.report.observations if item.metric_id == "M13")
+    assert m15.status == "computed" and m15.reference_kind == "ground_truth" and m15.model_identifier is None
+    assert m13.status == "unavailable"
 
 
 def test_m5_uses_text_pages_and_page_fallback_only(tmp_path):

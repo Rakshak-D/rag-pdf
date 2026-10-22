@@ -59,6 +59,7 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | M12 | BERTScore F1 using cached English `roberta-large` representations | score, higher is better |
 | M13 | `round((1 - cosine(response_snippet, prompt_snippet)) * 100, 2)` | points, lower is better |
 | M14 | Percentage of response sentences with at least 30% unique context-term overlap | percent, higher is better |
+| M15 | Ground-truth sentence coverage or lexical multiset coverage | percent, higher is better |
 | M16 | `GenerationResult.elapsed_seconds` for successful generation | seconds, lower is better |
 
 M5 is skipped when a case has no required pages. M9 is skipped for missing or
@@ -145,6 +146,29 @@ available and otherwise the audited fallback set. M14 has no model identifier.
 This lexical overlap cannot detect contradictions, negation, entailment
 failures, attribution errors, or unsupported numbers. A high score is not
 proof of factual accuracy or low hallucination risk.
+
+M15 preserves both audited modes of ground-truth coverage. A stripped explicit
+benchmark reference is preferred; otherwise non-empty formatted retrieved
+context is used as a `retrieved_context` fallback. With the caller-supplied
+text embedder, reference and response sentences are encoded separately with
+`encode_text()`. Each reference sentence is covered when its maximum cosine
+similarity to any response sentence is at least `0.60`, and the score is the
+percentage of covered reference sentences. If no embedder is supplied, M15
+uses the lexical fallback: lowercase alphabetic terms of at least three
+characters are stopword-filtered and counted with a multiset intersection
+divided by the number of filtered reference tokens. Repeated terms therefore
+retain their legacy frequency contribution. Local NLTK resources are used when
+available and never downloaded; the audited fallback stopword set and regex
+sentence splitter keep this mode offline. Semantic inference failures are
+failed observations and do not switch to lexical scoring. Computed zero,
+skipped missing stages, and no-reference cases remain distinct. Aggregates
+average computed case percentages and preserve mixed reference provenance.
+
+M15 measures how much reference content is represented in the response under
+the selected algorithm. It is not a factuality, entailment, completeness, or
+hallucination test; high coverage cannot detect contradictions or unsupported
+claims. Semantic model identifiers are caller-supplied provenance only and do
+not prove immutable model weights.
 
 Latency values are runtime measurements and are not expected to be identical
 between executions. Trace and evaluation fingerprints retain only their
