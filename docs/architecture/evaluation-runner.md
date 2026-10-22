@@ -58,6 +58,7 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | M11 | NLTK METEOR with one ground-truth reference | score, higher is better |
 | M12 | BERTScore F1 using cached English `roberta-large` representations | score, higher is better |
 | M13 | `round((1 - cosine(response_snippet, prompt_snippet)) * 100, 2)` | points, lower is better |
+| M14 | Percentage of response sentences with at least 30% unique context-term overlap | percent, higher is better |
 | M16 | `GenerationResult.elapsed_seconds` for successful generation | seconds, lower is better |
 
 M5 is skipped when a case has no required pages. M9 is skipped for missing or
@@ -128,6 +129,22 @@ policy remain the caller's responsibility. Lower FCD means greater embedding
 similarity to a prompt containing instructions, query, and context; it is not
 a factuality classifier, entailment or contradiction detector, or proof of
 grounding. Model names do not prove immutable weight provenance.
+
+M14 is the audited, model-free lexical faithfulness heuristic. It splits the
+generated response with locally available NLTK sentence tokenization and
+falls back to `re.split(r'(?<=[.!?])\\s+', text)` without downloading data.
+Context and sentence terms are unique lowercase alphabetic tokens of at least
+three characters after English stopword removal. A sentence is grounded when
+its context-term overlap is at least 0.30; sentences with no remaining terms
+are excluded from the denominator. The per-case score is the grounded-sentence
+percentage, and the report aggregate is the arithmetic mean of eligible case
+percentages. Missing/empty stages are skipped, calculation failures are failed,
+and a genuine zero remains computed. Stopwords use the local NLTK corpus when
+available and otherwise the audited fallback set. M14 has no model identifier.
+
+This lexical overlap cannot detect contradictions, negation, entailment
+failures, attribution errors, or unsupported numbers. A high score is not
+proof of factual accuracy or low hallucination risk.
 
 Latency values are runtime measurements and are not expected to be identical
 between executions. Trace and evaluation fingerprints retain only their
