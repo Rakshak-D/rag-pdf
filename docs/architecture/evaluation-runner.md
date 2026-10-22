@@ -54,6 +54,8 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | M6 | Stemmed ROUGE-1 F-measure against the selected reference | f-measure, higher is better |
 | M7 | Stemmed ROUGE-2 F-measure against the selected reference | f-measure, higher is better |
 | M8 | Stemmed ROUGE-L F-measure against the selected reference | f-measure, higher is better |
+| M10 | NLTK sentence BLEU with one ground-truth reference and `SmoothingFunction().method4` | score, higher is better |
+| M11 | NLTK METEOR with one ground-truth reference | score, higher is better |
 | M16 | `GenerationResult.elapsed_seconds` for successful generation | seconds, lower is better |
 
 M5 is skipped when a case has no required pages. M9 is skipped for missing or
@@ -75,6 +77,23 @@ ROUGE overlap is not a factuality, entailment, completeness, or hallucination
 judge. Reference text exists only during transient metric calculation and is
 not copied into traces or reports. Aggregates use `mixed_reference` when their
 observations contain more than one reference kind.
+
+M10 and M11 use only an explicit, non-empty `BenchmarkCase.reference_text`;
+they never use the retrieved context as a fallback. Each input is lower-cased,
+tokenized with `nltk.word_tokenize`, and falls back to the local regular
+expression `[A-Za-z0-9']+` only when tokenizer resources raise `LookupError`.
+BLEU is computed exactly as
+`sentence_bleu([reference_tokens], hypothesis_tokens,
+smoothing_function=SmoothingFunction().method4)`. METEOR is computed as
+`meteor_score([reference_tokens], hypothesis_tokens)`. The reference tokens are
+passed first in both calls. A short ground-truth string is valid for these
+metrics (unlike the ROUGE ground-truth threshold). Missing ground truth or
+generation is skipped, unavailable scoring components are reported as
+unavailable, scoring errors are failed, and a finite score of `0.0` remains a
+computed result. No NLTK resource is downloaded automatically; METEOR may be
+unavailable when local WordNet resources are absent. BLEU and METEOR are
+lexical-overlap measures, not factuality, entailment, completeness, or
+hallucination judges.
 
 Latency values are runtime measurements and are not expected to be identical
 between executions. Trace and evaluation fingerprints retain only their

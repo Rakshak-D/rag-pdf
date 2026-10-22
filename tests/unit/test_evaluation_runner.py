@@ -36,19 +36,42 @@ def setup_chain(tmp_path: Path):
     return plan, query, result, formatter, generation
 
 
-def test_runner_completes_and_aggregates_four_metrics(tmp_path):
+def test_runner_completes_and_aggregates_audited_metrics(tmp_path):
     plan, query, result, formatter, generation = setup_chain(tmp_path)
     suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5, required_pages=("3",)),))
     runner = EvaluationRunner(plan, lambda case, supplied_plan: result, formatter, generation)
     output = runner.run(suite)
     assert output.outcomes[0].status == "succeeded"
     assert output.traces[0].status == "succeeded"
-    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M16"}
+    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M16"}
     rouge1 = next(item for item in output.report.observations if item.metric_id == "M6")
     assert rouge1.status == "computed" and rouge1.reference_kind == "context_pseudoreference"
     assert "supported [T1]" not in repr(output.report)
     assert output.report.aggregates[1].value == 100.0
     assert output.report.aggregates[1].eligible_count == 1
+
+
+def test_nltk_metrics_require_explicit_ground_truth_without_context_fallback(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5, reference_text="short"),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, generation).run(suite)
+    for metric_id in ("M10", "M11"):
+        observation = next(item for item in output.report.observations if item.metric_id == metric_id)
+        assert observation.reference_kind == "ground_truth"
+        assert observation.status in {"computed", "unavailable", "failed"}
+        assert observation.reason_code != "missing_ground_truth"
+
+
+def test_nltk_metrics_missing_reference_are_skipped_even_with_context(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, generation).run(suite)
+    for metric_id in ("M10", "M11"):
+        observation = next(item for item in output.report.observations if item.metric_id == metric_id)
+        assert observation.status == "skipped"
+        assert observation.value is None
+        assert observation.reference_kind == "no_reference"
+        assert observation.reason_code == "missing_ground_truth"
 
 
 def test_m5_uses_text_pages_and_page_fallback_only(tmp_path):
