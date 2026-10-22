@@ -43,7 +43,7 @@ def test_runner_completes_and_aggregates_audited_metrics(tmp_path):
     output = runner.run(suite)
     assert output.outcomes[0].status == "succeeded"
     assert output.traces[0].status == "succeeded"
-    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M16"}
+    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M16"}
     rouge1 = next(item for item in output.report.observations if item.metric_id == "M6")
     assert rouge1.status == "computed" and rouge1.reference_kind == "context_pseudoreference"
     assert "supported [T1]" not in repr(output.report)
@@ -83,6 +83,33 @@ def test_bertscore_missing_reference_is_skipped_without_model_loading(tmp_path):
     assert observation.reference_kind == "no_reference"
     assert observation.value is None
     assert observation.model_identifier is None
+
+
+def test_fcd_without_injected_embedder_is_unavailable(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, generation).run(suite)
+    observation = next(item for item in output.report.observations if item.metric_id == "M13")
+    assert observation.status == "unavailable"
+    assert observation.reason_code == "fcd_embedder_unavailable"
+    assert observation.value is None
+
+
+def test_fcd_injected_embedder_is_rounded_and_aggregated(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+
+    class Embedder:
+        model_name = "text-test"
+        def embed_query(self, text):
+            return [1.0, 0.0] if text.startswith("supported") else [0.6, 0.8]
+
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, generation, text_embedder=Embedder()).run(suite)
+    observation = next(item for item in output.report.observations if item.metric_id == "M13")
+    aggregate = next(item for item in output.report.aggregates if item.metric_id == "M13")
+    assert observation.status == "computed" and observation.value == 40.0
+    assert aggregate.value == 40.0 and aggregate.eligible_count == 1
+    assert aggregate.model_identifier == "text-test"
 
 
 def test_m5_uses_text_pages_and_page_fallback_only(tmp_path):

@@ -80,3 +80,8 @@ by the runner: it uses cached English `roberta-large` with the legacy
 17-layer, IDF-disabled, baseline-disabled settings. Cache resolution is local
 only; absent weights are unavailable rather than downloaded or replaced. Its
 model identifier is provenance metadata, not proof of immutable weights.
+The runner also records M13 as a prompt-embedding distance only when a caller
+supplies the text embedder. Its prompt and answer inputs remain transient and
+are not copied into traces or reports; the metric's `retrieved_context`
+reference kind describes the context used to build the prompt, not a factual
+ground-truth reference.

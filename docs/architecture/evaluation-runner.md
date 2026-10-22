@@ -57,6 +57,7 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | M10 | NLTK sentence BLEU with one ground-truth reference and `SmoothingFunction().method4` | score, higher is better |
 | M11 | NLTK METEOR with one ground-truth reference | score, higher is better |
 | M12 | BERTScore F1 using cached English `roberta-large` representations | score, higher is better |
+| M13 | `round((1 - cosine(response_snippet, prompt_snippet)) * 100, 2)` | points, lower is better |
 | M16 | `GenerationResult.elapsed_seconds` for successful generation | seconds, lower is better |
 
 M5 is skipped when a case has no required pages. M9 is skipped for missing or
@@ -113,6 +114,20 @@ evaluation run and reused. A model identifier may include a cached revision
 when available, but model names do not prove immutable weight provenance or
 execution authenticity. BERTScore is a semantic reference-similarity measure,
 not a factuality, entailment, completeness, or hallucination judge.
+
+M13 preserves the legacy FCD calculation but names its target precisely: it
+compares the generated answer's first 2,000 characters with the first 2,000
+characters of the exact legacy prompt built from the query and formatted text
+context. Both snippets are encoded through an injected text embedder's
+`embed_query()` method, in response-then-prompt order. The cosine distance is
+converted to points and rounded to two decimals per case before aggregation.
+No reference answer is used. An absent embedder is explicitly unavailable;
+embedding failures are failed observations and missing stages are skipped.
+The runner never constructs a default embedder, so model loading and cache
+policy remain the caller's responsibility. Lower FCD means greater embedding
+similarity to a prompt containing instructions, query, and context; it is not
+a factuality classifier, entailment or contradiction detector, or proof of
+grounding. Model names do not prove immutable weight provenance.
 
 Latency values are runtime measurements and are not expected to be identical
 between executions. Trace and evaluation fingerprints retain only their
