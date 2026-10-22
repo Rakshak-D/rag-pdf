@@ -21,6 +21,7 @@ from backend.experiments.bertscore_metrics import BertScoreAdapter, BertScoreRes
 from backend.experiments.fcd_metrics import FcdMetricAdapter, FcdResult
 from backend.experiments.faithfulness_metrics import FaithfulnessMetricAdapter, FaithfulnessResult
 from backend.experiments.gt_coverage_metrics import GtCoverageMetricAdapter, GtCoverageResult
+from backend.experiments.throughput_metrics import ThroughputMetricAdapter
 from backend.experiments.tracing import TraceFailure, QueryTrace, build_failed_query_trace, build_query_trace
 
 
@@ -207,7 +208,7 @@ class EvaluationRunner:
             result = scorer.score(context.text_context, generation.response, "retrieved_context")
         return _observation(trace_id, "M15", "GT Coverage / Context Utilization", result.status, result.value, "percent", "higher_is_better", reference_kind, "legacy-m15-v1", result.reason_code, "Reference coverage using semantic sentence similarity when an embedder is injected, otherwise lexical multiset term-frequency overlap; not a factuality test.", model_identifier=result.model_identifier)
 
-    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, model_identifier: str | None = None, config: object, rouge_scorer: RougeScorerAdapter, nltk_scorer: NltkMetricsAdapter, bertscore_scorer: BertScoreAdapter, fcd_scorer: FcdMetricAdapter, faithfulness_scorer: FaithfulnessMetricAdapter, gt_coverage_scorer: GtCoverageMetricAdapter) -> list[MetricObservation]:
+    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, generation_elapsed: object | None = None, generation_timing_error: str | None = None, model_identifier: str | None = None, config: object, rouge_scorer: RougeScorerAdapter, nltk_scorer: NltkMetricsAdapter, bertscore_scorer: BertScoreAdapter, fcd_scorer: FcdMetricAdapter, faithfulness_scorer: FaithfulnessMetricAdapter, gt_coverage_scorer: GtCoverageMetricAdapter, throughput_scorer: ThroughputMetricAdapter) -> list[MetricObservation]:
         observations: list[MetricObservation] = []
         retrieval_available = retrieval is not None and (failure is None or failure.stage != "retrieval")
         if retrieval_available:
@@ -240,7 +241,25 @@ class EvaluationRunner:
         observations.append(self._fcd_metric(trace_id, case, context, generation, fcd_scorer))
         observations.append(self._faithfulness_metric(trace_id, context, generation, faithfulness_scorer))
         observations.append(self._gt_coverage_metric(trace_id, case, context, generation, gt_coverage_scorer))
+        observations.append(self._throughput_metric(trace_id, generation_attempted, generation_elapsed, generation_timing_error, throughput_scorer))
         return observations
+
+    @staticmethod
+    def _throughput_metric(trace_id: str, generation_attempted: bool, elapsed_seconds: object | None, timing_error: str | None, scorer: ThroughputMetricAdapter) -> MetricObservation:
+        result = scorer.score(elapsed_seconds, attempted=generation_attempted, timing_error=timing_error)
+        return _observation(
+            trace_id,
+            "M17",
+            "Generation throughput",
+            result.status,
+            result.value,
+            "queries/second",
+            "higher_is_better",
+            "not_applicable",
+            "legacy-m17-v1",
+            result.reason_code,
+            "Sequential generation-invocation throughput: one divided by the positive measured invocation duration.",
+        )
 
     @staticmethod
     def _aggregate(metric_id: str, observations: Sequence[MetricObservation], *, model_identifier: str | None = None) -> MetricAggregate:
@@ -249,12 +268,34 @@ class EvaluationRunner:
         skipped = sum(item.status == "skipped" for item in related)
         failed = sum(item.status == "failed" for item in related)
         unavailable = sum(item.status == "unavailable" for item in related)
-        value = sum(eligible) / len(eligible) if eligible else None
+        if metric_id == "M17" and eligible:
+            try:
+                denominator = sum(1.0 / float(item) for item in eligible)
+                value = len(eligible) / denominator if math.isfinite(denominator) and denominator > 0 else None
+            except (ArithmeticError, TypeError, ValueError, OverflowError):
+                value = None
+        else:
+            value = sum(eligible) / len(eligible) if eligible else None
         status = "computed" if eligible and not (skipped or failed or unavailable) else "partial" if eligible else "no_eligible_values"
         sample = related[0]
         reference_kinds = {item.reference_kind for item in related}
         reference_kind = next(iter(reference_kinds)) if len(reference_kinds) == 1 else "mixed_reference"
         return MetricAggregate(metric_id, sample.metric_name, status, value, sample.unit, sample.optimization_direction, reference_kind, sample.implementation_version, len(eligible), skipped, failed, unavailable, model_identifier=model_identifier, methodology_note=sample.methodology_note)
+
+    @staticmethod
+    def _read_generation_clock(clock: Callable[[], float]) -> tuple[object | None, str | None]:
+        try:
+            value = clock()
+        except Exception:
+            return None, "generation_timing_failed"
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return value, "invalid_generation_timing"
+        try:
+            if not math.isfinite(float(value)):
+                return value, "invalid_generation_timing"
+        except (TypeError, ValueError, OverflowError):
+            return value, "invalid_generation_timing"
+        return value, None
 
     def run(self, suite: BenchmarkSuite) -> EvaluationRunResult:
         cases = self._validate_suite(suite)
@@ -268,6 +309,7 @@ class EvaluationRunner:
         fcd_scorer = FcdMetricAdapter(self._text_embedder)
         faithfulness_scorer = FaithfulnessMetricAdapter()
         gt_coverage_scorer = GtCoverageMetricAdapter(self._text_embedder)
+        throughput_scorer = ThroughputMetricAdapter()
         for case in cases:
             text_k = case.text_k if "text" in case.modalities else None
             image_k = case.image_k if "image" in case.modalities else None
@@ -291,7 +333,7 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("retrieval", "retrieval_failed", exc)
                 trace = build_failed_query_trace(self._plan, query=case.query, modalities=case.modalities, text_k=text_k, image_k=image_k, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer))
+                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "retrieval", trace.trace_id, failure.error_code)); continue
             try:
                 context = self._context_formatter.format(retrieval_result, self._plan)
@@ -302,12 +344,30 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("context", "context_failed", exc)
                 trace = build_query_trace(retrieval_result, self._plan, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer))
+                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "context", trace.trace_id, failure.error_code)); continue
             generation_attempted = True
             reached = "generation"
+            generation_start, generation_timing_error = self._read_generation_clock(self._clock)
+            generation_end = None
+            generation_elapsed = None
+            generation_exception = None
             try:
-                generation = self._generation.generate(context, self._plan)
+                try:
+                    generation = self._generation.generate(context, self._plan)
+                except Exception as exc:
+                    generation_exception = exc
+                finally:
+                    generation_end, end_error = self._read_generation_clock(self._clock)
+                    if generation_timing_error is None and end_error is not None:
+                        generation_timing_error = end_error
+                if generation_timing_error is None:
+                    try:
+                        generation_elapsed = generation_end - generation_start
+                    except (TypeError, ValueError):
+                        generation_timing_error = "generation_timing_failed"
+                if generation_exception is not None:
+                    raise generation_exception
                 if not isinstance(generation, GenerationResult):
                     raise EvaluationRunnerError("generation returned an invalid result")
                 if generation.status == "failed":
@@ -320,13 +380,13 @@ class EvaluationRunner:
                 generation = None
                 failure = _failure("generation", "generation_failed", exc, attempts=getattr(exc, "attempts", None), elapsed=getattr(exc, "elapsed_seconds", None))
                 trace = build_query_trace(retrieval_result, self._plan, context=context, failure=failure)
-            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, model_identifier=config.llm_model if generation_attempted else None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer))
+            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, generation_elapsed=generation_elapsed, generation_timing_error=generation_timing_error, model_identifier=config.llm_model if generation_attempted else None, config=config, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer))
             traces.append(trace)
             outcomes.append(EvaluationCaseOutcome(case.case_id, "succeeded" if trace.status == "succeeded" else "failed", reached, trace.trace_id, trace.error_code))
         m16_model = next((item.model_identifier for item in observations if item.metric_id == "M16" and item.status == "computed" and item.model_identifier is not None), None)
         m12_model = next((item.model_identifier for item in observations if item.metric_id == "M12" and item.status == "computed" and item.model_identifier is not None), None)
         m13_model = next((item.model_identifier for item in observations if item.metric_id == "M13" and item.status == "computed" and item.model_identifier is not None), None)
         m15_model = next((item.model_identifier for item in observations if item.metric_id == "M15" and item.status == "computed" and item.model_identifier is not None), None)
-        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else m12_model if metric_id == "M12" else m13_model if metric_id == "M13" else m15_model if metric_id == "M15" else None) for metric_id in ("M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16")]
+        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else m12_model if metric_id == "M12" else m13_model if metric_id == "M13" else m15_model if metric_id == "M15" else None) for metric_id in ("M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17")]
         report = build_evaluation_report(traces, observations, aggregates, run_fingerprint=self._plan.run_fingerprint, benchmark_id=suite.benchmark_id, benchmark_version=suite.benchmark_version)
         return EvaluationRunResult(report, tuple(traces), tuple(outcomes))

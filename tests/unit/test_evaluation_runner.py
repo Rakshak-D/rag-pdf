@@ -43,7 +43,7 @@ def test_runner_completes_and_aggregates_audited_metrics(tmp_path):
     output = runner.run(suite)
     assert output.outcomes[0].status == "succeeded"
     assert output.traces[0].status == "succeeded"
-    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16"}
+    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17"}
     rouge1 = next(item for item in output.report.observations if item.metric_id == "M6")
     assert rouge1.status == "computed" and rouge1.reference_kind == "context_pseudoreference"
     assert "supported [T1]" not in repr(output.report)
@@ -249,3 +249,61 @@ def test_context_output_is_validated_before_generation(tmp_path):
     assert output.outcomes[0].reached_stage == "context"
     assert output.traces[0].failed_stage == "context"
     assert next(item for item in output.report.observations if item.metric_id == "M16").reason_code == "generation_not_reached"
+
+
+def test_m17_times_only_the_generation_invocation_and_uses_harmonic_aggregate(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+    second_query = "What is the second finding?"
+    second = result.__class__(query_id_for(second_query, plan, ("text",), 5, None), result.index_fingerprint, result.document_manifest_hash, ("text",), 5, None, result.text_hits, (), result.fusion_strategy, result.effective_weights, result.diagnostics, result.modality_timings, result.total_elapsed_seconds, query_text=second_query)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5), BenchmarkCase("case-2", second_query, ("text",), text_k=5)))
+    ticks = iter((10.0, 12.0, 20.0, 24.0))
+    output = EvaluationRunner(plan, lambda case, _: result if case.case_id == "case-1" else second, formatter, generation, clock=lambda: next(ticks)).run(suite)
+    values = [item.value for item in output.report.observations if item.metric_id == "M17"]
+    aggregate = next(item for item in output.report.aggregates if item.metric_id == "M17")
+    assert values == [0.5, 0.25]
+    assert aggregate.value == pytest.approx(2.0 / 6.0)
+    assert aggregate.reference_kind == "not_applicable"
+    assert aggregate.model_identifier is None
+
+
+def test_m17_clock_end_is_sampled_immediately_after_generation(tmp_path):
+    plan, query, result, formatter, _ = setup_chain(tmp_path)
+    events = []
+
+    class Generation:
+        def generate(self, context, supplied_plan):
+            events.append("generate")
+            return LocalGenerationAdapter(client_factory=lambda _: None, encoder=Encoder()).generate(context, supplied_plan)
+
+    ticks = iter((1.0, 3.0))
+
+    def clock():
+        events.append("clock")
+        return next(ticks)
+
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    EvaluationRunner(plan, lambda *_: result, formatter, Generation(), clock=clock).run(suite)
+    assert events[:3] == ["clock", "generate", "clock"]
+
+
+def test_m17_times_failed_generation_but_not_retrieval_or_context(tmp_path):
+    plan, query, result, formatter, _ = setup_chain(tmp_path)
+
+    class FailingGeneration:
+        def generate(self, context, supplied_plan):
+            raise RuntimeError("private detail")
+
+    ticks = iter((100.0, 102.0))
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, FailingGeneration(), clock=lambda: next(ticks)).run(suite)
+    m17 = next(item for item in output.report.observations if item.metric_id == "M17")
+    assert m17.status == "computed" and m17.value == 0.5
+    assert output.outcomes[0].reached_stage == "generation"
+
+
+def test_m17_skips_when_generation_is_not_reached(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: (_ for _ in ()).throw(RuntimeError("no retrieval")), formatter, generation).run(suite)
+    m17 = next(item for item in output.report.observations if item.metric_id == "M17")
+    assert m17.status == "skipped" and m17.reason_code == "generation_not_reached" and m17.value is None

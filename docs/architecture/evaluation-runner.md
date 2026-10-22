@@ -61,12 +61,13 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | M14 | Percentage of response sentences with at least 30% unique context-term overlap | percent, higher is better |
 | M15 | Ground-truth sentence coverage or lexical multiset coverage | percent, higher is better |
 | M16 | `GenerationResult.elapsed_seconds` for successful generation | seconds, lower is better |
+| M17 | positive generation-invocation count divided by the sum of positive invocation durations | queries/second, higher is better |
 
 M5 is skipped when a case has no required pages. M9 is skipped for missing or
 empty text context. Failed or unreached stages receive explicit failed/skipped
 observations. A measured value of `0.0` remains computed; missing data is never
-converted into zero. No other metrics or metric formulas are executed in this
-phase; M13–M15 and M17–M19 remain outside this runner.
+converted into zero. M17 is the sequential generation-invocation throughput
+metric described below; M18 and M19 remain outside this runner.
 
 For M6–M8, a stripped `BenchmarkCase.reference_text` is used as ground truth
 only when it is longer than 20 characters. Otherwise the formatted context is
@@ -169,6 +170,21 @@ the selected algorithm. It is not a factuality, entailment, completeness, or
 hallucination test; high coverage cannot detect contradictions or unsupported
 claims. Semantic model identifiers are caller-supplied provenance only and do
 not prove immutable model weights.
+
+M17 preserves the audited sequential throughput formula: the number of positive
+generation invocation durations divided by their summed duration. The runner's
+injected clock is sampled immediately before and after the injected
+`generation_adapter.generate()` call, so retrieval, context preparation, and
+metrics calculated afterward are excluded. Each eligible case contributes
+`1 / elapsed_seconds` queries per second; the aggregate is their harmonic mean,
+which is equivalent to the audited ratio. Only finite positive durations are
+eligible. A call that raises or returns a failed or malformed result can still
+contribute when its invocation timing is valid, while a case that never reaches
+generation is skipped. Zero, invalid, backward-clock, and clock-failure cases
+are explicit skipped or failed observations rather than computed zeroes.
+M16 remains independent and continues to use `GenerationResult.elapsed_seconds`.
+M17 is sequential invocation throughput, not concurrent or total application
+throughput, and its timing is not stored as hidden trace telemetry.
 
 Latency values are runtime measurements and are not expected to be identical
 between executions. Trace and evaluation fingerprints retain only their
