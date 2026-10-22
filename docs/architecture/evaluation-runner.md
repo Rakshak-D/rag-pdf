@@ -62,12 +62,13 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | M15 | Ground-truth sentence coverage or lexical multiset coverage | percent, higher is better |
 | M16 | `GenerationResult.elapsed_seconds` for successful generation | seconds, lower is better |
 | M17 | positive generation-invocation count divided by the sum of positive invocation durations | queries/second, higher is better |
+| M18 | arithmetic mean of normalized process-CPU samples during generation | percent, lower is better |
 
 M5 is skipped when a case has no required pages. M9 is skipped for missing or
 empty text context. Failed or unreached stages receive explicit failed/skipped
 observations. A measured value of `0.0` remains computed; missing data is never
-converted into zero. M17 is the sequential generation-invocation throughput
-metric described below; M18 and M19 remain outside this runner.
+converted into zero. M17 and M18 are the sequential generation-invocation and
+process-CPU metrics described below; M19 remains outside this runner.
 
 For M6–M8, a stripped `BenchmarkCase.reference_text` is used as ground truth
 only when it is longer than 20 characters. Otherwise the formatted context is
@@ -185,6 +186,20 @@ are explicit skipped or failed observations rather than computed zeroes.
 M16 remains independent and continues to use `GenerationResult.elapsed_seconds`.
 M17 is sequential invocation throughput, not concurrent or total application
 throughput, and its timing is not stored as hidden trace telemetry.
+
+M18 preserves the audited sampled process-CPU metric. A bounded monitor primes
+the current Python process's `psutil.Process.cpu_percent(interval=None)` counter,
+samples at the legacy 0.05-second interval during the generation invocation,
+and divides every valid raw sample by `max(os.cpu_count() or 1, 1)`. Each case
+uses the arithmetic mean of its normalized samples, and the report aggregate is
+the arithmetic mean of eligible case percentages. Missing samples are reported
+as `unavailable`, while invalid samples and monitor startup/shutdown failures
+are explicit failures; a measured zero remains computed. Monitoring is
+stopped in a bounded, event-driven shutdown path and cannot alter generation or
+trace outcomes. Valid samples may still produce M18 when generation returns a
+failed result or raises. M18 measures current-process CPU, not model-only CPU,
+GPU utilization, or whole-system CPU consumption. It does not collect RSS or
+GPU telemetry; M19 remains out of scope.
 
 Latency values are runtime measurements and are not expected to be identical
 between executions. Trace and evaluation fingerprints retain only their

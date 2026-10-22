@@ -9,6 +9,7 @@ from backend.engine.context import ContextFormatter
 from backend.engine.generation import GenerationResult, LocalGenerationAdapter
 from backend.engine.retrieval import HybridHit, HybridRetrievalResult, query_id_for
 from backend.experiments import BenchmarkCase, BenchmarkSuite, EvaluationRunner, EvaluationRunnerError, build_run_plan
+from backend.experiments.cpu_metrics import CpuUsageResult
 from notebooks.config import Config
 
 
@@ -43,7 +44,7 @@ def test_runner_completes_and_aggregates_audited_metrics(tmp_path):
     output = runner.run(suite)
     assert output.outcomes[0].status == "succeeded"
     assert output.traces[0].status == "succeeded"
-    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17"}
+    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18"}
     rouge1 = next(item for item in output.report.observations if item.metric_id == "M6")
     assert rouge1.status == "computed" and rouge1.reference_kind == "context_pseudoreference"
     assert "supported [T1]" not in repr(output.report)
@@ -307,3 +308,51 @@ def test_m17_skips_when_generation_is_not_reached(tmp_path):
     output = EvaluationRunner(plan, lambda *_: (_ for _ in ()).throw(RuntimeError("no retrieval")), formatter, generation).run(suite)
     m17 = next(item for item in output.report.observations if item.metric_id == "M17")
     assert m17.status == "skipped" and m17.reason_code == "generation_not_reached" and m17.value is None
+
+
+def test_m18_monitor_lifecycle_is_outside_m17_window(tmp_path):
+    plan, query, result, formatter, _ = setup_chain(tmp_path)
+    events = []
+
+    class Monitor:
+        def start(self):
+            events.append("monitor-start")
+        def stop(self):
+            events.append("monitor-stop")
+            return CpuUsageResult("computed", 25.0)
+
+    class Generation:
+        def generate(self, context, supplied_plan):
+            events.append("generation")
+            return setup_chain(tmp_path)[4].generate(context, supplied_plan)
+
+    ticks = iter((10.0, 12.0))
+    def clock():
+        events.append("clock")
+        return next(ticks)
+
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, Generation(), clock=clock, cpu_monitor_factory=Monitor).run(suite)
+    m18 = next(item for item in output.report.observations if item.metric_id == "M18")
+    m17 = next(item for item in output.report.observations if item.metric_id == "M17")
+    assert m18.status == "computed" and m18.value == 25.0
+    assert m17.status == "computed" and m17.value == 0.5
+    assert events[:5] == ["monitor-start", "clock", "generation", "clock", "monitor-stop"]
+
+
+def test_m18_monitor_failure_does_not_change_generation_or_m17(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+
+    class Monitor:
+        def start(self):
+            raise RuntimeError("private monitor detail")
+        def stop(self):
+            raise AssertionError("stop is not needed after startup failure")
+
+    ticks = iter((1.0, 3.0))
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, generation, clock=lambda: next(ticks), cpu_monitor_factory=Monitor).run(suite)
+    m18 = next(item for item in output.report.observations if item.metric_id == "M18")
+    m17 = next(item for item in output.report.observations if item.metric_id == "M17")
+    assert m18.status == "failed" and m18.reason_code == "cpu_monitor_start_failed"
+    assert m17.status == "computed" and m17.value == 0.5
