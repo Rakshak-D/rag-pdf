@@ -71,8 +71,12 @@ The existing notebook formulas and metric IDs remain the methodology source of
 truth described in `docs/audit/evaluation-metrics.md`. These contracts record
 their provenance and limitations; the evaluation runner ports only the audited
 M6–M8 ROUGE formulas and the audited M10 BLEU and M11 METEOR formulas in
-addition to the existing bounded metrics. BERTScore, FCD, faithfulness, and
-other later metrics remain out of scope. BLEU and METEOR use only explicit
+addition to the existing bounded metrics. FCD, faithfulness, and other later
+metrics remain out of scope. BLEU and METEOR use only explicit
 ground-truth text and never copy that transient reference into a trace or
 report; missing NLTK resources are represented as unavailable without
-automatic downloads.
+automatic downloads. The audited M12 BERTScore F1 metric is also represented
+by the runner: it uses cached English `roberta-large` with the legacy
+17-layer, IDF-disabled, baseline-disabled settings. Cache resolution is local
+only; absent weights are unavailable rather than downloaded or replaced. Its
+model identifier is provenance metadata, not proof of immutable weights.

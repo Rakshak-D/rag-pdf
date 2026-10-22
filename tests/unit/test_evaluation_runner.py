@@ -43,7 +43,7 @@ def test_runner_completes_and_aggregates_audited_metrics(tmp_path):
     output = runner.run(suite)
     assert output.outcomes[0].status == "succeeded"
     assert output.traces[0].status == "succeeded"
-    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M16"}
+    assert {item.metric_id for item in output.report.observations} == {"M3", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M16"}
     rouge1 = next(item for item in output.report.observations if item.metric_id == "M6")
     assert rouge1.status == "computed" and rouge1.reference_kind == "context_pseudoreference"
     assert "supported [T1]" not in repr(output.report)
@@ -72,6 +72,17 @@ def test_nltk_metrics_missing_reference_are_skipped_even_with_context(tmp_path):
         assert observation.value is None
         assert observation.reference_kind == "no_reference"
         assert observation.reason_code == "missing_ground_truth"
+
+
+def test_bertscore_missing_reference_is_skipped_without_model_loading(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, generation).run(suite)
+    observation = next(item for item in output.report.observations if item.metric_id == "M12")
+    assert observation.status == "skipped"
+    assert observation.reference_kind == "no_reference"
+    assert observation.value is None
+    assert observation.model_identifier is None
 
 
 def test_m5_uses_text_pages_and_page_fallback_only(tmp_path):

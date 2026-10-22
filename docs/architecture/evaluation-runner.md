@@ -56,13 +56,14 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | M8 | Stemmed ROUGE-L F-measure against the selected reference | f-measure, higher is better |
 | M10 | NLTK sentence BLEU with one ground-truth reference and `SmoothingFunction().method4` | score, higher is better |
 | M11 | NLTK METEOR with one ground-truth reference | score, higher is better |
+| M12 | BERTScore F1 using cached English `roberta-large` representations | score, higher is better |
 | M16 | `GenerationResult.elapsed_seconds` for successful generation | seconds, lower is better |
 
 M5 is skipped when a case has no required pages. M9 is skipped for missing or
 empty text context. Failed or unreached stages receive explicit failed/skipped
 observations. A measured value of `0.0` remains computed; missing data is never
 converted into zero. No other metrics or metric formulas are executed in this
-phase.
+phase; M13–M15 and M17–M19 remain outside this runner.
 
 For M6–M8, a stripped `BenchmarkCase.reference_text` is used as ground truth
 only when it is longer than 20 characters. Otherwise the formatted context is
@@ -94,6 +95,24 @@ computed result. No NLTK resource is downloaded automatically; METEOR may be
 unavailable when local WordNet resources are absent. BLEU and METEOR are
 lexical-overlap measures, not factuality, entailment, completeness, or
 hallucination judges.
+
+M12 uses only a non-empty explicit ground-truth reference and generated
+response. It preserves the audited BERTScore call with candidate first and
+reference second, English `roberta-large`, the legacy 17-layer setting,
+`idf=False`, and `rescale_with_baseline=False`. CUDA is selected only when
+Torch reports it available; otherwise CPU is used. The execution batch size is
+bounded at 8 for memory control and is not part of the metric definition.
+
+The adapter resolves the model through the existing Hugging Face cache with
+`local_files_only=True` and passes the resolved local directory to the pinned
+BERTScore scorer. It never downloads, pulls, or silently substitutes another
+model. Missing dependencies, cached weights, or tokenizer files produce an
+explicit `unavailable` observation; load and scoring errors are `failed`, and
+valid zero scores remain `computed`. The scorer is initialized once per
+evaluation run and reused. A model identifier may include a cached revision
+when available, but model names do not prove immutable weight provenance or
+execution authenticity. BERTScore is a semantic reference-similarity measure,
+not a factuality, entailment, completeness, or hallucination judge.
 
 Latency values are runtime measurements and are not expected to be identical
 between executions. Trace and evaluation fingerprints retain only their
