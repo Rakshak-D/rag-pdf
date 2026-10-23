@@ -33,3 +33,6 @@ artifact and catalog writes.
 The optional HTTP boundary is implemented separately in Starlette and injects
 this service; the service itself remains unaware of HTTP, bearer tokens and
 ASGI lifecycle concerns. See `http-api.md` for route and deployment details.
+# Local job integration
+
+Long-running callers can place the same validated inputs behind the bounded local job manager. The manager delegates back to this synchronous service and does not duplicate execution or persistence logic.

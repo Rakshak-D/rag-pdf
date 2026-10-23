@@ -11,6 +11,14 @@ from .experiment_service import (
     PersistedAblationRun,
     PersistedEvaluationRun,
 )
+from .job_manager import (
+    ExperimentJobError,
+    ExperimentJobManager,
+    ExperimentJobRecord,
+    JobCapacityError,
+    JobNotFoundError,
+    JobStateError,
+)
 
 __all__ = [
     "ExperimentService",
@@ -22,4 +30,10 @@ __all__ = [
     "ServiceResultIntegrityError",
     "ServicePersistenceError",
     "ServiceCatalogError",
+    "ExperimentJobManager",
+    "ExperimentJobRecord",
+    "ExperimentJobError",
+    "JobNotFoundError",
+    "JobCapacityError",
+    "JobStateError",
 ]

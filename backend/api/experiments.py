@@ -28,6 +28,13 @@ from backend.services.experiment_service import (
     ServicePersistenceError,
     ServiceResultIntegrityError,
 )
+from backend.services.job_manager import (
+    ExperimentJobError,
+    ExperimentJobManager,
+    JobCapacityError,
+    JobNotFoundError,
+    JobStateError,
+)
 
 from .schemas import AblationRequest, EvaluationRequest, parse_json_object
 
@@ -80,6 +87,14 @@ def _map_error(exc: BaseException) -> JSONResponse:
         return _response_error("request_invalid", 400)
     if isinstance(exc, ExperimentServiceError):
         return _response_error("service_error", 500)
+    if isinstance(exc, JobNotFoundError):
+        return _response_error("job_not_found", 404)
+    if isinstance(exc, JobCapacityError):
+        return _response_error("job_capacity_exhausted", 429)
+    if isinstance(exc, JobStateError):
+        return _response_error(exc.error_code, 409 if exc.error_code == "job_not_cancellable" else 503)
+    if isinstance(exc, ExperimentJobError):
+        return _response_error(exc.error_code, 400)
     return _response_error("internal_error", 500)
 
 
@@ -181,6 +196,87 @@ async def submit_ablation(request: Request) -> JSONResponse:
         return _map_error(exc)
 
 
+def _job_record(record) -> dict[str, Any]:
+    return {name: getattr(record, name) for name in (
+        "job_id", "job_type", "status", "created_at", "started_at", "finished_at",
+        "benchmark_id", "benchmark_version", "run_fingerprint", "shared_index_fingerprint",
+        "document_manifest_hash", "artifact_id", "error_code", "result_status",
+    )}
+
+
+def _require_job_manager(request: Request) -> ExperimentJobManager:
+    manager = getattr(request.app.state, "job_manager", None)
+    if manager is None:
+        raise ApiRequestError("job_execution_unconfigured", 503)
+    return manager
+
+
+async def submit_evaluation_job(request: Request) -> JSONResponse:
+    try:
+        manager = _require_job_manager(request)
+        model = _model(EvaluationRequest, await _read_json(request, request.app.state.max_request_body_bytes))
+        run_plan, suite = _domain(model, "to_domain")
+        record = await run_in_threadpool(manager.submit_evaluation, run_plan, suite)
+        response = JSONResponse({"job": _job_record(record)}, status_code=202)
+        response.headers["Location"] = f"/api/v1/jobs/{record.job_id}"
+        return response
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def submit_ablation_job(request: Request) -> JSONResponse:
+    try:
+        manager = _require_job_manager(request)
+        model = _model(AblationRequest, await _read_json(request, request.app.state.max_request_body_bytes))
+        plan, suite = _domain(model, "to_domain")
+        record = await run_in_threadpool(manager.submit_ablation, plan, suite)
+        response = JSONResponse({"job": _job_record(record)}, status_code=202)
+        response.headers["Location"] = f"/api/v1/jobs/{record.job_id}"
+        return response
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def get_job(request: Request) -> JSONResponse:
+    try:
+        manager = _require_job_manager(request)
+        record = await run_in_threadpool(manager.get_job, request.path_params["job_id"])
+        return JSONResponse({"job": _job_record(record)})
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def list_jobs(request: Request) -> JSONResponse:
+    try:
+        manager = _require_job_manager(request)
+        query = request.query_params
+        kwargs: dict[str, Any] = {}
+        for name in ("job_type", "status"):
+            if name in query:
+                kwargs[name] = query[name]
+        for name, default in (("limit", 100), ("offset", 0)):
+            raw = query.get(name)
+            if raw is None:
+                kwargs[name] = default
+            elif not raw.isdecimal():
+                raise ApiRequestError("query_invalid", 400)
+            else:
+                kwargs[name] = int(raw)
+        values = await run_in_threadpool(manager.list_jobs, **kwargs)
+        return JSONResponse({"jobs": [_job_record(item) for item in values]})
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def cancel_job(request: Request) -> JSONResponse:
+    try:
+        manager = _require_job_manager(request)
+        record = await run_in_threadpool(manager.cancel_job, request.path_params["job_id"])
+        return JSONResponse({"job": _job_record(record)})
+    except Exception as exc:
+        return _map_error(exc)
+
+
 def _query_filters(request: Request) -> dict[str, Any]:
     query = request.query_params
     values: dict[str, Any] = {}
@@ -271,11 +367,16 @@ async def load_result(request: Request) -> Response:
         return _map_error(exc)
 
 
-def build_routes(service: ExperimentService, *, max_request_body_bytes: int) -> list[Route]:
+def build_routes(service: ExperimentService, *, max_request_body_bytes: int, job_manager: ExperimentJobManager | None = None) -> list[Route]:
     routes = [
         Route("/health", health, methods=["GET"]),
         Route("/api/v1/evaluations", submit_evaluation, methods=["POST"]),
         Route("/api/v1/ablations", submit_ablation, methods=["POST"]),
+        Route("/api/v1/jobs/evaluations", submit_evaluation_job, methods=["POST"]),
+        Route("/api/v1/jobs/ablations", submit_ablation_job, methods=["POST"]),
+        Route("/api/v1/jobs", list_jobs, methods=["GET"]),
+        Route("/api/v1/jobs/{job_id}/cancel", cancel_job, methods=["POST"]),
+        Route("/api/v1/jobs/{job_id}", get_job, methods=["GET"]),
         Route("/api/v1/artifacts", list_artifacts, methods=["GET"]),
         Route("/api/v1/artifacts/{artifact_id}/metrics", get_metrics, methods=["GET"]),
         Route("/api/v1/artifacts/{artifact_id}/comparisons", get_comparisons, methods=["GET"]),

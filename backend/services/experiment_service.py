@@ -254,9 +254,18 @@ class ExperimentService:
             values["ram_monitor_factory"] = self._ram_monitor_factory
         return values
 
-    def run_evaluation(self, run_plan: RunPlan, benchmark_suite: BenchmarkSuite) -> PersistedEvaluationRun:
+    def validate_evaluation_request(self, run_plan: RunPlan, benchmark_suite: BenchmarkSuite) -> None:
+        """Validate an evaluation request without opening storage or executing it."""
         _validate_plan(run_plan)
         _validate_suite_for_plan(run_plan, benchmark_suite)
+
+    def validate_ablation_request(self, ablation_plan: AblationPlan, benchmark_suite: BenchmarkSuite) -> None:
+        """Validate an ablation request without executing any variant."""
+        _validate_ablation_plan(ablation_plan)
+        _validate_suite_for_plan(ablation_plan.variants[0].run_plan, benchmark_suite)
+
+    def run_evaluation(self, run_plan: RunPlan, benchmark_suite: BenchmarkSuite) -> PersistedEvaluationRun:
+        self.validate_evaluation_request(run_plan, benchmark_suite)
         try:
             runner = EvaluationRunner(run_plan, self._retrieval, self._context_formatter, self._generation_adapter, text_embedder=self._text_embedder, **self._runner_kwargs())
             result = runner.run(benchmark_suite)
@@ -272,8 +281,7 @@ class ExperimentService:
         return PersistedEvaluationRun(result, record)
 
     def run_ablation(self, ablation_plan: AblationPlan, benchmark_suite: BenchmarkSuite) -> PersistedAblationRun:
-        _validate_ablation_plan(ablation_plan)
-        _validate_suite_for_plan(ablation_plan.variants[0].run_plan, benchmark_suite)
+        self.validate_ablation_request(ablation_plan, benchmark_suite)
         try:
             runner = AblationRunner(
                 ablation_plan,

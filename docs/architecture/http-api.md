@@ -36,3 +36,6 @@ the accepted plan for ablation artifacts. The API returns no raw request
 queries, references, passages, responses, credentials, absolute paths or
 arbitrary exception messages. The current request/response bound is local and
 conservative; a later job layer may provide durable asynchronous execution.
+# Bounded jobs
+
+An optional `ExperimentJobManager` supplied to `create_app` adds authenticated, bounded job submission and polling. Job requests return HTTP 202 while validated plans remain in process memory; lifecycle metadata is stored in a separate SQLite registry. The manager delegates execution to `ExperimentService`, and does not provide distributed coordination or restart-resumable payloads.

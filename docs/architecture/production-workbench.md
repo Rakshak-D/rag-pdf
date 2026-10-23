@@ -1,6 +1,6 @@
 # Production evaluation workbench architecture
 
-The first target is a local-first monolith: one FastAPI process, one React/TypeScript app, SQLite metadata, local document/artifact storage, versioned Chroma indexes, and Ollama. Keep the research algorithms intact behind typed adapters; do not introduce microservices.
+The first target is a local-first monolith: one Starlette ASGI process, one React/TypeScript app, SQLite metadata, local document/artifact storage, versioned Chroma indexes, and Ollama. Keep the research algorithms intact behind typed adapters; do not introduce microservices.
 
 ## Proposed layout
 
@@ -63,3 +63,6 @@ Docker Compose may run the API and frontend, with Ollama remaining a host/local 
 ## Preservation rules
 
 Keep `notebooks/` as research baseline. Import or copy logic only after golden fixtures prove equivalence for extraction, chunk metadata, index add/query, each retrieval mode, formatter selection, Ollama error handling, metric formulas and six ablation configuration resolution. A compatibility adapter may call the existing source during phase one; refactoring is later and must be behavior-diffed.
+# Bounded execution
+
+The optional local job layer adds bounded worker execution and authenticated polling without changing the retrieval, evaluation, artifact, or catalog layers. It is process-local and keeps accepted plans in memory; durable result artifacts remain owned by the artifact store and catalog.
