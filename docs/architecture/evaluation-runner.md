@@ -103,6 +103,12 @@ using the same build may therefore repeat the same M2 value. Missing counts are
 counts produce a computed zero; the aggregate otherwise uses the normal
 arithmetic mean and explicit status counts.
 
+For execution, callers can inject `retrieve_for_plan` as the runner's retrieval
+callable (with a closure supplying the owned storage root and successful build
+report path). The runner still does not open Chroma or select storage paths; the
+mode-aware retrieval boundary validates the `RunPlan` and performs that
+mode-specific work.
+
 For M6–M8, a stripped `BenchmarkCase.reference_text` is used as ground truth
 only when it is longer than 20 characters. Otherwise the formatted context is
 used as a `context_pseudoreference`, capped at

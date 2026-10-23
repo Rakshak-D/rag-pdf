@@ -124,3 +124,10 @@ This is a consistency contract, not an authenticity signature. Plan creation
 and loading do not execute an ablation, rebuild an index, persist results, or
 launch a job. A later execution phase must explicitly consume the verified
 plans and supply its own retrieval and generation components.
+
+The six canonical variants map to the supported retrieval modes as follows:
+`1_Dense_only` uses semantic retrieval, `2_BM25_only` uses lexical retrieval,
+and variants 3 through 6 use hybrid retrieval with their respective adaptive,
+reranker, and filtering overlays. This mapping identifies a future execution
+path only; creating or loading an ablation plan does not run retrieval,
+rebuild an index, or execute an experiment.

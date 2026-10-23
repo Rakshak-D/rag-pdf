@@ -468,6 +468,216 @@ def retrieve_semantic(
     )
 
 
+def _semantic_result_to_hybrid(
+    query: str,
+    run_plan: RunPlan,
+    result: SemanticRetrievalResult,
+) -> HybridRetrievalResult:
+    """Normalize semantic-only hits into the downstream hybrid contract."""
+
+    text_hits = tuple(
+        HybridHit(
+            record_id=hit.chunk_id,
+            rank=hit.rank,
+            fused_score=hit.similarity,
+            metadata=hit.metadata,
+            document=hit.document,
+            semantic_rank=hit.rank,
+            semantic_distance=hit.distance,
+            semantic_similarity=hit.similarity,
+            sources=("semantic",),
+        )
+        for hit in result.text_hits
+    )
+    image_hits = tuple(
+        HybridHit(
+            record_id=hit.image_id,
+            rank=hit.rank,
+            fused_score=hit.similarity,
+            metadata=hit.metadata,
+            caption=hit.metadata.get("caption_text") if isinstance(hit.metadata.get("caption_text"), str) else None,
+            semantic_rank=hit.rank,
+            semantic_distance=hit.distance,
+            semantic_similarity=hit.similarity,
+            sources=("semantic",),
+        )
+        for hit in result.image_hits
+    )
+    return HybridRetrievalResult(
+        query_id=query_id_for(query, run_plan, result.modalities, result.effective_text_k, result.effective_image_k),
+        index_fingerprint=result.index_fingerprint,
+        document_manifest_hash=result.document_manifest_hash,
+        modalities=result.modalities,
+        effective_text_k=result.effective_text_k,
+        effective_image_k=result.effective_image_k,
+        text_hits=text_hits,
+        image_hits=image_hits,
+        fusion_strategy="semantic",
+        effective_weights=(0.0, 1.0),
+        diagnostics={"mode": "semantic"},
+        modality_timings=result.modality_timings,
+        total_elapsed_seconds=result.total_elapsed_seconds,
+        warnings=result.warnings,
+        query_text=query,
+        text_embedding_seconds=result.text_embedding_seconds,
+        image_embedding_seconds=result.image_embedding_seconds,
+        text_records_persisted=result.text_records_persisted,
+        image_records_persisted=result.image_records_persisted,
+    )
+
+
+def _bm25_statistics(stats: Any) -> dict[str, float | int | bool]:
+    if not isinstance(stats, Mapping):
+        return {}
+    result: dict[str, float | int | bool] = {}
+    for key in ("query_length_tokens", "expanded_tokens", "non_zero_docs"):
+        value = stats.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            continue
+        result[key] = value
+    for key in ("max_score", "mean_score", "min_score", "std_score", "corpus_coverage"):
+        value = stats.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            continue
+        result[key] = float(value)
+    if isinstance(stats.get("used_overlap_fallback"), bool):
+        result["used_overlap_fallback"] = stats["used_overlap_fallback"]
+    return result
+
+
+def _retrieve_bm25(
+    query: str,
+    run_plan: RunPlan,
+    storage_root: str | Path,
+    *,
+    build_report_path: str | Path,
+    modalities: Sequence[str],
+    text_k: int | None,
+    image_k: int | None,
+) -> HybridRetrievalResult:
+    """Retrieve lexical candidates from the verified existing index only."""
+
+    started = perf_counter()
+    if not isinstance(run_plan, RunPlan):
+        raise TypeError("retrieve_for_plan requires a RunPlan")
+    run_plan.verify_integrity()
+    config = run_plan.resolved_config()
+    normalized_query = _validate_query(query)
+    requested = _validate_modalities(modalities)
+    requested_text_k = _validate_k(text_k, label="text_k", default=config.text_k) if "text" in requested else None
+    requested_image_k = _validate_k(image_k, label="image_k", default=config.image_k) if "image" in requested else None
+    report = _validate_build_report(storage_root, build_report_path, run_plan)
+    store: ChromaVectorStore | None = None
+    text_hits: tuple[HybridHit, ...] = ()
+    image_hits: tuple[HybridHit, ...] = ()
+    timings: list[tuple[Modality, float]] = []
+    diagnostics: dict[str, Any] = {"mode": "bm25"}
+    try:
+        try:
+            store = ChromaVectorStore.open_existing(storage_root, run_plan)
+        except Exception as exc:
+            raise RetrievalStoreError("could not open the referenced existing index") from exc
+        try:
+            text_count = store.count("text")
+            image_count = store.count("image")
+        except Exception as exc:
+            raise RetrievalStoreError("could not read persisted collection counts") from exc
+        if text_count != report.text_records_persisted or image_count != report.image_records_persisted:
+            raise RetrievalReportError("persisted collection counts do not match the successful build report")
+        effective_text_k = min(requested_text_k, text_count) if requested_text_k is not None else None
+        effective_image_k = min(requested_image_k, image_count) if requested_image_k is not None else None
+        for modality, count, limit in (("text", text_count, effective_text_k), ("image", image_count, effective_image_k)):
+            if modality not in requested:
+                continue
+            query_started = perf_counter()
+            try:
+                records = store.read_records(modality)
+                documents = [
+                    ((document or "") if modality == "text" else str(metadata.get("caption_text") or identifier))
+                    for identifier, document, metadata in zip(records.ids, records.documents, records.metadatas)
+                ]
+            except Exception as exc:
+                raise RetrievalStoreError(f"could not read {modality} records") from exc
+            try:
+                index = BM25Index(documents, records.ids, records.metadatas)
+                response = index.query(normalized_query, limit or 1)
+            except BM25Error as exc:
+                raise HybridRetrievalError(f"{modality} BM25 retrieval failed") from exc
+            except Exception as exc:
+                raise HybridRetrievalError(f"{modality} BM25 retrieval failed") from exc
+            if modality == "text":
+                hits: list[HybridHit] = []
+                for rank, (identifier, document, metadata, score) in enumerate(zip(response["ids"][0], response["documents"][0], response["metadatas"][0], response["scores"]), 1):
+                    if not isinstance(score, (int, float)) or isinstance(score, bool) or not math.isfinite(float(score)):
+                        raise RetrievalQueryError("BM25 returned an invalid score")
+                    hits.append(HybridHit(identifier, rank, float(score), _decode_metadata(metadata), document=document, bm25_rank=rank, bm25_score=float(score), sources=("bm25",)))
+                text_hits = tuple(hits)
+            else:
+                hits = []
+                for rank, (identifier, metadata, score) in enumerate(zip(response["ids"][0], response["metadatas"][0], response["scores"]), 1):
+                    if not isinstance(score, (int, float)) or isinstance(score, bool) or not math.isfinite(float(score)):
+                        raise RetrievalQueryError("BM25 returned an invalid score")
+                    decoded = _decode_metadata(metadata)
+                    caption = decoded.get("caption_text") if isinstance(decoded.get("caption_text"), str) else None
+                    hits.append(HybridHit(identifier, rank, float(score), decoded, caption=caption, bm25_rank=rank, bm25_score=float(score), sources=("bm25",)))
+                image_hits = tuple(hits)
+            timings.append((modality, max(0.0, perf_counter() - query_started)))
+            diagnostics[modality] = {"mode": "bm25", "result_count": len(response["ids"][0]), "bm25_stats": _bm25_statistics(response.get("bm25_stats"))}
+        return HybridRetrievalResult(
+            query_id=query_id_for(normalized_query, run_plan, requested, effective_text_k, effective_image_k),
+            index_fingerprint=run_plan.index_fingerprint,
+            document_manifest_hash=run_plan.document_manifest_hash,
+            modalities=requested,
+            effective_text_k=effective_text_k,
+            effective_image_k=effective_image_k,
+            text_hits=text_hits,
+            image_hits=image_hits,
+            fusion_strategy="bm25",
+            effective_weights=(1.0, 0.0),
+            diagnostics=diagnostics,
+            modality_timings=tuple(timings),
+            total_elapsed_seconds=max(0.0, perf_counter() - started),
+            query_text=normalized_query,
+            text_embedding_seconds=report.text_embedding_seconds,
+            image_embedding_seconds=report.image_embedding_seconds,
+            text_records_persisted=report.text_records_persisted,
+            image_records_persisted=report.image_records_persisted,
+        )
+    finally:
+        if store is not None:
+            store.close()
+
+
+def retrieve_for_plan(
+    query: str,
+    run_plan: RunPlan,
+    storage_root: str | Path,
+    *,
+    build_report_path: str | Path,
+    modalities: Sequence[str] = ("text", "image"),
+    text_adapter: Any = None,
+    image_adapter: Any = None,
+    text_k: int | None = None,
+    image_k: int | None = None,
+    reranker_adapter: CrossEncoderReranker | None = None,
+) -> HybridRetrievalResult:
+    """Dispatch retrieval according to the verified RunPlan mode."""
+
+    if not isinstance(run_plan, RunPlan):
+        raise TypeError("retrieve_for_plan requires a RunPlan")
+    run_plan.verify_integrity()
+    mode = run_plan.resolved_config().retrieval_mode
+    normalized_query = _validate_query(query)
+    if mode == "semantic":
+        semantic = retrieve_semantic(normalized_query, run_plan, storage_root, build_report_path=build_report_path, modalities=modalities, text_adapter=text_adapter, image_adapter=image_adapter, text_k=text_k, image_k=image_k)
+        return _semantic_result_to_hybrid(normalized_query, run_plan, semantic)
+    if mode == "bm25":
+        return _retrieve_bm25(normalized_query, run_plan, storage_root, build_report_path=build_report_path, modalities=modalities, text_k=text_k, image_k=image_k)
+    if mode == "hybrid":
+        return retrieve_hybrid(normalized_query, run_plan, storage_root, build_report_path=build_report_path, modalities=modalities, text_adapter=text_adapter, image_adapter=image_adapter, text_k=text_k, image_k=image_k, reranker_adapter=reranker_adapter)
+    raise RetrievalInputError("unsupported retrieval mode")
+
+
 def _hybrid_hits(fused: Mapping[str, Any], bm: Mapping[str, Any], sem: Mapping[str, Any], *, limit: int, image: bool) -> tuple[HybridHit, ...]:
     ids = fused.get("ids", [[]])[0]; scores = fused.get("fused_scores", [[]])[0]
     bi = {x: i for i, x in enumerate(bm.get("ids", [[]])[0])}; si = {x: i for i, x in enumerate(sem.get("ids", [[]])[0])}

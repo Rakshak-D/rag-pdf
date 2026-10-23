@@ -36,6 +36,30 @@ The effective modality k is the positive caller value or the configured
 raises a typed retrieval error and the store is closed in a `finally` block.
 No query logs or output directories are created.
 
+## Mode-aware retrieval dispatch
+
+`retrieve_for_plan()` is the single execution entry point for a verified
+`RunPlan`. It dispatches on the resolved `retrieval_mode`: semantic mode calls
+the existing semantic path and normalizes its hits to `HybridRetrievalResult`,
+BM25 mode reads the verified persisted records and performs lexical retrieval
+only, and hybrid mode delegates unchanged to `retrieve_hybrid()`.
+
+Semantic normalization uses cosine similarity as the canonical primary score
+and marks each hit with `sources=("semantic",)`. BM25 normalization carries the
+raw BM25 score in both the required primary `fused_score` compatibility field
+and `bm25_score`, marks `sources=("bm25",)`, and uses `fusion_strategy="bm25"`;
+this does not mean a fusion algorithm ran. Semantic mode uses
+`fusion_strategy="semantic"`. Empty lexical results remain empty rather than
+being filled with zero-score hits.
+
+All paths validate the same successful build report, store counts, plan
+fingerprints, modalities, and effective limits. The normalized single-mode
+results also carry the build-level M1/M2 telemetry. Semantic mode does not run
+BM25, fusion, cross-modal boosting, or reranking; BM25 mode does not load query
+embedders, issue vector queries, run fusion, boost, or rerank. These score
+families have different meanings and are not directly comparable without
+additional normalization.
+
 Matching a successful report and collection counts does not cryptographically
 prove that vector contents remained unchanged after the build. This phase
 does not provide immutable index versions, an active-index pointer, or an
