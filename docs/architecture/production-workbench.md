@@ -36,6 +36,12 @@ metric aggregate queries, while complete typed results remain in canonical JSON
 and are revalidated through the artifact store on load. It is not a replacement
 for artifact storage, a document registry, an active-index registry, or an API.
 
+`ExperimentService` provides the synchronous application boundary that validates
+plans and benchmark suites, delegates single evaluations to `EvaluationRunner`
+and six-variant runs to `AblationRunner`, then registers validated results in
+the catalog. It does not start jobs, expose HTTP routes, or manage model
+lifecycle state.
+
 ## Job and API behavior
 
 Use an in-process bounded executor for the first local version; do not add Celery/Redis. Endpoints should create jobs and return IDs for ingestion/indexing/evaluation, expose status/events by polling or local SSE, and serialize destructive index operations with locks. Query can be synchronous initially with a deadline; benchmark/ablation runs should be jobs. FastAPI lifespan owns shared model registries and closes owned resources.

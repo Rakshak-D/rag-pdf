@@ -23,7 +23,7 @@ _STATUSES = {"succeeded", "partial", "failed"}
 _AGGREGATE_STATUSES = {"computed", "partial", "no_eligible_values"}
 _COMPARISON_STATES = {"comparable", "incomplete", "not_comparable"}
 _ID_RE = re.compile(r"^[0-9a-f]{64}$")
-_FIELD_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,159}$")
+_FIELD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
 _MAX_LIMIT = 1000
 
 

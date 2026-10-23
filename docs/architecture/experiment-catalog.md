@@ -36,3 +36,9 @@ transactions and the artifact store's atomic publication provide local
 durability appropriate to the selected filesystem, but directory and process
 crash guarantees vary by platform. Neither the catalog nor an unkeyed SHA-256
 artifact ID is a signature or proof of authorship.
+
+`ExperimentService` is the application-level caller for these operations. It
+validates plans, benchmark identity, trace provenance and ablation comparisons
+before asking the catalog to register a result, while catalog read methods
+remain the authority for artifact and metadata integrity checks. The service
+does not add a second persistence format or background execution layer.
