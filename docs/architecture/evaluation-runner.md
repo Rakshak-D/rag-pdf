@@ -48,6 +48,7 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 
 | ID | Formula | Unit |
 | --- | --- | --- |
+| M1 | `text_embedding_seconds + image_embedding_seconds` from the successful index-build report | seconds, lower is better |
 | M3 | `HybridRetrievalResult.total_elapsed_seconds` | seconds, lower is better |
 | M4 | Mean mode-specific retrieval score, with equal-weight blending of valid text/image modality means | score, higher is better |
 | M5 | `100 * required pages found in retrieved pages / required pages` | percent, higher is better |
@@ -83,6 +84,15 @@ zero. Missing scores are skipped, invalid scores fail the observation, and
 unsupported modes are unavailable. These score families have different scales
 and meanings and must not be compared across retrieval modes without additional
 normalization and validation.
+
+M1 is an index-build-level measurement. It sums the text and image embedding
+durations already persisted in `build-report.json`; it does not measure query
+embedding, retrieval, or generation latency and never re-runs an embedder.
+Retrieval surfaces the optional telemetry to the runner, so all cases evaluated
+against one build may repeat the same M1 value. Missing telemetry is
+`unavailable`, malformed or negative/non-finite telemetry is `failed`, and an
+explicit pair of zero durations remains a computed zero. The aggregate uses the
+existing arithmetic mean over eligible per-case observations.
 
 For M6–M8, a stripped `BenchmarkCase.reference_text` is used as ground truth
 only when it is longer than 20 characters. Otherwise the formatted context is

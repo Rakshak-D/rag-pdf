@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
@@ -45,13 +46,28 @@ def test_runner_completes_and_aggregates_audited_metrics(tmp_path):
     output = runner.run(suite)
     assert output.outcomes[0].status == "succeeded"
     assert output.traces[0].status == "succeeded"
-    assert {item.metric_id for item in output.report.observations} == {"M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18", "M19"}
+    assert {item.metric_id for item in output.report.observations} == {"M1", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18", "M19"}
     rouge1 = next(item for item in output.report.observations if item.metric_id == "M6")
     assert rouge1.status == "computed" and rouge1.reference_kind == "context_pseudoreference"
     assert "supported [T1]" not in repr(output.report)
     m5_aggregate = next(item for item in output.report.aggregates if item.metric_id == "M5")
     assert m5_aggregate.value == 100.0
     assert m5_aggregate.eligible_count == 1
+
+
+def test_runner_reports_build_level_embedding_time_first(tmp_path):
+    plan, query, result, formatter, generation = setup_chain(tmp_path)
+    result = replace(result, text_embedding_seconds=1.25, image_embedding_seconds=0.75)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    output = EvaluationRunner(plan, lambda *_: result, formatter, generation).run(suite)
+    observation = next(item for item in output.report.observations if item.metric_id == "M1")
+    aggregate = output.report.aggregates[0]
+    assert observation.status == "computed"
+    assert observation.value == 2.0
+    assert aggregate.metric_id == "M1"
+    assert aggregate.value == 2.0
+    assert aggregate.eligible_count == 1
+    assert "build-level" in (observation.methodology_note or "")
 
 
 def test_nltk_metrics_require_explicit_ground_truth_without_context_fallback(tmp_path):

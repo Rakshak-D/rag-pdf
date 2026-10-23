@@ -45,7 +45,7 @@ def make_plan(tmp_path: Path):
     return config, plan
 
 
-def write_report(storage: Path, plan, *, status="completed", partial=False, text_count=1, image_count=1, build_id="build-1"):
+def write_report(storage: Path, plan, *, status="completed", partial=False, text_count=1, image_count=1, build_id="build-1", text_embedding_seconds=None, image_embedding_seconds=None):
     artifact = storage / "build-artifacts" / build_id
     artifact.mkdir(parents=True, exist_ok=True)
     report_path = artifact / "build-report.json"
@@ -62,6 +62,8 @@ def write_report(storage: Path, plan, *, status="completed", partial=False, text
                 "partial_persistence": partial,
                 "text_records_persisted": text_count,
                 "image_records_persisted": image_count,
+                **({"text_embedding_seconds": text_embedding_seconds} if text_embedding_seconds is not None else {}),
+                **({"image_embedding_seconds": image_embedding_seconds} if image_embedding_seconds is not None else {}),
             }
         ),
         encoding="utf-8",
@@ -139,6 +141,8 @@ def test_combined_retrieval_validates_report_and_keeps_modalities_separate(tmp_p
     assert result.text_hits[0].metadata["bbox"] == [1, 2, 3, 4]
     assert text_calls == ["find the document"]
     assert image_calls == ["find the document"]
+    assert result.text_embedding_seconds is None
+    assert result.image_embedding_seconds is None
     repeated = retrieve_semantic(
         "find the document", plan, storage, build_report_path=report,
         text_adapter=QueryTextAdapter(config, []), modalities=("text",), text_k=2,
@@ -147,6 +151,21 @@ def test_combined_retrieval_validates_report_and_keeps_modalities_separate(tmp_p
         "find the document", plan, storage, build_report_path=report,
         text_adapter=QueryTextAdapter(config, []), modalities=("text",), text_k=2,
     ).query_id
+
+
+def test_build_report_embedding_timings_are_exposed_without_query_reembedding(tmp_path):
+    config, plan = make_plan(tmp_path)
+    storage = tmp_path / "owned"
+    make_store(storage, plan, text=True, image=False)
+    report = write_report(storage, plan, text_count=2, image_count=0, text_embedding_seconds=1.25, image_embedding_seconds=0.75)
+    calls: list[str] = []
+    result = retrieve_semantic(
+        "timing query", plan, storage, build_report_path=report,
+        text_adapter=QueryTextAdapter(config, calls), modalities=("text",), text_k=2,
+    )
+    assert result.text_embedding_seconds == 1.25
+    assert result.image_embedding_seconds == 0.75
+    assert calls == ["timing query"]
 
 
 def test_failed_or_partial_report_is_rejected_before_query_embedding(tmp_path):

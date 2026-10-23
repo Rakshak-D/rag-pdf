@@ -40,6 +40,14 @@ been written and a later image write or verification fails, the report marks
 that vector writes may remain. The builder does not delete or silently repair
 such state.
 
+The successful build report also persists `text_embedding_seconds` and
+`image_embedding_seconds`, the elapsed embedding-call measurements used by the
+audited M1 metric. Retrieval validates the report as usual and surfaces these
+optional values on its result for evaluation; it does not run another embedding
+call to obtain them. Missing or malformed timing telemetry is kept isolated from
+the existing build identity and retrieval validations so an otherwise valid
+index remains usable.
+
 Embedding outputs are checked for two-dimensional numeric finite arrays,
 nonzero dimensions, and exact row alignment before `ChromaVectorStore.open()`.
 Text and image embedding spaces are validated independently. Empty modalities

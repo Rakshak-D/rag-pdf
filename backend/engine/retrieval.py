@@ -82,6 +82,8 @@ class SemanticRetrievalResult:
     modality_timings: tuple[tuple[Modality, float], ...]
     total_elapsed_seconds: float
     warnings: tuple[str, ...] = ()
+    text_embedding_seconds: object | None = None
+    image_embedding_seconds: object | None = None
 
 @dataclass(frozen=True)
 class HybridHit:
@@ -127,6 +129,8 @@ class HybridRetrievalResult:
     reranker_elapsed_seconds: float = 0.0
     warnings: tuple[str, ...] = ()
     query_text: str = ""
+    text_embedding_seconds: object | None = None
+    image_embedding_seconds: object | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +140,8 @@ class _SuccessfulBuildReport:
     document_manifest_hash: str
     text_records_persisted: int
     image_records_persisted: int
+    text_embedding_seconds: object | None = None
+    image_embedding_seconds: object | None = None
 
 
 def _sha256_hash(value: Any, *, label: str) -> str:
@@ -217,6 +223,8 @@ def _validate_build_report(storage_root: str | Path, report_path: str | Path, pl
         image_records_persisted=_nonnegative_count(
             payload, "image_records_persisted"
         ),
+        text_embedding_seconds=payload.get("text_embedding_seconds"),
+        image_embedding_seconds=payload.get("image_embedding_seconds"),
     )
 
 
@@ -449,6 +457,8 @@ def retrieve_semantic(
         image_hits=image_hits,
         modality_timings=tuple(timings),
         total_elapsed_seconds=max(0.0, perf_counter() - started),
+        text_embedding_seconds=report.text_embedding_seconds,
+        image_embedding_seconds=report.image_embedding_seconds,
     )
 
 
@@ -527,4 +537,4 @@ def retrieve_hybrid(query: str, run_plan: RunPlan, storage_root: str | Path, *, 
         image_hits = tuple(replace(hit, rank=index + 1) for index, hit in enumerate(image_hits))
     finally:
         if store is not None: store.close()
-    return HybridRetrievalResult(_query_id(q,run_plan,requested,tk,ik),run_plan.index_fingerprint,run_plan.document_manifest_hash,requested,tk,ik,text_hits,image_hits,strategy,effective,diagnostics,tuple(timings),perf_counter()-started,max(0.0, perf_counter()-boost_started) if 'boost_started' in locals() else 0.0, rerank_elapsed if 'rerank_elapsed' in locals() else 0.0, warnings if 'warnings' in locals() else (), q)
+    return HybridRetrievalResult(_query_id(q,run_plan,requested,tk,ik),run_plan.index_fingerprint,run_plan.document_manifest_hash,requested,tk,ik,text_hits,image_hits,strategy,effective,diagnostics,tuple(timings),perf_counter()-started,max(0.0, perf_counter()-boost_started) if 'boost_started' in locals() else 0.0, rerank_elapsed if 'rerank_elapsed' in locals() else 0.0, warnings if 'warnings' in locals() else (), q, report.text_embedding_seconds, report.image_embedding_seconds)
