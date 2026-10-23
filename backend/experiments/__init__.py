@@ -56,6 +56,13 @@ from .serialization import (
     serialize_ablation_result,
     serialize_evaluation_result,
 )
+from .artifact_store import (
+    ArtifactIntegrityError,
+    ArtifactNotFoundError,
+    ArtifactStoreError,
+    ExperimentArtifactStore,
+    StoredArtifact,
+)
 
 __all__ = [
     "RUN_PLAN_SCHEMA_VERSION",
@@ -107,4 +114,9 @@ __all__ = [
     "deserialize_evaluation_result",
     "serialize_ablation_result",
     "deserialize_ablation_result",
+    "StoredArtifact",
+    "ExperimentArtifactStore",
+    "ArtifactStoreError",
+    "ArtifactNotFoundError",
+    "ArtifactIntegrityError",
 ]

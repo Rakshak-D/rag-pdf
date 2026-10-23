@@ -54,3 +54,7 @@ serialization contract in `result-serialization.md`. Serialization preserves
 all six nested reports and comparison rows but does not persist them or prove
 who created them. Deserialization requires the accepted validated ablation
 plan so run, manifest and index provenance cannot be silently substituted.
+
+The optional `ExperimentArtifactStore` can publish a completed result after
+that serialization round trip. It does not execute variants, rebuild indexes,
+or provide a database or job queue.

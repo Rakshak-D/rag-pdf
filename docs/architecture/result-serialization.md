@@ -30,3 +30,9 @@ bounded messages while retaining lower-level exceptions as internal causes.
 This is an integrity and consistency boundary, not persistence. The functions
 do not write files or create a repository, and unkeyed content fingerprints do
 not prove authenticity, authorship, execution, or tamper-proof storage.
+
+`ExperimentArtifactStore` is the separate optional filesystem publication
+layer. It stores these exact canonical bytes under content-addressed immutable
+paths and reuses the serializers for load-time validation. Serialization can
+therefore remain a pure in-memory operation while artifact storage provides
+durable local discovery.
