@@ -27,6 +27,15 @@ from .evaluation import (
 )
 from .benchmark import BenchmarkCase, BenchmarkSuite, BenchmarkContractError
 from .evaluation_runner import EvaluationCaseOutcome, EvaluationRunResult, EvaluationRunner, EvaluationRunnerError
+from .ablation_plans import (
+    ABLATION_SCHEMA_VERSION,
+    AblationPlan,
+    AblationPlanError,
+    AblationVariantPlan,
+    build_ablation_plan,
+    create_ablation_plan,
+    load_ablation_plan,
+)
 
 __all__ = [
     "RUN_PLAN_SCHEMA_VERSION",
@@ -55,4 +64,11 @@ __all__ = [
     "EvaluationRunResult",
     "EvaluationRunner",
     "EvaluationRunnerError",
+    "ABLATION_SCHEMA_VERSION",
+    "AblationPlan",
+    "AblationPlanError",
+    "AblationVariantPlan",
+    "build_ablation_plan",
+    "create_ablation_plan",
+    "load_ablation_plan",
 ]

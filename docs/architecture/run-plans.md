@@ -98,3 +98,29 @@ Mapping inputs to `canonical_index_definition()` and `index_fingerprint()` are
 intentionally legacy-only. A mapping containing `workbench_policy` is rejected
 by the strict compatibility schema rather than having that field silently
 dropped; the run-plan builder passes the validated typed object instead.
+
+## Six-configuration ablation plans
+
+`backend.experiments.ablation_plans` adds a declarative layer for the six
+research assignments, in their source order: dense-only, BM25-only, static
+hybrid, adaptive hybrid, hybrid with reranking, and the full filtered pipeline.
+Each assignment starts from a deep copy of one validated `ResolvedRunConfig`,
+applies only its canonical notebook-derived overrides, disables collection reset,
+and installs a non-destructive `WorkbenchSafetyPolicy`. It then creates a fresh
+validated `RunPlan` through `build_run_plan()`; no index, corpus, model, or
+retrieval resource is opened.
+
+The variants share the document manifest and, because these six overlays change
+retrieval behavior rather than index-defining settings, share an index
+fingerprint. Their complete resolved snapshots, snapshot hashes, and run
+fingerprints remain distinct where run behavior differs. The plan serializer
+uses canonical JSON and includes the ordered overrides plus each serialized
+`RunPlan`. Loading requires the accepted base configuration and manifest: it
+revalidates every stored RunPlan, checks the exact six IDs and overrides,
+rebuilds the expected plans, and rejects mismatches, unsafe settings, corrupted
+hashes, or reordered variants.
+
+This is a consistency contract, not an authenticity signature. Plan creation
+and loading do not execute an ablation, rebuild an index, persist results, or
+launch a job. A later execution phase must explicitly consume the verified
+plans and supply its own retrieval and generation components.
