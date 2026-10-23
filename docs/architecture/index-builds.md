@@ -48,6 +48,13 @@ call to obtain them. Missing or malformed timing telemetry is kept isolated from
 the existing build identity and retrieval validations so an otherwise valid
 index remains usable.
 
+The same validated report is the source of the persisted whole-index counts
+`text_records_persisted` and `image_records_persisted`. Retrieval passes these
+counts through its semantic and hybrid result objects for the audited M2 metric,
+including both modalities even when a query requests only one. No second report
+read or additional store count query is needed for evaluation; the existing
+store-count consistency checks remain the retrieval validity boundary.
+
 Embedding outputs are checked for two-dimensional numeric finite arrays,
 nonzero dimensions, and exact row alignment before `ChromaVectorStore.open()`.
 Text and image embedding spaces are validated independently. Empty modalities

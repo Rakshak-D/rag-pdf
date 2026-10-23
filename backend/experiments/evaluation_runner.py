@@ -26,6 +26,7 @@ from backend.experiments.cpu_metrics import CpuUsageMetricAdapter, CpuUsageResul
 from backend.experiments.memory_metrics import ProcessRamMonitor, RamUsageMetricAdapter, RamUsageResult
 from backend.experiments.retrieval_similarity_metrics import RetrievalSimilarityMetricAdapter
 from backend.experiments.embedding_time_metrics import EmbeddingTimeMetricAdapter
+from backend.experiments.index_size_metrics import IndexSizeMetricAdapter
 from backend.experiments.tracing import TraceFailure, QueryTrace, build_failed_query_trace, build_query_trace
 
 
@@ -214,9 +215,10 @@ class EvaluationRunner:
             result = scorer.score(context.text_context, generation.response, "retrieved_context")
         return _observation(trace_id, "M15", "GT Coverage / Context Utilization", result.status, result.value, "percent", "higher_is_better", reference_kind, "legacy-m15-v1", result.reason_code, "Reference coverage using semantic sentence similarity when an embedder is injected, otherwise lexical multiset term-frequency overlap; not a factuality test.", model_identifier=result.model_identifier)
 
-    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, generation_elapsed: object | None = None, generation_timing_error: str | None = None, cpu_measurement: object | None = None, ram_measurement: object | None = None, model_identifier: str | None = None, config: object, embedding_time_scorer: EmbeddingTimeMetricAdapter, rouge_scorer: RougeScorerAdapter, nltk_scorer: NltkMetricsAdapter, bertscore_scorer: BertScoreAdapter, fcd_scorer: FcdMetricAdapter, faithfulness_scorer: FaithfulnessMetricAdapter, gt_coverage_scorer: GtCoverageMetricAdapter, throughput_scorer: ThroughputMetricAdapter, cpu_scorer: CpuUsageMetricAdapter, ram_scorer: RamUsageMetricAdapter, retrieval_similarity_scorer: RetrievalSimilarityMetricAdapter) -> list[MetricObservation]:
+    def _metrics(self, trace_id: str, case: BenchmarkCase, retrieval: HybridRetrievalResult | None, context: EvidenceContext | None, generation: GenerationResult | None, failure: TraceFailure | None, *, generation_attempted: bool = False, generation_elapsed: object | None = None, generation_timing_error: str | None = None, cpu_measurement: object | None = None, ram_measurement: object | None = None, model_identifier: str | None = None, config: object, embedding_time_scorer: EmbeddingTimeMetricAdapter, index_size_scorer: IndexSizeMetricAdapter, rouge_scorer: RougeScorerAdapter, nltk_scorer: NltkMetricsAdapter, bertscore_scorer: BertScoreAdapter, fcd_scorer: FcdMetricAdapter, faithfulness_scorer: FaithfulnessMetricAdapter, gt_coverage_scorer: GtCoverageMetricAdapter, throughput_scorer: ThroughputMetricAdapter, cpu_scorer: CpuUsageMetricAdapter, ram_scorer: RamUsageMetricAdapter, retrieval_similarity_scorer: RetrievalSimilarityMetricAdapter) -> list[MetricObservation]:
         observations: list[MetricObservation] = []
         observations.append(self._embedding_time_metric(trace_id, retrieval, embedding_time_scorer))
+        observations.append(self._index_size_metric(trace_id, retrieval, index_size_scorer))
         retrieval_available = retrieval is not None and (failure is None or failure.stage != "retrieval")
         if retrieval_available:
             observations.append(_observation(trace_id, "M3", "Retrieval latency", "computed", retrieval.total_elapsed_seconds, "seconds", "lower_is_better", "no_reference", "legacy-m3-v1", note="Existing HybridRetrievalResult.total_elapsed_seconds."))
@@ -296,6 +298,14 @@ class EvaluationRunner:
         return _observation(trace_id, "M1", "Embedding Time", result.status, result.value, "seconds", "lower_is_better", "not_applicable", "legacy-m1-v1", result.reason_code, "Sum of text and image embedding durations from the persisted index-build report; repeated per-case observations share the same build-level source.")
 
     @staticmethod
+    def _index_size_metric(trace_id: str, retrieval: HybridRetrievalResult | None, scorer: IndexSizeMetricAdapter) -> MetricObservation:
+        if retrieval is None:
+            result = scorer.score(None, None)
+        else:
+            result = scorer.score(retrieval.text_records_persisted, retrieval.image_records_persisted)
+        return _observation(trace_id, "M2", "Index Size", result.status, float(result.value) if result.value is not None else None, "vectors", "descriptive", "not_applicable", "legacy-m2-v1", result.reason_code, "Sum of persisted text and image vector counts from the validated build report; this is not storage bytes or disk usage and repeated cases share the same build-level source.")
+
+    @staticmethod
     def _aggregate(metric_id: str, observations: Sequence[MetricObservation], *, model_identifier: str | None = None) -> MetricAggregate:
         related = [item for item in observations if item.metric_id == metric_id]
         eligible = [item.value for item in related if item.status == "computed"]
@@ -348,6 +358,7 @@ class EvaluationRunner:
         ram_scorer = RamUsageMetricAdapter()
         retrieval_similarity_scorer = RetrievalSimilarityMetricAdapter()
         embedding_time_scorer = EmbeddingTimeMetricAdapter()
+        index_size_scorer = IndexSizeMetricAdapter()
         for case in cases:
             text_k = case.text_k if "text" in case.modalities else None
             image_k = case.image_k if "image" in case.modalities else None
@@ -371,7 +382,7 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("retrieval", "retrieval_failed", exc)
                 trace = build_failed_query_trace(self._plan, query=case.query, modalities=case.modalities, text_k=text_k, image_k=image_k, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None, config=config, embedding_time_scorer=embedding_time_scorer, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer, ram_scorer=ram_scorer, retrieval_similarity_scorer=retrieval_similarity_scorer))
+                observations.extend(self._metrics(trace.trace_id, case, None, None, None, failure, model_identifier=None, config=config, embedding_time_scorer=embedding_time_scorer, index_size_scorer=index_size_scorer, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer, ram_scorer=ram_scorer, retrieval_similarity_scorer=retrieval_similarity_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "retrieval", trace.trace_id, failure.error_code)); continue
             try:
                 context = self._context_formatter.format(retrieval_result, self._plan)
@@ -382,7 +393,7 @@ class EvaluationRunner:
             except Exception as exc:
                 failure = _failure("context", "context_failed", exc)
                 trace = build_query_trace(retrieval_result, self._plan, failure=failure)
-                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None, config=config, embedding_time_scorer=embedding_time_scorer, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer, ram_scorer=ram_scorer, retrieval_similarity_scorer=retrieval_similarity_scorer))
+                observations.extend(self._metrics(trace.trace_id, case, retrieval_result, None, None, failure, model_identifier=None, config=config, embedding_time_scorer=embedding_time_scorer, index_size_scorer=index_size_scorer, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer, ram_scorer=ram_scorer, retrieval_similarity_scorer=retrieval_similarity_scorer))
                 traces.append(trace); outcomes.append(EvaluationCaseOutcome(case.case_id, "failed", "context", trace.trace_id, failure.error_code)); continue
             generation_attempted = True
             reached = "generation"
@@ -460,13 +471,13 @@ class EvaluationRunner:
                 generation = None
                 failure = _failure("generation", "generation_failed", exc, attempts=getattr(exc, "attempts", None), elapsed=getattr(exc, "elapsed_seconds", None))
                 trace = build_query_trace(retrieval_result, self._plan, context=context, failure=failure)
-            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, generation_elapsed=generation_elapsed, generation_timing_error=generation_timing_error, cpu_measurement=cpu_measurement, ram_measurement=ram_measurement, model_identifier=config.llm_model if generation_attempted else None, config=config, embedding_time_scorer=embedding_time_scorer, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer, ram_scorer=ram_scorer, retrieval_similarity_scorer=retrieval_similarity_scorer))
+            observations.extend(self._metrics(trace.trace_id, case, retrieval_result, context, generation, failure, generation_attempted=generation_attempted, generation_elapsed=generation_elapsed, generation_timing_error=generation_timing_error, cpu_measurement=cpu_measurement, ram_measurement=ram_measurement, model_identifier=config.llm_model if generation_attempted else None, config=config, embedding_time_scorer=embedding_time_scorer, index_size_scorer=index_size_scorer, rouge_scorer=rouge_scorer, nltk_scorer=nltk_scorer, bertscore_scorer=bertscore_scorer, fcd_scorer=fcd_scorer, faithfulness_scorer=faithfulness_scorer, gt_coverage_scorer=gt_coverage_scorer, throughput_scorer=throughput_scorer, cpu_scorer=cpu_scorer, ram_scorer=ram_scorer, retrieval_similarity_scorer=retrieval_similarity_scorer))
             traces.append(trace)
             outcomes.append(EvaluationCaseOutcome(case.case_id, "succeeded" if trace.status == "succeeded" else "failed", reached, trace.trace_id, trace.error_code))
         m16_model = next((item.model_identifier for item in observations if item.metric_id == "M16" and item.status == "computed" and item.model_identifier is not None), None)
         m12_model = next((item.model_identifier for item in observations if item.metric_id == "M12" and item.status == "computed" and item.model_identifier is not None), None)
         m13_model = next((item.model_identifier for item in observations if item.metric_id == "M13" and item.status == "computed" and item.model_identifier is not None), None)
         m15_model = next((item.model_identifier for item in observations if item.metric_id == "M15" and item.status == "computed" and item.model_identifier is not None), None)
-        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else m12_model if metric_id == "M12" else m13_model if metric_id == "M13" else m15_model if metric_id == "M15" else None) for metric_id in ("M1", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18", "M19")]
+        aggregates = [self._aggregate(metric_id, observations, model_identifier=m16_model if metric_id == "M16" else m12_model if metric_id == "M12" else m13_model if metric_id == "M13" else m15_model if metric_id == "M15" else None) for metric_id in ("M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11", "M12", "M13", "M14", "M15", "M16", "M17", "M18", "M19")]
         report = build_evaluation_report(traces, observations, aggregates, run_fingerprint=self._plan.run_fingerprint, benchmark_id=suite.benchmark_id, benchmark_version=suite.benchmark_version)
         return EvaluationRunResult(report, tuple(traces), tuple(outcomes))

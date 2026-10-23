@@ -49,6 +49,7 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | ID | Formula | Unit |
 | --- | --- | --- |
 | M1 | `text_embedding_seconds + image_embedding_seconds` from the successful index-build report | seconds, lower is better |
+| M2 | `text_records_persisted + image_records_persisted` from the successful index-build report | vectors, descriptive |
 | M3 | `HybridRetrievalResult.total_elapsed_seconds` | seconds, lower is better |
 | M4 | Mean mode-specific retrieval score, with equal-weight blending of valid text/image modality means | score, higher is better |
 | M5 | `100 * required pages found in retrieved pages / required pages` | percent, higher is better |
@@ -93,6 +94,14 @@ against one build may repeat the same M1 value. Missing telemetry is
 `unavailable`, malformed or negative/non-finite telemetry is `failed`, and an
 explicit pair of zero durations remains a computed zero. The aggregate uses the
 existing arithmetic mean over eligible per-case observations.
+
+M2 is also a build-level measurement: it sums the validated persisted text and
+image record counts and reports the result in indexed vectors. It is not storage
+bytes, disk usage, document size, retrieved-hit count, or model memory. Cases
+using the same build may therefore repeat the same M2 value. Missing counts are
+`unavailable`, invalid counts are `failed`, and two explicitly recorded zero
+counts produce a computed zero; the aggregate otherwise uses the normal
+arithmetic mean and explicit status counts.
 
 For M6–M8, a stripped `BenchmarkCase.reference_text` is used as ground truth
 only when it is longer than 20 characters. Otherwise the formatted context is

@@ -141,6 +141,8 @@ def test_combined_retrieval_validates_report_and_keeps_modalities_separate(tmp_p
     assert result.text_hits[0].metadata["bbox"] == [1, 2, 3, 4]
     assert text_calls == ["find the document"]
     assert image_calls == ["find the document"]
+    assert result.text_records_persisted == 2
+    assert result.image_records_persisted == 1
     assert result.text_embedding_seconds is None
     assert result.image_embedding_seconds is None
     repeated = retrieve_semantic(
