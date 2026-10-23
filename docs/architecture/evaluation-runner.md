@@ -49,6 +49,7 @@ from eligible observations and preserves explicit `computed`, `skipped`,
 | ID | Formula | Unit |
 | --- | --- | --- |
 | M3 | `HybridRetrievalResult.total_elapsed_seconds` | seconds, lower is better |
+| M4 | Mean mode-specific retrieval score, with equal-weight blending of valid text/image modality means | score, higher is better |
 | M5 | `100 * required pages found in retrieved pages / required pages` | percent, higher is better |
 | M9 | `len(context.text_context)` for non-empty context | characters, descriptive |
 | M6 | Stemmed ROUGE-1 F-measure against the selected reference | f-measure, higher is better |
@@ -70,6 +71,18 @@ empty text context. Failed or unreached stages receive explicit failed/skipped
 observations. A measured value of `0.0` remains computed; missing data is never
 converted into zero. M17, M18, and M19 are the sequential generation,
 process-CPU, and process-RSS metrics described below.
+
+M4 selects the score that matches the validated retrieval mode: semantic mode
+uses `HybridHit.semantic_similarity` and is labeled Cosine Similarity, BM25
+mode uses `HybridHit.bm25_score` and is labeled BM25 Relevance, and hybrid mode
+uses the returned raw `HybridHit.fused_score` and is labeled Fused Relevance.
+It first averages eligible finite scores within each requested modality, then
+blends available modality means with equal weight. A single available modality
+is used explicitly; an empty or unsupported signal is never replaced with
+zero. Missing scores are skipped, invalid scores fail the observation, and
+unsupported modes are unavailable. These score families have different scales
+and meanings and must not be compared across retrieval modes without additional
+normalization and validation.
 
 For M6–M8, a stripped `BenchmarkCase.reference_text` is used as ground truth
 only when it is longer than 20 characters. Otherwise the formatted context is
