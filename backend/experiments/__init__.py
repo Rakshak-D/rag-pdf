@@ -16,6 +16,8 @@ from .tracing import (
     TraceContractError,
     build_query_trace,
     build_failed_query_trace,
+    compute_trace_fingerprint,
+    verify_trace_fingerprint,
 )
 from .evaluation import (
     EVALUATION_SCHEMA_VERSION,
@@ -24,6 +26,8 @@ from .evaluation import (
     MetricAggregate,
     MetricObservation,
     build_evaluation_report,
+    compute_evaluation_fingerprint,
+    verify_evaluation_fingerprint,
 )
 from .benchmark import BenchmarkCase, BenchmarkSuite, BenchmarkContractError
 from .evaluation_runner import EvaluationCaseOutcome, EvaluationRunResult, EvaluationRunner, EvaluationRunnerError
@@ -44,6 +48,14 @@ from .ablation_runner import (
     AblationRunner,
     AblationVariantResult,
 )
+from .serialization import (
+    SERIALIZATION_SCHEMA_VERSION,
+    SerializationError,
+    deserialize_ablation_result,
+    deserialize_evaluation_result,
+    serialize_ablation_result,
+    serialize_evaluation_result,
+)
 
 __all__ = [
     "RUN_PLAN_SCHEMA_VERSION",
@@ -59,12 +71,16 @@ __all__ = [
     "TraceContractError",
     "build_query_trace",
     "build_failed_query_trace",
+    "compute_trace_fingerprint",
+    "verify_trace_fingerprint",
     "EVALUATION_SCHEMA_VERSION",
     "EvaluationContractError",
     "EvaluationReport",
     "MetricAggregate",
     "MetricObservation",
     "build_evaluation_report",
+    "compute_evaluation_fingerprint",
+    "verify_evaluation_fingerprint",
     "BenchmarkCase",
     "BenchmarkSuite",
     "BenchmarkContractError",
@@ -85,4 +101,10 @@ __all__ = [
     "AblationRunResult",
     "AblationRunner",
     "AblationVariantResult",
+    "SERIALIZATION_SCHEMA_VERSION",
+    "SerializationError",
+    "serialize_evaluation_result",
+    "deserialize_evaluation_result",
+    "serialize_ablation_result",
+    "deserialize_ablation_result",
 ]

@@ -48,3 +48,9 @@ The coordinator is intentionally synchronous and in memory. It is not a
 persistence layer, evaluation queue, API, dashboard, or authenticity/audit
 store. The existing content fingerprints provide consistency checks, not
 proof of execution or tamper resistance.
+
+Completed ablation results can be passed through the canonical result
+serialization contract in `result-serialization.md`. Serialization preserves
+all six nested reports and comparison rows but does not persist them or prove
+who created them. Deserialization requires the accepted validated ablation
+plan so run, manifest and index provenance cannot be silently substituted.

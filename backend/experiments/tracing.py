@@ -308,6 +308,22 @@ def _fingerprint_payload(trace: QueryTrace) -> dict[str, Any]:
     }
 
 
+def compute_trace_fingerprint(trace: QueryTrace) -> str:
+    """Compute the existing canonical content fingerprint for a trace."""
+
+    return hashlib.sha256(
+        json.dumps(_fingerprint_payload(trace), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def verify_trace_fingerprint(trace: QueryTrace) -> None:
+    """Reject a trace whose stored identifier is not its canonical fingerprint."""
+
+    expected = compute_trace_fingerprint(trace)
+    if trace.trace_fingerprint != expected or trace.trace_id != expected:
+        raise TraceContractError("trace fingerprint does not match trace content")
+
+
 def build_query_trace(
     retrieval: HybridRetrievalResult,
     run_plan: RunPlan,
@@ -371,7 +387,7 @@ def build_query_trace(
         if not isinstance(timing, TraceStageTiming):
             raise TraceContractError("timings must contain TraceStageTiming values")
     trace = QueryTrace(TRACE_SCHEMA_VERSION, "0" * 64, "0" * 64, retrieval.query_id, retrieval.index_fingerprint, retrieval.document_manifest_hash, run_plan.run_fingerprint, context_fp, prompt_fp, status, failed_stage, error_code, evidence, context_summary, generation_summary, timing_values, warning_values, derived_failure)
-    fingerprint = hashlib.sha256(json.dumps(_fingerprint_payload(trace), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+    fingerprint = compute_trace_fingerprint(trace)
     return QueryTrace(trace.schema_version, fingerprint, fingerprint, trace.query_id, trace.index_fingerprint, trace.document_manifest_hash, trace.run_fingerprint, trace.context_fingerprint, trace.prompt_fingerprint, trace.status, trace.failed_stage, trace.error_code, trace.evidence, trace.context, trace.generation, trace.timings, trace.warnings, trace.failure)
 
 
@@ -400,5 +416,5 @@ def build_failed_query_trace(
         raise TraceContractError("failure must be a TraceFailure")
     query_id = query_id_for(query.strip(), run_plan, modalities, text_k, image_k)
     trace = QueryTrace(TRACE_SCHEMA_VERSION, "0" * 64, "0" * 64, query_id, run_plan.index_fingerprint, run_plan.document_manifest_hash, run_plan.run_fingerprint, None, None, "failed", failure.stage, failure.error_code, (), None, None, (), (), failure)
-    fingerprint = hashlib.sha256(json.dumps(_fingerprint_payload(trace), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+    fingerprint = compute_trace_fingerprint(trace)
     return QueryTrace(trace.schema_version, fingerprint, fingerprint, trace.query_id, trace.index_fingerprint, trace.document_manifest_hash, trace.run_fingerprint, None, None, trace.status, trace.failed_stage, trace.error_code, (), None, None, (), (), failure)

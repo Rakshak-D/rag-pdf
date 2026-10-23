@@ -85,3 +85,9 @@ supplies the text embedder. Its prompt and answer inputs remain transient and
 are not copied into traces or reports; the metric's `retrieved_context`
 reference kind describes the context used to build the prompt, not a factual
 ground-truth reference.
+
+Completed evaluation and ablation results may use the canonical
+`result-serialization.md` boundary. Deserialization recomputes trace and
+report fingerprints and requires the accepted ablation plan for variant
+provenance. Serialization remains an in-memory representation: it does not
+persist files or provide authenticity or tamper-proof audit storage.

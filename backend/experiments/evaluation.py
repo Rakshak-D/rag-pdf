@@ -165,6 +165,19 @@ def _report_payload(report: EvaluationReport) -> dict:
     }
 
 
+def compute_evaluation_fingerprint(report: EvaluationReport) -> str:
+    """Compute the existing canonical content fingerprint for a report."""
+
+    return hashlib.sha256(json.dumps(_report_payload(report), sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def verify_evaluation_fingerprint(report: EvaluationReport) -> None:
+    """Reject a report whose stored fingerprint is not its canonical content."""
+
+    if report.evaluation_fingerprint != compute_evaluation_fingerprint(report):
+        raise EvaluationContractError("evaluation fingerprint does not match report content")
+
+
 def build_evaluation_report(
     traces: Sequence[QueryTrace],
     observations: Sequence[MetricObservation],
@@ -229,5 +242,5 @@ def build_evaluation_report(
             if getattr(aggregate, key) != actual:
                 raise EvaluationContractError(f"aggregate {aggregate.metric_id} {key} disagrees with observations")
     report = EvaluationReport(EVALUATION_SCHEMA_VERSION, "0" * 64, run_fingerprint.lower(), benchmark_id, benchmark_version, trace_ids, observation_tuple, aggregate_tuple)
-    fingerprint = hashlib.sha256(json.dumps(_report_payload(report), sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+    fingerprint = compute_evaluation_fingerprint(report)
     return EvaluationReport(report.schema_version, fingerprint, report.run_fingerprint, report.benchmark_id, report.benchmark_version, report.trace_ids, report.observations, report.aggregates)
