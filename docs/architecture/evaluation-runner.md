@@ -266,3 +266,18 @@ reference kind, and formula version—against every related observation.
 Conflicting model identifiers are rejected, and the runner attaches the
 configured generation model only to M16 observations when generation was
 actually attempted. A model name is not immutable model-weight provenance.
+## Ablation coordinator integration
+
+For a validated `AblationPlan`, callers can construct `AblationRunner` with
+the shared storage root, successful build-report path, `ContextFormatter`,
+generation adapter and optional retrieval/evaluation adapters. The coordinator
+creates one `EvaluationRunner` per variant and injects a callback that calls
+`retrieve_for_plan(query, variant_run_plan, ...)`. The evaluation runner still
+does not open Chroma, select storage paths, or execute other variants itself.
+
+The six variants run sequentially against the existing verified index. Their
+immutable results retain per-case traces and all M1--M19 aggregates. Missing
+variant reports and runner-level failures are represented explicitly in
+comparison rows; they are not replaced by zeros. M4 comparisons are marked
+not comparable across variants because its semantic, BM25 and fused score
+families have different meanings.

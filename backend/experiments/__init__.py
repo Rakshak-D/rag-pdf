@@ -36,6 +36,14 @@ from .ablation_plans import (
     create_ablation_plan,
     load_ablation_plan,
 )
+from .ablation_runner import (
+    ABLATION_EXECUTION_SCHEMA_VERSION,
+    AblationExecutionError,
+    AblationMetricComparison,
+    AblationRunResult,
+    AblationRunner,
+    AblationVariantResult,
+)
 
 __all__ = [
     "RUN_PLAN_SCHEMA_VERSION",
@@ -71,4 +79,10 @@ __all__ = [
     "build_ablation_plan",
     "create_ablation_plan",
     "load_ablation_plan",
+    "ABLATION_EXECUTION_SCHEMA_VERSION",
+    "AblationExecutionError",
+    "AblationMetricComparison",
+    "AblationRunResult",
+    "AblationRunner",
+    "AblationVariantResult",
 ]

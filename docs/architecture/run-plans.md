@@ -131,3 +131,18 @@ and variants 3 through 6 use hybrid retrieval with their respective adaptive,
 reranker, and filtering overlays. This mapping identifies a future execution
 path only; creating or loading an ablation plan does not run retrieval,
 rebuild an index, or execute an experiment.
+## Six-variant ablation execution
+
+The immutable `AblationPlan` layer defines six fresh, validated, non-destructive
+`RunPlan` snapshots in the canonical research order. `AblationRunner` consumes
+that plan and a validated benchmark suite when execution is explicitly
+requested. It reuses the shared verified index and build report, delegates
+mode dispatch to `retrieve_for_plan()`, and delegates all downstream work to
+`EvaluationRunner`.
+
+Each variant retains its own run fingerprint and report while carrying the
+same document-manifest and shared index identities. The coordinator executes
+sequentially, preserves ordinary per-case failures, and records runner-level
+failures with stable codes so later variants can still run. It does not rebuild
+or reset the index. A plan by itself remains declarative and does not execute
+an experiment.

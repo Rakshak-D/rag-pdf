@@ -13,6 +13,7 @@ from backend.engine import (
     RetrievalReportError,
     RetrievalStoreError,
     retrieve_semantic,
+    retrieve_for_plan,
 )
 from backend.engine.manifest import build_document_manifest
 from backend.experiments import build_run_plan
@@ -20,27 +21,29 @@ from backend.vectorstore import ChromaStoreStateError, ChromaVectorStore
 from notebooks.config import Config
 
 
-def make_config(tmp_path: Path) -> ResolvedRunConfig:
-    return ResolvedRunConfig.from_legacy(
-        Config(
-            pdf_dir=str(tmp_path / "pdfs"),
-            images_dir=str(tmp_path / "images"),
-            database_dir=str(tmp_path / "database"),
-            results_dir=str(tmp_path / "results"),
-            model_comparison_results_dir=str(tmp_path / "model-comparison"),
-            retrieval_results_dir=str(tmp_path / "retrieval-results"),
-            text_k=5,
-            image_k=5,
-            reset_collections_on_start=False,
-        )
-    )
+def make_config(tmp_path: Path, *, retrieval_mode: str = "hybrid") -> ResolvedRunConfig:
+    values = {
+        "pdf_dir": str(tmp_path / "pdfs"),
+        "images_dir": str(tmp_path / "images"),
+        "database_dir": str(tmp_path / "database"),
+        "results_dir": str(tmp_path / "results"),
+        "model_comparison_results_dir": str(tmp_path / "model-comparison"),
+        "retrieval_results_dir": str(tmp_path / "retrieval-results"),
+        "text_k": 5,
+        "image_k": 5,
+        "reset_collections_on_start": False,
+    }
+    if retrieval_mode != "hybrid":
+        values["retrieval_mode"] = retrieval_mode
+        values["adaptive_weighting"] = False
+    return ResolvedRunConfig.from_legacy(Config(**values))
 
 
-def make_plan(tmp_path: Path):
+def make_plan(tmp_path: Path, *, retrieval_mode: str = "hybrid"):
     pdf_dir = tmp_path / "pdfs"
-    pdf_dir.mkdir()
+    pdf_dir.mkdir(parents=True)
     (pdf_dir / "document.pdf").write_bytes(b"deterministic source")
-    config = make_config(tmp_path)
+    config = make_config(tmp_path, retrieval_mode=retrieval_mode)
     plan = build_run_plan(config, build_document_manifest(pdf_dir).content_hash)
     return config, plan
 
@@ -113,6 +116,42 @@ class QueryImageAdapter:
     def embed_query(self, query):
         self.calls.append(query)
         return np.asarray([0.0, 1.0], dtype=np.float32)
+
+
+def test_mode_aware_dispatch_uses_the_verified_store_for_semantic_and_bm25(tmp_path):
+    semantic_config, semantic_plan = make_plan(tmp_path / "semantic", retrieval_mode="semantic")
+    semantic_storage = tmp_path / "semantic" / "owned"
+    make_store(semantic_storage, semantic_plan, image=False)
+    semantic_report = write_report(semantic_storage, semantic_plan, text_count=2, image_count=0)
+    semantic_result = retrieve_for_plan(
+        "first document",
+        semantic_plan,
+        semantic_storage,
+        build_report_path=semantic_report,
+        modalities=("text",),
+        text_adapter=QueryTextAdapter(semantic_config, []),
+        text_k=2,
+    )
+    assert semantic_result.fusion_strategy == "semantic"
+    assert semantic_result.text_hits[0].sources == ("semantic",)
+    assert semantic_result.image_hits == ()
+
+    bm25_config, bm25_plan = make_plan(tmp_path / "bm25", retrieval_mode="bm25")
+    bm25_storage = tmp_path / "bm25" / "owned"
+    make_store(bm25_storage, bm25_plan, image=False)
+    bm25_report = write_report(bm25_storage, bm25_plan, text_count=2, image_count=0)
+    bm25_result = retrieve_for_plan(
+        "first document",
+        bm25_plan,
+        bm25_storage,
+        build_report_path=bm25_report,
+        modalities=("text",),
+        text_k=2,
+    )
+    assert bm25_result.fusion_strategy == "bm25"
+    assert bm25_result.text_hits
+    assert bm25_result.text_hits[0].sources == ("bm25",)
+    assert bm25_result.text_hits[0].bm25_score is not None
 
 
 def test_combined_retrieval_validates_report_and_keeps_modalities_separate(tmp_path):
