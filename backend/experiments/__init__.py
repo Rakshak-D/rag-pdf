@@ -63,6 +63,16 @@ from .artifact_store import (
     ExperimentArtifactStore,
     StoredArtifact,
 )
+from .catalog import (
+    CATALOG_SCHEMA_VERSION,
+    CatalogArtifactRecord,
+    CatalogComparisonRecord,
+    CatalogIntegrityError,
+    CatalogMetricRecord,
+    CatalogNotFoundError,
+    ExperimentCatalog,
+    ExperimentCatalogError,
+)
 
 __all__ = [
     "RUN_PLAN_SCHEMA_VERSION",
@@ -119,4 +129,12 @@ __all__ = [
     "ArtifactStoreError",
     "ArtifactNotFoundError",
     "ArtifactIntegrityError",
+    "CATALOG_SCHEMA_VERSION",
+    "ExperimentCatalog",
+    "CatalogArtifactRecord",
+    "CatalogMetricRecord",
+    "CatalogComparisonRecord",
+    "ExperimentCatalogError",
+    "CatalogNotFoundError",
+    "CatalogIntegrityError",
 ]

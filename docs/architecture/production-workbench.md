@@ -30,6 +30,12 @@ Pydantic schemas should model `Document`, `Page`, `TextBlock`, `ImageObject`, `C
 
 An index version is immutable and keyed by `(document_manifest_hash, ingestion_config_hash, text_model_id, image_model_id, collection_schema_version)`. Store text/image Chroma data under a generated directory, not fixed shared names. SQLite rows should link document versions, index versions, configs, runs, queries, metrics and exported artifacts. A failed build is retained as failed metadata but never promoted to active. Activation is one SQLite transaction after manifest validation.
 
+The experiment catalog is a narrow local SQLite metadata index over the
+content-addressed evaluation artifact store. It supports discovery, filters and
+metric aggregate queries, while complete typed results remain in canonical JSON
+and are revalidated through the artifact store on load. It is not a replacement
+for artifact storage, a document registry, an active-index registry, or an API.
+
 ## Job and API behavior
 
 Use an in-process bounded executor for the first local version; do not add Celery/Redis. Endpoints should create jobs and return IDs for ingestion/indexing/evaluation, expose status/events by polling or local SSE, and serialize destructive index operations with locks. Query can be synchronous initially with a deadline; benchmark/ablation runs should be jobs. FastAPI lifespan owns shared model registries and closes owned resources.

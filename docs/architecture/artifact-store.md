@@ -37,3 +37,9 @@ The unkeyed digest detects mismatch against the referenced content only.
 Stored JSON retains the existing privacy boundary: prompts, answers,
 passages, captions, image bytes, runtime clients and absolute paths are not
 added by this layer.
+
+`ExperimentCatalog` is an optional companion for discovery and filtering. It
+keeps its SQLite database outside this store, registers only metadata derived
+from a strict artifact reload, and never replaces the JSON artifact as the
+source of truth. See `experiment-catalog.md` for registration recovery and
+catalog-versus-artifact cross-checking.
