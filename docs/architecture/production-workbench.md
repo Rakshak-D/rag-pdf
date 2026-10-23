@@ -42,6 +42,12 @@ and six-variant runs to `AblationRunner`, then registers validated results in
 the catalog. It does not start jobs, expose HTTP routes, or manage model
 lifecycle state.
 
+The local HTTP surface is an explicitly configured Starlette application over
+this service. It uses bearer authentication and thread-pool dispatch for the
+synchronous work; it does not add a job queue, global service construction, or
+model/index readiness claims. Deployment still requires an external ASGI
+server and secure local token configuration.
+
 ## Job and API behavior
 
 Use an in-process bounded executor for the first local version; do not add Celery/Redis. Endpoints should create jobs and return IDs for ingestion/indexing/evaluation, expose status/events by polling or local SSE, and serialize destructive index operations with locks. Query can be synchronous initially with a deadline; benchmark/ablation runs should be jobs. FastAPI lifespan owns shared model registries and closes owned resources.

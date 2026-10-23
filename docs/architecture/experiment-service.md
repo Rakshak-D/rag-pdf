@@ -29,3 +29,7 @@ metric aggregates, comparisons and plan-bound result loading. The service adds
 no cache, serialization format, SQL access, HTTP endpoint, queue or background
 job; orchestration remains synchronous and in memory apart from the existing
 artifact and catalog writes.
+
+The optional HTTP boundary is implemented separately in Starlette and injects
+this service; the service itself remains unaware of HTTP, bearer tokens and
+ASGI lifecycle concerns. See `http-api.md` for route and deployment details.
