@@ -42,13 +42,18 @@ def test_fake_text_embeddings_persist_through_chroma_reopen(tmp_path: Path):
 
     storage = tmp_path / "owned"
     store = ChromaVectorStore.open(storage, plan)
-    store.upsert_text(
-        ["chunk-1", "chunk-2"],
-        result.embeddings,
-        ["alpha", "beta"],
-        [{"source": "a.pdf"}, {"source": "b.pdf"}],
-    )
-    store.close()
+    try:
+        store.upsert_text(
+            ["chunk-1", "chunk-2"],
+            result.embeddings,
+            ["alpha", "beta"],
+            [{"source": "a.pdf"}, {"source": "b.pdf"}],
+        )
+    finally:
+        store.close()
     reopened = ChromaVectorStore.open(storage, plan)
-    assert reopened.count("text") == 2
-    assert reopened.query_text(result.embeddings[0], 1)["ids"] == [["chunk-1"]]
+    try:
+        assert reopened.count("text") == 2
+        assert reopened.query_text(result.embeddings[0], 1)["ids"] == [["chunk-1"]]
+    finally:
+        reopened.close()

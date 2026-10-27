@@ -41,17 +41,19 @@ def test_store_import_and_path_are_side_effect_free(tmp_path):
 
 def test_invalid_batches_and_queries_are_rejected_before_chroma_calls(tmp_path):
     store = ChromaVectorStore.open(tmp_path / "owned", make_plan(tmp_path))
-    with pytest.raises(ChromaStoreInputError, match="length"):
-        store.upsert_text(["a"], [[1.0, 0.0], [0.0, 1.0]], ["doc"])
-    with pytest.raises(ChromaStoreInputError, match="unique"):
-        store.upsert_image(["a", "a"], [[1.0, 0.0], [0.0, 1.0]])
-    with pytest.raises(ChromaStoreInputError, match="finite"):
-        store.upsert_image(["a"], [[float("nan"), 0.0]])
-    with pytest.raises(ChromaStoreInputError, match="non-empty"):
-        store.upsert_image(["a"], [[]])
-    with pytest.raises(ChromaStoreInputError, match="positive"):
-        store.query_text([1.0, 0.0], 0)
-    store.close()
+    try:
+        with pytest.raises(ChromaStoreInputError, match="length"):
+            store.upsert_text(["a"], [[1.0, 0.0], [0.0, 1.0]], ["doc"])
+        with pytest.raises(ChromaStoreInputError, match="unique"):
+            store.upsert_image(["a", "a"], [[1.0, 0.0], [0.0, 1.0]])
+        with pytest.raises(ChromaStoreInputError, match="finite"):
+            store.upsert_image(["a"], [[float("nan"), 0.0]])
+        with pytest.raises(ChromaStoreInputError, match="non-empty"):
+            store.upsert_image(["a"], [[]])
+        with pytest.raises(ChromaStoreInputError, match="positive"):
+            store.query_text([1.0, 0.0], 0)
+    finally:
+        store.close()
 
 
 def test_invalid_plan_is_rejected_before_storage_creation(tmp_path):

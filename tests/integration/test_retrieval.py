@@ -76,23 +76,25 @@ def write_report(storage: Path, plan, *, status="completed", partial=False, text
 
 def make_store(storage: Path, plan, *, text=True, image=True):
     store = ChromaVectorStore.open(storage, plan)
-    if text:
-        store.upsert_text(
-            ["chunk-1", "chunk-2"],
-            [[1.0, 0.0], [0.8, 0.2]],
-            ["first document", "second document"],
-            [
-                {"source": "document.pdf", "page_num": 1, "bbox": "[1,2,3,4]"},
-                {"source": "document.pdf", "page_num": 2, "bbox": "[5,6,7,8]"},
-            ],
-        )
-    if image:
-        store.upsert_image(
-            ["image-1"],
-            [[0.0, 1.0]],
-            [{"image_id": "image-1", "image_path": "build-artifacts/build-1/images/image.png"}],
-        )
-    store.close()
+    try:
+        if text:
+            store.upsert_text(
+                ["chunk-1", "chunk-2"],
+                [[1.0, 0.0], [0.8, 0.2]],
+                ["first document", "second document"],
+                [
+                    {"source": "document.pdf", "page_num": 1, "bbox": "[1,2,3,4]"},
+                    {"source": "document.pdf", "page_num": 2, "bbox": "[5,6,7,8]"},
+                ],
+            )
+        if image:
+            store.upsert_image(
+                ["image-1"],
+                [[0.0, 1.0]],
+                [{"image_id": "image-1", "image_path": "build-artifacts/build-1/images/image.png"}],
+            )
+    finally:
+        store.close()
 
 
 class QueryTextAdapter:

@@ -191,11 +191,14 @@ def test_valid_build_persists_expected_identity_and_separate_attempt_artifacts(t
     assert json.loads(first.report_path.read_text(encoding="utf-8"))["build_id"] == first.build_id
 
     store = ChromaVectorStore.open(tmp_path / "owned", plan)
-    text_ids = store.ids("text")
-    image_ids = store.ids("image")
-    assert len(text_ids) == first.text_vectors_written
-    assert len(image_ids) == first.image_vectors_written
-    assert all(identifier.strip() for identifier in text_ids + image_ids)
+    try:
+        text_ids = store.ids("text")
+        image_ids = store.ids("image")
+        assert len(text_ids) == first.text_vectors_written
+        assert len(image_ids) == first.image_vectors_written
+        assert all(identifier.strip() for identifier in text_ids + image_ids)
+    finally:
+        store.close()
 
 
 def test_manifest_mismatch_fails_before_build_artifacts_models_or_chroma(tmp_path):

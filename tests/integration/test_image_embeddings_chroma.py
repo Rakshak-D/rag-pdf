@@ -57,8 +57,13 @@ def test_fake_image_embeddings_persist_through_chroma_reopen(tmp_path: Path):
 
     storage = tmp_path / "owned"
     store = ChromaVectorStore.open(storage, plan)
-    store.upsert_image(["image-1"], result.embeddings, [{"source": "image.png"}])
-    store.close()
+    try:
+        store.upsert_image(["image-1"], result.embeddings, [{"source": "image.png"}])
+    finally:
+        store.close()
     reopened = ChromaVectorStore.open(storage, plan)
-    assert reopened.count("image") == 1
-    assert reopened.query_image(result.embeddings[0], 1)["ids"] == [["image-1"]]
+    try:
+        assert reopened.count("image") == 1
+        assert reopened.query_image(result.embeddings[0], 1)["ids"] == [["image-1"]]
+    finally:
+        reopened.close()
