@@ -41,6 +41,14 @@ not execute directly on the event loop. Requests remain synchronous from the
 client's perspective and may run for a long time; this is not a durable job
 system, and a disconnected client does not create a fabricated result.
 
+Artifact-list and job-list `limit`/`offset` query values are checked as decimal
+strings and bounded to 19 digits before integer conversion. Values above
+SQLite's signed 64-bit integer maximum, as well as malformed or longer values,
+return `400 query_invalid` before the list operation is called. Leading zeroes
+are accepted when the complete input remains within the digit bound. This is
+an application parsing bound; it does not impose a network-level URI-size
+limit.
+
 Read routes delegate to `ExperimentService`, which delegates to the catalog and
 artifact store. Result loading preserves canonical serialization and requires
 the accepted plan for ablation artifacts. The API returns no raw request

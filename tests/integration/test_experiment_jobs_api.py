@@ -6,6 +6,7 @@ import json
 from threading import Barrier, Event, Lock
 import time
 
+import pytest
 from starlette.testclient import TestClient
 
 from backend.app import create_app
@@ -333,4 +334,56 @@ def test_one_worker_failure_does_not_stop_concurrent_success(tmp_path: Path, mon
                 rendezvous.abort()
     finally:
         rendezvous.abort()
+        manager.shutdown()
+
+
+@pytest.mark.parametrize("raw", ["9" * 3000, "9223372036854775808", "10000000000000000000", "0" * 20])
+def test_job_pagination_rejects_unbounded_or_out_of_range_values_before_listing(tmp_path: Path, monkeypatch, raw: str):
+    service, _, _ = _service(tmp_path)
+    manager = ExperimentJobManager(service, tmp_path / "jobs.sqlite")
+    calls = []
+    monkeypatch.setattr(manager, "list_jobs", lambda **kwargs: calls.append(kwargs) or ())
+    headers = {"Authorization": "Bearer test-token"}
+    try:
+        with TestClient(create_app(service, api_token="test-token", job_manager=manager)) as client:
+            for name in ("limit", "offset"):
+                response = client.get("/api/v1/jobs", headers=headers, params={name: raw})
+                assert response.status_code == 400
+                assert response.json() == {"error": {"code": "query_invalid"}}
+                assert response.headers["cache-control"] == "no-store"
+                assert response.headers["x-content-type-options"] == "nosniff"
+        assert calls == []
+    finally:
+        manager.shutdown()
+
+
+def test_job_pagination_accepts_boundary_and_preserves_manager_validation(tmp_path: Path):
+    service, _, _ = _service(tmp_path)
+    manager = ExperimentJobManager(service, tmp_path / "jobs.sqlite")
+    headers = {"Authorization": "Bearer test-token"}
+    try:
+        with TestClient(create_app(service, api_token="test-token", job_manager=manager)) as client:
+            for params in ({"offset": "0"}, {"offset": "9223372036854775807"}, {"limit": "25", "offset": "3"}, {"offset": "0000"}):
+                response = client.get("/api/v1/jobs", headers=headers, params=params)
+                assert response.status_code == 200
+                assert response.json() == {"jobs": []}
+            invalid_limit = client.get("/api/v1/jobs", headers=headers, params={"limit": "1001"})
+            assert invalid_limit.status_code == 400
+            assert invalid_limit.json() == {"error": {"code": "limit_invalid"}}
+    finally:
+        manager.shutdown()
+
+
+def test_job_pagination_authentication_precedes_parsing_and_listing(tmp_path: Path, monkeypatch):
+    service, _, _ = _service(tmp_path)
+    manager = ExperimentJobManager(service, tmp_path / "jobs.sqlite")
+    calls = []
+    monkeypatch.setattr(manager, "list_jobs", lambda **kwargs: calls.append(kwargs) or ())
+    try:
+        with TestClient(create_app(service, api_token="test-token", job_manager=manager)) as client:
+            response = client.get("/api/v1/jobs?limit=" + ("9" * 3000))
+            assert response.status_code == 401
+            assert response.json() == {"error": {"code": "authentication_required"}}
+        assert calls == []
+    finally:
         manager.shutdown()

@@ -256,3 +256,56 @@ def test_ablation_response_still_requires_plan_before_size_check(tmp_path: Path)
     assert missing.json() == {"error": {"code": "ablation_plan_required"}}
     assert oversized.status_code == 413
     assert oversized.json() == {"error": {"code": "response_body_too_large"}}
+
+
+@pytest.mark.parametrize("raw", ["9" * 3000, "9223372036854775808", "10000000000000000000", "0" * 20])
+def test_artifact_pagination_rejects_unbounded_or_out_of_range_values_before_listing(tmp_path: Path, monkeypatch, raw: str):
+    service, _, _ = _service(tmp_path)
+    calls = []
+
+    def list_spy(**kwargs):
+        calls.append(kwargs)
+        return ()
+
+    monkeypatch.setattr(service, "list_artifacts", list_spy)
+    client = TestClient(create_app(service, api_token="test-token"))
+    for name in ("limit", "offset"):
+        response = client.get("/api/v1/artifacts", headers=_headers(), params={name: raw})
+        assert response.status_code == 400
+        assert response.json() == {"error": {"code": "query_invalid"}}
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-content-type-options"] == "nosniff"
+    assert calls == []
+
+
+def test_artifact_pagination_accepts_boundary_and_preserves_limit_validation(tmp_path: Path, monkeypatch):
+    service, _, _ = _service(tmp_path)
+    calls = []
+    monkeypatch.setattr(service, "list_artifacts", lambda **kwargs: calls.append(kwargs) or ())
+    client = TestClient(create_app(service, api_token="test-token"))
+    maximum = "9223372036854775807"
+    for params, expected in (({"offset": "0"}, 0), ({"offset": maximum}, int(maximum)), ({"offset": "0000"}, 0), ({"limit": "25", "offset": "3"}, 3)):
+        response = client.get("/api/v1/artifacts", headers=_headers(), params=params)
+        assert response.status_code == 200
+        assert calls[-1]["offset"] == expected
+    assert calls[-1]["limit"] == 25
+
+    # Values within SQLite's integer range still reach the catalog's own bounds.
+    monkeypatch.undo()
+    response = client.get("/api/v1/artifacts", headers=_headers(), params={"limit": "1001"})
+    assert response.status_code == 400
+    assert response.json() == {"error": {"code": "request_invalid"}}
+    boundary_page = client.get("/api/v1/artifacts", headers=_headers(), params={"offset": maximum})
+    assert boundary_page.status_code == 200
+    assert boundary_page.json() == {"artifacts": []}
+
+
+def test_artifact_pagination_authentication_precedes_parsing_and_listing(tmp_path: Path, monkeypatch):
+    service, _, _ = _service(tmp_path)
+    calls = []
+    monkeypatch.setattr(service, "list_artifacts", lambda **kwargs: calls.append(kwargs) or ())
+    client = TestClient(create_app(service, api_token="test-token"))
+    response = client.get("/api/v1/artifacts?limit=" + ("9" * 3000))
+    assert response.status_code == 401
+    assert response.json() == {"error": {"code": "authentication_required"}}
+    assert calls == []

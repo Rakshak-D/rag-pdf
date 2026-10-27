@@ -46,6 +46,21 @@ class ApiRequestError(ValueError):
         super().__init__(code)
 
 
+_SQLITE_INTEGER_MAX = 9_223_372_036_854_775_807
+
+
+def _parse_pagination_value(raw: str | None, default: int) -> int:
+    """Parse a bounded non-negative decimal value safe for SQLite bindings."""
+    if raw is None:
+        return default
+    if not raw.isdecimal() or len(raw) > 19:
+        raise ApiRequestError("query_invalid", 400)
+    value = int(raw)
+    if value > _SQLITE_INTEGER_MAX:
+        raise ApiRequestError("query_invalid", 400)
+    return value
+
+
 class ExperimentSecurityMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, *, api_token: str) -> None:
         super().__init__(app)
@@ -272,13 +287,7 @@ async def list_jobs(request: Request) -> JSONResponse:
             if name in query:
                 kwargs[name] = query[name]
         for name, default in (("limit", 100), ("offset", 0)):
-            raw = query.get(name)
-            if raw is None:
-                kwargs[name] = default
-            elif not raw.isdecimal():
-                raise ApiRequestError("query_invalid", 400)
-            else:
-                kwargs[name] = int(raw)
+            kwargs[name] = _parse_pagination_value(query.get(name), default)
         values = await run_in_threadpool(manager.list_jobs, **kwargs)
         return JSONResponse({"jobs": [_job_record(item) for item in values]})
     except Exception as exc:
@@ -301,13 +310,7 @@ def _query_filters(request: Request) -> dict[str, Any]:
         if name in query:
             values[name] = query[name]
     for name, default in (("limit", 100), ("offset", 0)):
-        if name in query:
-            raw = query[name]
-            if not raw.isdecimal():
-                raise ApiRequestError("query_invalid", 400)
-            values[name] = int(raw)
-        else:
-            values[name] = default
+        values[name] = _parse_pagination_value(query.get(name), default)
     return values
 
 
