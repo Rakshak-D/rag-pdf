@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Barrier, Event, Lock, Thread
 
 import numpy as np
 import pytest
@@ -181,3 +182,110 @@ def test_zero_elapsed_time_has_zero_average_without_division_error(tmp_path, mon
     result = adapter.embed_documents([FakeDocument("one")])
     assert result.elapsed_time == 0.0
     assert result.average_time == 0.0
+
+
+def test_concurrent_load_calls_loader_once_and_publishes_ready_state(tmp_path):
+    barrier = Barrier(6)
+    entered = Event()
+    release = Event()
+    calls = []
+    model = FakeModel()
+
+    def loader(name, device):
+        calls.append((name, device))
+        entered.set()
+        assert release.wait(2)
+        return model
+
+    adapter = TextEmbeddingAdapter(make_config(tmp_path), model_loader=loader)
+    errors = []
+
+    def worker():
+        try:
+            barrier.wait()
+            assert adapter.load() is model
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [Thread(target=worker) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    assert entered.wait(2)
+    release.set()
+    for thread in threads:
+        thread.join(2)
+    assert errors == []
+    assert len(calls) == 1
+    assert adapter.runtime_state == "ready"
+    assert adapter.runtime_error_code is None
+
+
+def test_document_and_query_inference_are_serialized(tmp_path):
+    entered = Event()
+    release = Event()
+    state_lock = Lock()
+    active = 0
+    overlaps = []
+
+    class SerializedModel(FakeModel):
+        def encode(self, **kwargs):
+            nonlocal active
+            with state_lock:
+                active += 1
+                if active > 1:
+                    overlaps.append(active)
+            entered.set()
+            assert release.wait(2)
+            with state_lock:
+                active -= 1
+            return super().encode(**kwargs)
+
+    adapter = TextEmbeddingAdapter(make_config(tmp_path), model_loader=lambda *_: SerializedModel())
+    barrier = Barrier(3)
+    errors = []
+
+    def document_worker():
+        try:
+            barrier.wait()
+            adapter.embed_documents([FakeDocument("document")])
+        except BaseException as exc:
+            errors.append(exc)
+
+    def query_worker():
+        try:
+            barrier.wait()
+            adapter.embed_query("query")
+        except BaseException as exc:
+            errors.append(exc)
+
+    first = Thread(target=document_worker)
+    second = Thread(target=query_worker)
+    first.start(); second.start(); barrier.wait()
+    assert entered.wait(2)
+    release.set()
+    first.join(2); second.join(2)
+    assert errors == []
+    assert overlaps == []
+
+
+def test_failed_load_clears_state_and_can_retry(tmp_path):
+    calls = []
+    model = FakeModel()
+
+    def loader(*_):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("private loader detail")
+        return model
+
+    adapter = TextEmbeddingAdapter(make_config(tmp_path), model_loader=loader)
+    with pytest.raises(TextEmbeddingLoadError):
+        adapter.load()
+    assert adapter.runtime_state == "failed"
+    assert adapter.runtime_error_code == "text_model_load_failed"
+    assert adapter.device is None
+    assert adapter._model is None
+    assert adapter.load() is model
+    assert adapter.runtime_state == "ready"
+    assert adapter.runtime_error_code is None

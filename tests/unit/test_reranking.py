@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from threading import Barrier, Event, Lock, Thread
 
 import numpy as np
 import pytest
@@ -91,3 +92,96 @@ def test_ties_use_original_fused_then_raw_cross_encoder_then_input_order():
     reranker = CrossEncoderReranker(config(reranker_ce_weight=0.0, reranker_fused_weight=1.0, reranker_boost_weight=0.0), loader=lambda _: model)
     output = reranker.rerank_items("q", [hit("a", "a", 0.5), hit("b", "b", 0.5), hit("c", "c", 0.5)], top_k=3)
     assert [item.record_id for item in output] == ["a", "c", "b"]
+
+
+def test_concurrent_load_calls_loader_once_and_failed_load_retries():
+    barrier = Barrier(5)
+    entered = Event()
+    release = Event()
+    calls = []
+    model = FakeModel([0.5])
+
+    def loader(name):
+        calls.append(name)
+        entered.set()
+        assert release.wait(2)
+        return model
+
+    reranker = CrossEncoderReranker(config(), loader=loader)
+    errors = []
+
+    def worker():
+        try:
+            barrier.wait()
+            assert reranker.load() is model
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [Thread(target=worker) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    assert entered.wait(2)
+    release.set()
+    for thread in threads:
+        thread.join(2)
+    assert errors == []
+    assert len(calls) == 1
+    assert reranker.runtime_state == "ready"
+
+    failed_calls = []
+
+    def retry_loader(name):
+        failed_calls.append(name)
+        if len(failed_calls) == 1:
+            raise RuntimeError("private reranker loader detail")
+        return model
+
+    retry = CrossEncoderReranker(config(), loader=retry_loader)
+    with pytest.raises(Exception):
+        retry.load()
+    assert retry.runtime_state == "failed"
+    assert retry.runtime_error_code == "reranker_model_load_failed"
+    assert retry._model is None
+    assert retry.load() is model
+    assert retry.runtime_state == "ready"
+
+
+def test_concurrent_predict_calls_are_serialized():
+    entered = Event()
+    release = Event()
+    state_lock = Lock()
+    active = 0
+    overlaps = []
+
+    class SerializedModel(FakeModel):
+        def predict(self, pairs):
+            nonlocal active
+            with state_lock:
+                active += 1
+                if active > 1:
+                    overlaps.append(active)
+            entered.set()
+            assert release.wait(2)
+            with state_lock:
+                active -= 1
+            return super().predict(pairs)
+
+    reranker = CrossEncoderReranker(config(), loader=lambda _: SerializedModel([0.5]))
+    barrier = Barrier(3)
+    errors = []
+
+    def worker():
+        try:
+            barrier.wait()
+            reranker.score_pairs("query", ["candidate"])
+        except BaseException as exc:
+            errors.append(exc)
+
+    first = Thread(target=worker); second = Thread(target=worker)
+    first.start(); second.start(); barrier.wait()
+    assert entered.wait(2)
+    release.set()
+    first.join(2); second.join(2)
+    assert errors == []
+    assert overlaps == []

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from threading import Barrier, Thread
+from threading import Barrier, Event, Thread
 
 import numpy as np
 
@@ -143,3 +143,64 @@ def test_snapshot_is_side_effect_free_and_deterministically_ordered(tmp_path: Pa
     snapshot = registry.snapshot()
     assert [item.component_kind for item in snapshot.components] == ["text"]
     assert snapshot.components[0].state == "unloaded"
+
+
+def test_registry_factory_is_single_flight_under_contention(tmp_path: Path):
+    plan, _, _, _, _ = setup_chain(tmp_path)
+    config = plan.resolved_config()
+    barrier = Barrier(6)
+    entered = Event()
+    release = Event()
+    calls = []
+
+    def factory(value):
+        calls.append(1)
+        entered.set()
+        assert release.wait(2)
+        return TextEmbeddingAdapter(value, model_loader=lambda *_: _Model())
+
+    registry = ModelAdapterRegistry(text_factory=factory)
+    results = []
+    errors = []
+
+    def worker():
+        try:
+            barrier.wait()
+            results.append(registry.get_text_adapter(config))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [Thread(target=worker) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    assert entered.wait(2)
+    release.set()
+    for thread in threads:
+        thread.join(2)
+    assert errors == []
+    assert len(calls) == 1
+    assert len({id(item) for item in results}) == 1
+
+
+def test_snapshot_during_loading_is_safe_and_does_not_load(tmp_path: Path):
+    plan, _, _, _, _ = setup_chain(tmp_path)
+    config = plan.resolved_config()
+    entered = Event()
+    release = Event()
+
+    def loader(*_):
+        entered.set()
+        assert release.wait(2)
+        return _Model()
+
+    registry = ModelAdapterRegistry(text_factory=lambda value: TextEmbeddingAdapter(value, model_loader=loader))
+    adapter = registry.get_text_adapter(config)
+    thread = Thread(target=adapter.load)
+    thread.start()
+    assert entered.wait(2)
+    snapshot = registry.snapshot()
+    assert snapshot.components[0].state == "loading"
+    release.set()
+    thread.join(2)
+    assert registry.snapshot().components[0].state == "ready"

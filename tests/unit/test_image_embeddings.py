@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Barrier, Event, Lock, Thread
 
 import numpy as np
 import pytest
@@ -267,3 +268,112 @@ def test_caller_sequence_is_not_mutated(tmp_path):
     result = adapter.embed_images(original)
     assert original == snapshot
     assert len(result.image_objects) == 1
+
+
+def test_concurrent_load_calls_loader_once(tmp_path):
+    barrier = Barrier(5)
+    entered = Event()
+    release = Event()
+    calls = []
+    adapter = ImageEmbeddingAdapter(
+        make_config(tmp_path),
+        model_loader=lambda *args: (calls.append(args), entered.set(), release.wait(2), ImageModelComponents(FakeClipModel(), lambda image: torch.ones(3, 2, 2), lambda texts: TokenBatch(texts), 3))[-1],
+    )
+    errors = []
+
+    def worker():
+        try:
+            barrier.wait()
+            adapter.load()
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [Thread(target=worker) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    assert entered.wait(2)
+    release.set()
+    for thread in threads:
+        thread.join(2)
+    assert errors == []
+    assert len(calls) == 1
+    assert adapter.runtime_state == "ready"
+
+
+def test_shared_image_model_inference_is_serialized(tmp_path):
+    image = tmp_path / "shared.png"
+    write_image(image)
+    entered = Event()
+    release = Event()
+    state_lock = Lock()
+    active = 0
+    overlaps = []
+
+    class SerializedClip(FakeClipModel):
+        def _enter(self):
+            nonlocal active
+            with state_lock:
+                active += 1
+                if active > 1:
+                    overlaps.append(active)
+            entered.set()
+            assert release.wait(2)
+            with state_lock:
+                active -= 1
+
+        def encode_text(self, tokens):
+            self._enter()
+            return super().encode_text(tokens)
+
+        def encode_image(self, batch):
+            self._enter()
+            return super().encode_image(batch)
+
+    model = SerializedClip()
+    adapter, _, _ = make_adapter(tmp_path, model=model)
+    barrier = Barrier(3)
+    errors = []
+
+    def query_worker():
+        try:
+            barrier.wait()
+            adapter.embed_query("query")
+        except BaseException as exc:
+            errors.append(exc)
+
+    def image_worker():
+        try:
+            barrier.wait()
+            adapter.embed_images([{"image_id": "image", "path": str(image)}])
+        except BaseException as exc:
+            errors.append(exc)
+
+    first = Thread(target=query_worker); second = Thread(target=image_worker)
+    first.start(); second.start(); barrier.wait()
+    assert entered.wait(2)
+    release.set()
+    first.join(2); second.join(2)
+    assert errors == []
+    assert overlaps == []
+
+
+def test_failed_image_load_clears_components_and_can_retry(tmp_path):
+    calls = []
+    components = ImageModelComponents(FakeClipModel(), lambda image: torch.ones(3, 2, 2), lambda texts: TokenBatch(texts), 3)
+
+    def loader(*_):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("private image loader detail")
+        return components
+
+    adapter = ImageEmbeddingAdapter(make_config(tmp_path), model_loader=loader)
+    with pytest.raises(ImageEmbeddingLoadError):
+        adapter.load()
+    assert adapter.runtime_state == "failed"
+    assert adapter.runtime_error_code == "image_model_load_failed"
+    assert adapter.device is None
+    assert adapter._components is None
+    assert adapter.load() is components
+    assert adapter.runtime_state == "ready"

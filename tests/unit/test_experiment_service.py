@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,7 @@ from backend.services import (
     PersistedAblationRun,
     PersistedEvaluationRun,
     ServiceInputError,
+    ModelAdapterRegistry,
 )
 from notebooks.config import Config
 from tests.unit.test_evaluation_runner import setup_chain
@@ -107,3 +109,56 @@ def test_service_rejects_invalid_plan_before_pipeline_work(tmp_path):
 
     with pytest.raises(ServiceInputError):
         service.run_evaluation(plan, suite)
+
+
+def test_registry_backed_retrieval_resolves_plan_compatible_adapters(tmp_path):
+    service, plan, query = _service(tmp_path)
+    retrieval_result = service._retrieval_callable(
+        query,
+        plan,
+        service._storage_root,
+        build_report_path=service._build_report_path,
+        modalities=("text",),
+        text_k=5,
+        image_k=None,
+        reranker_adapter=None,
+    )
+    captured = []
+    text_adapter = SimpleNamespace(model_name="text", load=lambda: None, embed_query=lambda value: None, encode_text=lambda value: None)
+    image_adapter = SimpleNamespace(model_name="image", pretrained="pretrained", load=lambda: None, embed_query=lambda value: None)
+    reranker_adapter = SimpleNamespace(model_name="reranker", load=lambda: None, score_pairs=lambda query, texts: [])
+    registry = ModelAdapterRegistry(
+        text_factory=lambda _: text_adapter,
+        image_factory=lambda _: image_adapter,
+        reranker_factory=lambda _: reranker_adapter,
+    )
+    service = ExperimentService(
+        service._catalog,
+        service._storage_root,
+        service._build_report_path,
+        service._context_formatter,
+        service._generation_adapter,
+        model_registry=registry,
+        retrieval_callable=lambda *args, **kwargs: captured.append(kwargs) or retrieval_result,
+    )
+    case = BenchmarkCase("case-1", query, ("text",), text_k=5)
+    assert service._retrieval(case, plan) is retrieval_result
+    assert captured[0]["text_adapter"] is text_adapter
+    assert captured[0]["image_adapter"] is image_adapter
+    assert captured[0]["reranker_adapter"] is reranker_adapter
+
+
+def test_registry_and_direct_model_adapters_are_rejected_together(tmp_path):
+    service, plan, _ = _service(tmp_path)
+    registry = ModelAdapterRegistry()
+    with pytest.raises(ServiceInputError) as error:
+        ExperimentService(
+            service._catalog,
+            service._storage_root,
+            service._build_report_path,
+            service._context_formatter,
+            service._generation_adapter,
+            text_adapter=object(),
+            model_registry=registry,
+        )
+    assert error.value.error_code == "conflicting_model_adapters"
