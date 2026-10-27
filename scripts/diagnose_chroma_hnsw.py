@@ -41,6 +41,8 @@ _SQLITE_FILES = {
 }
 _SQLITE_TABLES = ("segments", "collections", "segment_metadata", "max_seq_id")
 _MAX_RUNS = 20
+_MAX_SNAPSHOT_DIRECTORIES = 512
+_MAX_METADATA_PICKLE_BYTES = 16 * 1024 * 1024
 _VECTOR_COUNT = 80
 _DIMENSIONS = 64
 _ANCHOR_NAME = "hnsw_diagnostic_anchor"
@@ -67,7 +69,13 @@ def _runtime_info(chroma_version: str, cache_size: int | None, override: int | N
 def _inventory(chroma_root: Path) -> dict[str, Any]:
     """Return bounded file metadata only; never read vector or document data."""
     files: list[dict[str, Any]] = []
+    visited_directories = 0
+    truncated = False
     for base, dirs, names in os.walk(chroma_root, followlinks=False):
+        visited_directories += 1
+        if visited_directories > _MAX_SNAPSHOT_DIRECTORIES:
+            truncated = True
+            break
         dirs[:] = [name for name in dirs if not (Path(base) / name).is_symlink()]
         for name in names:
             if name not in _NATIVE_HNSW_FILES and name not in _SQLITE_FILES:
@@ -87,19 +95,34 @@ def _inventory(chroma_root: Path) -> dict[str, Any]:
                     "stat_error_type": type(exc).__name__,
                 })
             if len(files) >= 256:
-                return {"files": files, "truncated": True}
-    return {"files": files, "truncated": False}
+                truncated = True
+                break
+        if truncated:
+            break
+    return {
+        "files": files,
+        "truncated": truncated,
+        "directories_visited": min(visited_directories, _MAX_SNAPSHOT_DIRECTORIES),
+    }
 
 
 def _metadata_pickle_summary(chroma_root: Path) -> dict[str, Any]:
-    candidates = [
-        Path(base) / name
-        for base, _, names in os.walk(chroma_root, followlinks=False)
-        for name in names
-        if name == "index_metadata.pickle"
-    ]
+    candidates: list[Path] = []
+    directories_visited = 0
+    traversal_truncated = False
+    for base, dirs, names in os.walk(chroma_root, followlinks=False):
+        directories_visited += 1
+        if directories_visited > _MAX_SNAPSHOT_DIRECTORIES:
+            traversal_truncated = True
+            break
+        dirs[:] = [name for name in dirs if not (Path(base) / name).is_symlink()]
+        if "index_metadata.pickle" in names:
+            candidates.append(Path(base) / "index_metadata.pickle")
+            if len(candidates) >= 64:
+                traversal_truncated = True
+                break
     if not candidates:
-        return {"present": False}
+        return {"present": False, "truncated": traversal_truncated}
     summaries = []
     for path in candidates[:64]:
         summary: dict[str, Any] = {
@@ -107,7 +130,12 @@ def _metadata_pickle_summary(chroma_root: Path) -> dict[str, Any]:
             "present": True,
         }
         try:
-            summary["size_bytes"] = path.stat(follow_symlinks=False).st_size
+            file_size = path.stat(follow_symlinks=False).st_size
+            summary["size_bytes"] = file_size
+            if file_size > _MAX_METADATA_PICKLE_BYTES:
+                summary["inspection"] = "skipped_size_limit"
+                summaries.append(summary)
+                continue
             # This is only an opt-in probe's own freshly created synthetic store.
             # Never use this diagnostic on an index supplied by a caller.
             import pickle
@@ -122,7 +150,12 @@ def _metadata_pickle_summary(chroma_root: Path) -> dict[str, Any]:
             summary["pickle_loadable"] = False
             summary["inspection_error_type"] = type(exc).__name__
         summaries.append(summary)
-    return {"present": True, "files": summaries, "truncated": len(candidates) > 64}
+    return {
+        "present": True,
+        "files": summaries,
+        "truncated": traversal_truncated or len(candidates) >= 64,
+        "directories_visited": min(directories_visited, _MAX_SNAPSHOT_DIRECTORIES),
+    }
 
 
 def _sqlite_summary(chroma_root: Path) -> dict[str, Any]:
