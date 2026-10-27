@@ -21,6 +21,12 @@ final path is never overwritten. Repeating an identical write verifies and
 returns the existing bytes; a mismatch is an integrity error. Temporary
 files are cleaned up on failure. Filesystems without the required safe
 no-overwrite primitive fail rather than falling back to replacement.
+Concurrent saves of identical content are idempotent: one hard link publishes
+the complete file, and competing callers verify the already-published bytes
+before returning the same reference. Listing ignores the store's temporary
+file pattern, so an in-progress write is not reported as an artifact. These
+filesystem guarantees apply to callers sharing the store, not as distributed
+coordination across hosts.
 
 Loads derive paths from a validated lowercase digest, enforce containment and
 the no-symlink internal-component policy, apply a default 64 MiB bounded read,
