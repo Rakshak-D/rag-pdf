@@ -44,6 +44,7 @@ def create_app(service: ExperimentService, *, api_token: str, max_request_body_b
     app.state.max_request_body_bytes = max_request_body_bytes
     app.state.max_response_body_bytes = max_request_body_bytes
     app.state.job_manager = job_manager
+    app.state.model_registry = service.model_registry
     app.add_middleware(ExperimentSecurityMiddleware, api_token=api_token)
     return app
 

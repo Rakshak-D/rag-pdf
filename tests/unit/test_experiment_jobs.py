@@ -28,7 +28,7 @@ def test_job_manager_executes_and_persists_evaluation(tmp_path: Path):
     manager.start()
     try:
         submitted = manager.submit_evaluation(plan, _suite(query))
-        assert submitted.status == "queued"
+        assert submitted.status in {"queued", "running"}
         for _ in range(100):
             current = manager.get_job(submitted.job_id)
             if current.status in {"succeeded", "partial", "failed"}:

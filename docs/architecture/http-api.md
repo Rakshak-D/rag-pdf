@@ -39,3 +39,8 @@ conservative; a later job layer may provide durable asynchronous execution.
 # Bounded jobs
 
 An optional `ExperimentJobManager` supplied to `create_app` adds authenticated, bounded job submission and polling. Job requests return HTTP 202 while validated plans remain in process memory; lifecycle metadata is stored in a separate SQLite registry. The manager delegates execution to `ExperimentService`, and does not provide distributed coordination or restart-resumable payloads.
+
+`GET /api/v1/runtime/models` returns the configured registry's read-only safe
+component status, or `runtime_registry_unconfigured` when the service has no
+registry. It never performs warm-up or inference, and model status does not
+claim that Ollama or an index is ready.

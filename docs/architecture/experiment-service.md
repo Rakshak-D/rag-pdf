@@ -18,6 +18,14 @@ publishes/registers the result.
 the returned variant identities, nested reports, comparisons and shared
 manifest/index provenance before plan-bound catalog registration.
 
+An optional `ModelAdapterRegistry` can replace direct text, image, and reranker
+adapter injections. The service resolves adapters from each active plan lazily,
+so compatible ablation variants and job workers share cached wrappers without
+loading models during service construction. Direct injection and registry
+injection are mutually exclusive; existing direct-injection callers are
+unchanged. A registered text adapter can also supply the evaluation embedder
+when no explicit metric embedder is provided.
+
 Valid evaluation or ablation results with failed cases remain inspectable and
 persistable. A runner-level or persistence failure produces a stable service
 error code and never fabricates a successful artifact or silently reruns work.

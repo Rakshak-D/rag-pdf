@@ -1,0 +1,7 @@
+# Thread-safe model adapter registry
+
+`ModelAdapterRegistry` is an explicitly injected, process-local cache for the existing text, image, and cross-encoder adapter wrappers. Cache keys contain only construction and operational settings that affect each component: text model and batch size; image model, pretrained identifier, batch size, and caption/image fusion weight; and reranker model plus its scoring weights. It does not key by a whole run fingerprint, so compatible ablation variants and job workers reuse one adapter instance.
+
+Registry construction and adapter lookup are lazy and side-effect-free with respect to expensive model loading. `preload()` is the explicit Python warm-up boundary for named components. It returns stable failure codes and never exposes loader exceptions or local paths. Runtime snapshots contain only safe identifiers, state (`unloaded`, `loading`, `ready`, or `failed`), optional stable error codes, and explicit-warm-up state. Status reads and health checks do not load models.
+
+Each adapter has a load lock for single-flight initialization and an inference lock for the underlying model call. Failed initialization clears partial state and can be retried; successful initialization is shared. Per-model inference serialization improves safety for shared workers but can reduce throughput. No global model registry, unload guarantee, GPU-memory cleanup claim, Ollama client, or Ollama process lifecycle is introduced.

@@ -7,6 +7,7 @@ import math
 from collections.abc import Callable, Sequence
 from numbers import Real
 from typing import Any
+import threading
 
 import numpy as np
 
@@ -47,22 +48,45 @@ class CrossEncoderReranker:
         self.model_name = config.reranker_model
         self._loader = loader
         self._model: Any | None = None
+        self._load_lock = threading.Lock()
+        self._inference_lock = threading.Lock()
+        self._state = "unloaded"
+        self._error_code: str | None = None
+
+    @property
+    def runtime_state(self) -> str:
+        return self._state
+
+    @property
+    def runtime_error_code(self) -> str | None:
+        return self._error_code
 
     def load(self) -> Any:
         if self._model is not None:
             return self._model
-        try:
-            if self._loader is not None:
-                model = self._loader(self.model_name)
-            else:
-                from sentence_transformers import CrossEncoder
-                model = CrossEncoder(self.model_name)
-        except Exception as exc:
-            raise RerankerLoadError(
-                f"could not load configured reranker {self.model_name!r}"
-            ) from exc
-        self._model = model
-        return model
+        with self._load_lock:
+            if self._model is not None:
+                return self._model
+            self._state = "loading"
+            try:
+                if self._loader is not None:
+                    model = self._loader(self.model_name)
+                else:
+                    from sentence_transformers import CrossEncoder
+                    model = CrossEncoder(self.model_name)
+                if model is None or not callable(getattr(model, "predict", None)):
+                    raise RerankerLoadError("reranker loader returned an invalid model")
+            except Exception as exc:
+                self._model = None
+                self._state = "failed"
+                self._error_code = "reranker_model_load_failed"
+                if isinstance(exc, RerankerLoadError):
+                    raise
+                raise RerankerLoadError(f"could not load configured reranker {self.model_name!r}") from exc
+            self._model = model
+            self._state = "ready"
+            self._error_code = None
+            return model
 
     @staticmethod
     def _validate_texts(texts: Sequence[str]) -> list[str]:
@@ -80,7 +104,8 @@ class CrossEncoderReranker:
         if not values:
             return []
         try:
-            scores = self.load().predict([[query.strip(), text] for text in values])
+            with self._inference_lock:
+                scores = self.load().predict([[query.strip(), text] for text in values])
         except RerankerError:
             raise
         except Exception as exc:

@@ -7,3 +7,9 @@ Jobs contain only safe metadata in SQLite. Validated plans and benchmark suites 
 The lifecycle is `queued -> running -> succeeded|partial|failed|interrupted`, with queued work also cancellable. A persisted evaluation whose own cases failed remains distinguishable from a worker failure: it has an artifact ID and persisted result status, while a worker failure has no fabricated artifact and a stable error code. Shutdown stops acceptance, marks unfinished rows interrupted, and waits only for the configured bounded timeout. A late completion cannot overwrite a terminal row, although any artifact it registered remains discoverable.
 
 Authenticated Starlette routes submit jobs at `POST /api/v1/jobs/evaluations` and `/api/v1/jobs/ablations`, poll with `GET /api/v1/jobs/{job_id}`, list with `GET /api/v1/jobs`, and cancel queued work with `POST /api/v1/jobs/{job_id}/cancel`. Existing synchronous routes remain available. Without a configured manager, job routes return `job_execution_unconfigured` and never fall back to synchronous execution.
+
+The service may share an explicitly injected model-adapter registry across
+workers. Registry reuse is keyed by compatible model settings and does not
+make job startup load models. Model status is reported separately through the
+authenticated runtime endpoint; it is not a readiness claim for Ollama or the
+index.

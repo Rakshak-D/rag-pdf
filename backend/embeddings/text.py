@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
+import threading
 from typing import Any, Callable
 
 import numpy as np
@@ -109,6 +110,10 @@ class TextEmbeddingAdapter:
         self._model_loader = model_loader or _sentence_transformer_loader
         self._model: Any | None = None
         self._device: str | None = None
+        self._load_lock = threading.Lock()
+        self._inference_lock = threading.Lock()
+        self._state = "unloaded"
+        self._error_code: str | None = None
 
     @property
     def model_name(self) -> str:
@@ -118,25 +123,41 @@ class TextEmbeddingAdapter:
     def device(self) -> str | None:
         return self._device
 
+    @property
+    def runtime_state(self) -> str:
+        return self._state
+
+    @property
+    def runtime_error_code(self) -> str | None:
+        return self._error_code
+
     def load(self) -> Any:
         """Load the configured model once and return it."""
 
         if self._model is not None:
             return self._model
-        try:
-            device = _default_device()
-            model = self._model_loader(self.model_name, device)
-        except Exception as exc:
-            raise TextEmbeddingLoadError(
-                f"failed to load text embedding model {self.model_name!r}"
-            ) from exc
-        if model is None or not callable(getattr(model, "encode", None)):
-            raise TextEmbeddingLoadError(
-                f"loaded text embedding model {self.model_name!r} has no callable encode method"
-            )
-        self._device = device
-        self._model = model
-        return model
+        with self._load_lock:
+            if self._model is not None:
+                return self._model
+            self._state = "loading"
+            try:
+                device = _default_device()
+                model = self._model_loader(self.model_name, device)
+                if model is None or not callable(getattr(model, "encode", None)):
+                    raise TextEmbeddingLoadError("loaded text embedding model has no callable encode method")
+            except Exception as exc:
+                self._model = None
+                self._device = None
+                self._state = "failed"
+                self._error_code = "text_model_load_failed"
+                if isinstance(exc, TextEmbeddingLoadError):
+                    raise
+                raise TextEmbeddingLoadError(f"failed to load text embedding model {self.model_name!r}") from exc
+            self._device = device
+            self._model = model
+            self._state = "ready"
+            self._error_code = None
+            return model
 
     @staticmethod
     def _document_texts(documents: Any) -> list[str]:
@@ -183,17 +204,16 @@ class TextEmbeddingAdapter:
         model = self.load()
         started = perf_counter()
         try:
-            raw = model.encode(
-                sentences=texts,
-                batch_size=self.config.text_embed_batch_size,
-                convert_to_numpy=True,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            )
+            with self._inference_lock:
+                raw = model.encode(
+                    sentences=texts,
+                    batch_size=self.config.text_embed_batch_size,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                )
         except Exception as exc:
-            raise TextEmbeddingInferenceError(
-                f"text embedding inference failed for model {self.model_name!r}"
-            ) from exc
+            raise TextEmbeddingInferenceError("text embedding inference failed") from exc
         elapsed = max(0.0, perf_counter() - started)
         array = _validate_numeric_array(raw, label="document embeddings", dimensions=2)
         if array.shape[0] != len(texts):
@@ -219,16 +239,15 @@ class TextEmbeddingAdapter:
             model_input = f"{BGE_QUERY_PREFIX}{trimmed}"
         model = self.load()
         try:
-            raw = model.encode(
-                sentences=model_input,
-                normalize_embeddings=True,
-                convert_to_numpy=True,
-                show_progress_bar=False,
-            )
+            with self._inference_lock:
+                raw = model.encode(
+                    sentences=model_input,
+                    normalize_embeddings=True,
+                    convert_to_numpy=True,
+                    show_progress_bar=False,
+                )
         except Exception as exc:
-            raise TextEmbeddingInferenceError(
-                f"text embedding inference failed for model {self.model_name!r}"
-            ) from exc
+            raise TextEmbeddingInferenceError("text embedding inference failed") from exc
         return _validate_numeric_array(raw, label="query embedding", dimensions=1)
 
     def embed_query(self, query: str) -> np.ndarray:

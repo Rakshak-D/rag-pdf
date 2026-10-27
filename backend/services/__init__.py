@@ -19,6 +19,13 @@ from .job_manager import (
     JobNotFoundError,
     JobStateError,
 )
+from .model_registry import (
+    ModelAdapterBundle,
+    ModelAdapterRegistry,
+    ModelComponentStatus,
+    ModelRuntimeError,
+    ModelRuntimeSnapshot,
+)
 
 __all__ = [
     "ExperimentService",
@@ -36,4 +43,9 @@ __all__ = [
     "JobNotFoundError",
     "JobCapacityError",
     "JobStateError",
+    "ModelAdapterRegistry",
+    "ModelRuntimeSnapshot",
+    "ModelComponentStatus",
+    "ModelRuntimeError",
+    "ModelAdapterBundle",
 ]

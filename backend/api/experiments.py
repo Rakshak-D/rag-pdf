@@ -172,6 +172,23 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "api_version": "v1"})
 
 
+async def runtime_models(request: Request) -> JSONResponse:
+    try:
+        registry = getattr(request.app.state, "model_registry", None)
+        if registry is None:
+            return _response_error("runtime_registry_unconfigured", 503)
+        snapshot = await run_in_threadpool(registry.snapshot)
+        return JSONResponse({"components": [{
+            "component_kind": item.component_kind,
+            "model_identifier": item.model_identifier,
+            "state": item.state,
+            "error_code": item.error_code,
+            "explicitly_warmed": item.explicitly_warmed,
+        } for item in snapshot.components]})
+    except Exception as exc:
+        return _map_error(exc)
+
+
 async def submit_evaluation(request: Request) -> JSONResponse:
     service: ExperimentService = request.app.state.experiment_service
     try:
@@ -372,6 +389,7 @@ def build_routes(service: ExperimentService, *, max_request_body_bytes: int, job
         Route("/health", health, methods=["GET"]),
         Route("/api/v1/evaluations", submit_evaluation, methods=["POST"]),
         Route("/api/v1/ablations", submit_ablation, methods=["POST"]),
+        Route("/api/v1/runtime/models", runtime_models, methods=["GET"]),
         Route("/api/v1/jobs/evaluations", submit_evaluation_job, methods=["POST"]),
         Route("/api/v1/jobs/ablations", submit_ablation_job, methods=["POST"]),
         Route("/api/v1/jobs", list_jobs, methods=["GET"]),

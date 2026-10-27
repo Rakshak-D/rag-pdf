@@ -24,6 +24,7 @@ from backend.experiments.evaluation import EvaluationReport, MetricAggregate, Me
 from backend.experiments.evaluation_runner import EvaluationCaseOutcome, EvaluationRunResult, EvaluationRunner
 from backend.experiments.run_plan import RunPlan
 from backend.experiments.tracing import QueryTrace
+from backend.services.model_registry import ModelAdapterRegistry
 
 
 class ExperimentServiceError(ValueError):
@@ -205,6 +206,7 @@ class ExperimentService:
         clock: Callable[[], float] | None = None,
         cpu_monitor_factory: object | None = None,
         ram_monitor_factory: object | None = None,
+        model_registry: ModelAdapterRegistry | None = None,
         retrieval_callable: Callable[..., HybridRetrievalResult] | None = None,
     ) -> None:
         if not isinstance(catalog, ExperimentCatalog):
@@ -215,6 +217,10 @@ class ExperimentService:
             raise ServiceInputError("pipeline_components_invalid")
         if retrieval_callable is not None and not callable(retrieval_callable):
             raise ServiceInputError("retrieval_callable_invalid")
+        if model_registry is not None and not isinstance(model_registry, ModelAdapterRegistry):
+            raise ServiceInputError("model_registry_invalid")
+        if model_registry is not None and any(value is not None for value in (text_adapter, image_adapter, reranker_adapter)):
+            raise ServiceInputError("conflicting_model_adapters")
         self._catalog = catalog
         self._storage_root = storage_root
         self._build_report_path = build_report_path
@@ -227,22 +233,37 @@ class ExperimentService:
         self._clock = clock
         self._cpu_monitor_factory = cpu_monitor_factory
         self._ram_monitor_factory = ram_monitor_factory
+        self._model_registry = model_registry
         self._retrieval_callable = retrieval_callable or retrieve_for_plan
 
     def _retrieval(self, case: BenchmarkCase, plan: RunPlan) -> HybridRetrievalResult:
         text_k, image_k = _effective_limits(case, plan)
+        text_adapter = self._text_adapter
+        image_adapter = self._image_adapter
+        reranker_adapter = self._reranker_adapter
+        if self._model_registry is not None:
+            bundle = self._model_registry.get_bundle(plan.resolved_config())
+            text_adapter, image_adapter, reranker_adapter = bundle.text_adapter, bundle.image_adapter, bundle.reranker
         return self._retrieval_callable(
             case.query,
             plan,
             self._storage_root,
             build_report_path=self._build_report_path,
             modalities=case.modalities,
-            text_adapter=self._text_adapter,
-            image_adapter=self._image_adapter,
+            text_adapter=text_adapter,
+            image_adapter=image_adapter,
             text_k=text_k,
             image_k=image_k,
-            reranker_adapter=self._reranker_adapter,
+            reranker_adapter=reranker_adapter,
         )
+
+    def _registry_retrieval(self, query: str, plan: RunPlan, storage_root: object, **kwargs: Any) -> HybridRetrievalResult:
+        """Ablation callback that resolves one compatible bundle per plan."""
+        if self._model_registry is None:
+            return self._retrieval_callable(query, plan, storage_root, **kwargs)
+        bundle = self._model_registry.get_bundle(plan.resolved_config())
+        kwargs.update(text_adapter=bundle.text_adapter, image_adapter=bundle.image_adapter, reranker_adapter=bundle.reranker)
+        return self._retrieval_callable(query, plan, storage_root, **kwargs)
 
     def _runner_kwargs(self) -> dict[str, Any]:
         values: dict[str, Any] = {}
@@ -253,6 +274,11 @@ class ExperimentService:
         if self._ram_monitor_factory is not None:
             values["ram_monitor_factory"] = self._ram_monitor_factory
         return values
+
+    @property
+    def model_registry(self) -> ModelAdapterRegistry | None:
+        """Configured registry, exposed read-only for runtime status reporting."""
+        return self._model_registry
 
     def validate_evaluation_request(self, run_plan: RunPlan, benchmark_suite: BenchmarkSuite) -> None:
         """Validate an evaluation request without opening storage or executing it."""
@@ -267,7 +293,10 @@ class ExperimentService:
     def run_evaluation(self, run_plan: RunPlan, benchmark_suite: BenchmarkSuite) -> PersistedEvaluationRun:
         self.validate_evaluation_request(run_plan, benchmark_suite)
         try:
-            runner = EvaluationRunner(run_plan, self._retrieval, self._context_formatter, self._generation_adapter, text_embedder=self._text_embedder, **self._runner_kwargs())
+            text_embedder = self._text_embedder
+            if text_embedder is None and self._model_registry is not None:
+                text_embedder = self._model_registry.get_text_adapter(run_plan.resolved_config())
+            runner = EvaluationRunner(run_plan, self._retrieval, self._context_formatter, self._generation_adapter, text_embedder=text_embedder, **self._runner_kwargs())
             result = runner.run(benchmark_suite)
         except ExperimentServiceError:
             raise
@@ -283,6 +312,11 @@ class ExperimentService:
     def run_ablation(self, ablation_plan: AblationPlan, benchmark_suite: BenchmarkSuite) -> PersistedAblationRun:
         self.validate_ablation_request(ablation_plan, benchmark_suite)
         try:
+            text_embedder = self._text_embedder
+            retrieval_callable = self._retrieval_callable
+            if self._model_registry is not None:
+                text_embedder = text_embedder or self._model_registry.get_text_adapter(ablation_plan.variants[0].run_plan.resolved_config())
+                retrieval_callable = self._registry_retrieval
             runner = AblationRunner(
                 ablation_plan,
                 benchmark_suite,
@@ -293,11 +327,11 @@ class ExperimentService:
                 text_adapter=self._text_adapter,
                 image_adapter=self._image_adapter,
                 reranker_adapter=self._reranker_adapter,
-                text_embedder=self._text_embedder,
+                text_embedder=text_embedder,
                 clock=self._clock,
                 cpu_monitor_factory=self._cpu_monitor_factory,
                 ram_monitor_factory=self._ram_monitor_factory,
-                retrieval_callable=self._retrieval_callable,
+                retrieval_callable=retrieval_callable,
             )
             result = runner.run()
         except ExperimentServiceError:

@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
+import threading
 from typing import Any
 
 import numpy as np
@@ -165,6 +166,10 @@ class ImageEmbeddingAdapter:
         self._model_loader = model_loader or _default_loader
         self._components: ImageModelComponents | None = None
         self._device: str | None = None
+        self._load_lock = threading.Lock()
+        self._inference_lock = threading.Lock()
+        self._state = "unloaded"
+        self._error_code: str | None = None
 
     @property
     def model_name(self) -> str:
@@ -182,39 +187,43 @@ class ImageEmbeddingAdapter:
     def dimension(self) -> int:
         return self._components.dimension if self._components is not None else 0
 
+    @property
+    def runtime_state(self) -> str:
+        return self._state
+
+    @property
+    def runtime_error_code(self) -> str | None:
+        return self._error_code
+
     def load(self) -> ImageModelComponents:
         """Load and validate OpenCLIP components exactly once."""
 
         if self._components is not None:
             return self._components
-        try:
-            device = _default_device()
-            components = self._model_loader(self.model_name, self.pretrained, device)
-        except Exception as exc:
-            raise ImageEmbeddingLoadError(
-                f"failed to load OpenCLIP model {self.model_name!r} with pretrained "
-                f"{self.pretrained!r}"
-            ) from exc
-        if not isinstance(components, ImageModelComponents):
-            raise ImageEmbeddingLoadError(
-                f"OpenCLIP loader for {self.model_name!r}/{self.pretrained!r} "
-                "did not return ImageModelComponents"
-            )
-        if components.dimension <= 0:
-            raise ImageEmbeddingLoadError(
-                f"OpenCLIP model {self.model_name!r} reported an invalid embedding dimension"
-            )
-        if not callable(getattr(components.model, "encode_image", None)):
-            raise ImageEmbeddingLoadError(
-                f"OpenCLIP model {self.model_name!r} has no callable encode_image method"
-            )
-        if not callable(getattr(components.model, "encode_text", None)):
-            raise ImageEmbeddingLoadError(
-                f"OpenCLIP model {self.model_name!r} has no callable encode_text method"
-            )
-        self._device = device
-        self._components = components
-        return components
+        with self._load_lock:
+            if self._components is not None:
+                return self._components
+            self._state = "loading"
+            try:
+                device = _default_device()
+                components = self._model_loader(self.model_name, self.pretrained, device)
+                if not isinstance(components, ImageModelComponents) or components.dimension <= 0:
+                    raise ImageEmbeddingLoadError("OpenCLIP loader returned invalid components")
+                if not callable(getattr(components.model, "encode_image", None)) or not callable(getattr(components.model, "encode_text", None)):
+                    raise ImageEmbeddingLoadError("OpenCLIP components have no supported encoder")
+            except Exception as exc:
+                self._components = None
+                self._device = None
+                self._state = "failed"
+                self._error_code = "image_model_load_failed"
+                if isinstance(exc, ImageEmbeddingLoadError):
+                    raise
+                raise ImageEmbeddingLoadError(f"failed to load OpenCLIP model {self.model_name!r} with pretrained {self.pretrained!r}") from exc
+            self._device = device
+            self._components = components
+            self._state = "ready"
+            self._error_code = None
+            return components
 
     @staticmethod
     def _validate_objects(image_objects: Any) -> list[Mapping[str, Any]]:
@@ -239,8 +248,9 @@ class ImageEmbeddingAdapter:
         tokens = components.tokenizer([caption])
         if callable(getattr(tokens, "to", None)):
             tokens = tokens.to(self._device)
-        with torch.no_grad():
-            raw = components.model.encode_text(tokens)
+        with self._inference_lock:
+            with torch.no_grad():
+                raw = components.model.encode_text(tokens)
         return _normalize_rows(
             raw,
             label="caption embeddings",
@@ -321,8 +331,9 @@ class ImageEmbeddingAdapter:
             batch = processed[batch_start: batch_start + self.config.image_embed_batch_size]
             try:
                 batch_tensor = torch.stack(batch).to(self._device)
-                with torch.no_grad():
-                    raw = components.model.encode_image(batch_tensor)
+                with self._inference_lock:
+                    with torch.no_grad():
+                        raw = components.model.encode_image(batch_tensor)
                 batch_vectors = _normalize_rows(
                     raw,
                     label="image embeddings",
@@ -395,8 +406,9 @@ class ImageEmbeddingAdapter:
             tokens = components.tokenizer([query])
             if callable(getattr(tokens, "to", None)):
                 tokens = tokens.to(self._device)
-            with torch.no_grad():
-                raw = components.model.encode_text(tokens)
+            with self._inference_lock:
+                with torch.no_grad():
+                    raw = components.model.encode_text(tokens)
         except Exception as exc:
             raise ImageEmbeddingInferenceError(
                 f"image query embedding inference failed for model {self.model_name!r}"
