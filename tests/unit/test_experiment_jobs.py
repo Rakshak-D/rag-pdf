@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
-from threading import Event
+from threading import Event, Thread
 
 import pytest
 
@@ -96,9 +96,11 @@ def test_cancel_state_and_identifier_validation(tmp_path: Path):
 
 def test_restart_marks_stale_rows_interrupted(tmp_path: Path):
     service, plan, query = _service(tmp_path)
-    manager = ExperimentJobManager(service, tmp_path / "jobs.sqlite")
+    database = tmp_path / "jobs.sqlite"
+    ExperimentJobManager(service, database)
     with sqlite3.connect(tmp_path / "jobs.sqlite") as connection:
         connection.execute("INSERT INTO experiment_jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ("123e4567-e89b-12d3-a456-426614174000", "evaluation", "queued", "2026-01-01T00:00:00+00:00", None, None, "b", "1", plan.run_fingerprint, None, None, None, None, None))
+    manager = ExperimentJobManager(service, database)
     manager.start()
     try:
         record = manager.get_job("123e4567-e89b-12d3-a456-426614174000")
@@ -106,3 +108,102 @@ def test_restart_marks_stale_rows_interrupted(tmp_path: Path):
         assert record.error_code == "process_restarted"
     finally:
         manager.shutdown()
+
+
+def test_submission_rechecks_shutdown_state_before_admission(tmp_path: Path, monkeypatch):
+    service, plan, query = _service(tmp_path)
+    manager = ExperimentJobManager(service, tmp_path / "jobs.sqlite")
+    manager.start()
+    checked = Event()
+    resume = Event()
+    original_check = manager._validate_manager
+    errors = []
+
+    def paused_check():
+        original_check()
+        checked.set()
+        assert resume.wait(2)
+
+    monkeypatch.setattr(manager, "_validate_manager", paused_check)
+
+    def submit():
+        try:
+            manager.submit_evaluation(plan, _suite(query))
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = Thread(target=submit)
+    thread.start()
+    try:
+        assert checked.wait(2)
+        manager.shutdown()
+        resume.set()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], JobStateError)
+        assert errors[0].error_code == "manager_not_started"
+        assert manager.list_jobs() == ()
+        assert manager._queue.qsize() == 0
+    finally:
+        resume.set()
+        manager.shutdown()
+        thread.join(2)
+
+
+def test_shutdown_timeout_is_terminal_and_late_completion_cannot_overwrite(tmp_path: Path, monkeypatch):
+    service, plan, query = _service(tmp_path)
+    entered = Event()
+    release = Event()
+    late_finish_attempted = Event()
+    original_run = service.run_evaluation
+    manager = ExperimentJobManager(service, tmp_path / "jobs.sqlite", shutdown_timeout_seconds=0.05)
+
+    def blocking_run(run_plan, suite):
+        entered.set()
+        assert release.wait(3)
+        return original_run(run_plan, suite)
+
+    service.run_evaluation = blocking_run  # type: ignore[method-assign]
+    original_finish = manager._finish
+
+    def observe_finish(job_id, **kwargs):
+        original_finish(job_id, **kwargs)
+        if kwargs["status"] in {"succeeded", "partial", "failed"}:
+            late_finish_attempted.set()
+
+    monkeypatch.setattr(manager, "_finish", observe_finish)
+    manager.start()
+    submitted = manager.submit_evaluation(plan, _suite(query))
+    try:
+        assert entered.wait(2)
+        manager.shutdown()
+        interrupted = manager.get_job(submitted.job_id)
+        assert interrupted.status == "interrupted"
+        assert interrupted.error_code == "shutdown_interrupted"
+        with pytest.raises(JobStateError) as error:
+            manager.start()
+        assert error.value.error_code == "manager_shutdown"
+    finally:
+        release.set()
+        assert late_finish_attempted.wait(5)
+        manager.shutdown()
+    manager._workers[0].join(2)
+    final = manager.get_job(submitted.job_id)
+    assert final.status == "interrupted"
+    assert final.error_code == "shutdown_interrupted"
+    assert final.artifact_id is None
+
+
+def test_running_start_is_idempotent_and_shutdown_is_idempotent(tmp_path: Path):
+    service, _, _ = _service(tmp_path)
+    manager = ExperimentJobManager(service, tmp_path / "jobs.sqlite")
+    manager.start()
+    workers = tuple(manager._workers)
+    manager.start()
+    assert tuple(manager._workers) == workers
+    manager.shutdown()
+    manager.shutdown()
+    with pytest.raises(JobStateError) as error:
+        manager.start()
+    assert error.value.error_code == "manager_shutdown"

@@ -13,3 +13,12 @@ workers. Registry reuse is keyed by compatible model settings and does not
 make job startup load models. Model status is reported separately through the
 authenticated runtime endpoint; it is not a readiness claim for Ollama or the
 index.
+
+Each `ExperimentJobManager` has a one-shot lifecycle. Repeated `start()` calls
+while it is running are idempotent, and repeated `shutdown()` calls are safe.
+Once shutdown begins, that manager instance cannot restart; construct a new
+manager for a later application lifecycle. Shutdown waits only for its bounded
+timeout and does not forcibly cancel a model inference already in progress. A
+worker that finishes late cannot replace the terminal interrupted job state.
+SQLite continues to hold job metadata only: accepted payloads are not persisted,
+and execution cannot resume after process restart.

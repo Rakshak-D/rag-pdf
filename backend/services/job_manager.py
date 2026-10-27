@@ -234,14 +234,12 @@ class ExperimentJobManager:
 
     def start(self) -> None:
         with self._lock:
+            if self._shutdown:
+                raise JobStateError("manager_shutdown")
             if self._started:
-                if self._shutdown:
-                    raise JobStateError("manager_shutdown")
                 return
             with self._connect() as connection:
                 connection.execute("UPDATE experiment_jobs SET status='interrupted', finished_at=?, error_code=? WHERE status IN ('queued','running')", (_now(), "process_restarted"))
-            self._stop.clear()
-            self._shutdown = False
             self._started = True
             self._workers = []
             for index in range(self._worker_count):
@@ -251,12 +249,13 @@ class ExperimentJobManager:
 
     def shutdown(self) -> None:
         with self._lock:
-            if not self._started or self._shutdown:
+            if self._shutdown:
                 return
             self._shutdown = True
             self._stop.set()
-            with self._connect() as connection:
-                connection.execute("UPDATE experiment_jobs SET status='interrupted', finished_at=?, error_code=? WHERE status IN ('queued','running')", (_now(), "shutdown_interrupted"))
+            if self._started:
+                with self._connect() as connection:
+                    connection.execute("UPDATE experiment_jobs SET status='interrupted', finished_at=?, error_code=? WHERE status IN ('queued','running')", (_now(), "shutdown_interrupted"))
             workers = tuple(self._workers)
         deadline = time.monotonic() + self._shutdown_timeout
         for worker in workers:
@@ -334,8 +333,12 @@ class ExperimentJobManager:
         return self._submit("ablation", ablation_plan, benchmark_suite, None, ablation_plan.shared_index_fingerprint, ablation_plan.document_manifest_hash)
 
     def _submit(self, job_type: str, payload: RunPlan | AblationPlan, suite: BenchmarkSuite, run_fingerprint: str | None, index_fingerprint: str | None, manifest: str | None) -> ExperimentJobRecord:
+        # Fast preflight gives an early stable error; the same condition is
+        # checked again under the admission lock to linearize against shutdown.
         self._validate_manager()
         with self._lock:
+            if not self._started or self._shutdown:
+                raise JobStateError("manager_not_started")
             if self._queue.full():
                 raise JobCapacityError("job_capacity_exhausted")
             job_id = str(uuid.uuid4())
