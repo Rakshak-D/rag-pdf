@@ -6,10 +6,15 @@ for complete traces, outcomes, observations and aggregates; SQLite stores only
 validated discovery metadata and queryable metric rows.
 
 The catalog uses schema version 1 (`PRAGMA user_version`) and refuses future or
-incompatible schemas. Each registration is one SQLite transaction covering the
-artifact row, its six ordered ablation variants when applicable, metric
-aggregates, and comparison states. Foreign keys are enabled on every catalog
-connection, with a bounded busy timeout and full SQLite synchronization. The
+incompatible schemas. Each registration acquires a SQLite write reservation
+before checking whether the artifact row exists. The existence check and
+conditional writes therefore serialize across connections. One transaction
+covers the artifact row, its six ordered ablation variants when applicable,
+metric aggregates, and comparison states. Re-registering the same immutable
+artifact is idempotent under concurrent callers when all stored metadata and
+related rows agree; conflicts continue to fail integrity validation. Foreign
+keys are enabled on every catalog connection, with a bounded busy timeout and
+full SQLite synchronization. The
 database path is explicit, must be outside the artifact-store root, and must
 have an existing non-symlink parent; the catalog does not create arbitrary
 directory trees.
@@ -34,8 +39,10 @@ bytes, absolute paths or arbitrary exception text. Artifact and database
 filesystem errors are exposed through bounded public error classes. SQLite
 transactions and the artifact store's atomic publication provide local
 durability appropriate to the selected filesystem, but directory and process
-crash guarantees vary by platform. Neither the catalog nor an unkeyed SHA-256
-artifact ID is a signature or proof of authorship.
+crash guarantees vary by platform. SQLite serializes writers to this local
+catalog; it does not provide distributed coordination or make the application
+a multi-host job system. Neither the catalog nor an unkeyed SHA-256 artifact
+ID is a signature or proof of authorship.
 
 `ExperimentService` is the application-level caller for these operations. It
 validates plans, benchmark identity, trace provenance and ablation comparisons

@@ -415,25 +415,35 @@ class ExperimentCatalog:
         comparisons = self._comparisons(reference.artifact_id, result) if isinstance(result, AblationRunResult) else ()
         conn = self._connect()
         try:
-            with conn:
-                existing = conn.execute("SELECT * FROM artifacts WHERE artifact_id=?", (reference.artifact_id,)).fetchone()
-                if existing is not None:
-                    stored = self._record_from_row(existing)
-                    if stored != expected or self._load_related(conn, reference.artifact_id, stored.artifact_type) != (metrics, variants, comparisons):
-                        raise CatalogIntegrityError("catalog metadata conflicts with artifact")
-                    return stored
-                conn.execute("INSERT INTO artifacts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(expected.__dict__.values()))
-                if variants:
-                    conn.executemany("INSERT INTO ablation_variants VALUES (?,?,?,?,?,?,?,?,?,?)", variants)
-                if metrics:
-                    conn.executemany("INSERT INTO metric_aggregates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [tuple(item.__dict__.values()) for item in metrics])
-                if comparisons:
-                    conn.executemany("INSERT INTO ablation_comparisons VALUES (?,?,?,?)", comparisons)
+            # Reserve the SQLite writer before checking for an existing row.
+            # This serializes the idempotency check with registration writes
+            # across connections sharing this local database.
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute("SELECT * FROM artifacts WHERE artifact_id=?", (reference.artifact_id,)).fetchone()
+            if existing is not None:
+                stored = self._record_from_row(existing)
+                if stored != expected or self._load_related(conn, reference.artifact_id, stored.artifact_type) != (metrics, variants, comparisons):
+                    raise CatalogIntegrityError("catalog metadata conflicts with artifact")
+                conn.commit()
+                return stored
+            conn.execute("INSERT INTO artifacts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", tuple(expected.__dict__.values()))
+            if variants:
+                conn.executemany("INSERT INTO ablation_variants VALUES (?,?,?,?,?,?,?,?,?,?)", variants)
+            if metrics:
+                conn.executemany("INSERT INTO metric_aggregates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [tuple(item.__dict__.values()) for item in metrics])
+            if comparisons:
+                conn.executemany("INSERT INTO ablation_comparisons VALUES (?,?,?,?)", comparisons)
+            conn.commit()
             return expected
         except CatalogIntegrityError:
+            conn.rollback()
             raise
         except sqlite3.Error as exc:
+            conn.rollback()
             raise ExperimentCatalogError("catalog registration failed") from exc
+        except BaseException:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
