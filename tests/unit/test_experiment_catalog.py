@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import threading
 
@@ -212,11 +213,13 @@ def test_catalog_detects_metadata_tampering_without_rewriting_it(tmp_path):
     connection.close()
 
 
-def test_concurrent_evaluation_registration_is_serialized_and_idempotent(tmp_path):
+def test_concurrent_recovery_of_orphaned_evaluation_is_serialized_and_idempotent(tmp_path):
     result = _evaluation(tmp_path)
     store = ExperimentArtifactStore(tmp_path / "artifacts")
     reference = store.save_evaluation_result(result)
     catalog = ExperimentCatalog(tmp_path / "catalog.sqlite", store)
+    with pytest.raises(CatalogNotFoundError):
+        catalog.get_artifact(reference.artifact_id)
 
     record = _serialize_registrations(
         catalog,
@@ -305,12 +308,100 @@ def test_failed_registration_rolls_back_all_related_rows(tmp_path):
 
     with pytest.raises(ExperimentCatalogError, match="catalog registration failed"):
         catalog.save_evaluation_result(result)
+
+    reference, = store.list_artifacts("evaluation_result")
+    path = tmp_path / "artifacts" / reference.relative_path
+    published_bytes = path.read_bytes()
+    assert hashlib.sha256(published_bytes).hexdigest() == reference.artifact_id
+    assert store.list_artifacts("evaluation_result") == (reference,)
+    assert store.load_evaluation_result(reference.artifact_id).report.evaluation_fingerprint == result.report.evaluation_fingerprint
     connection = sqlite3.connect(tmp_path / "catalog.sqlite")
     try:
         assert connection.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM metric_aggregates").fetchone()[0] == 0
     finally:
         connection.close()
+
+    connection = sqlite3.connect(tmp_path / "catalog.sqlite")
+    connection.execute("DROP TRIGGER reject_metrics")
+    connection.commit()
+    connection.close()
+
+    recovered = catalog.register_existing_evaluation(reference.artifact_id)
+    loaded = store.load_evaluation_result(reference.artifact_id)
+    assert recovered == catalog._artifact_record(reference, loaded)
+    assert tuple(catalog.list_metric_aggregates(reference.artifact_id)) == catalog._metrics(reference.artifact_id, loaded)
+    assert catalog.register_existing_evaluation(reference.artifact_id) == recovered
+    assert path.read_bytes() == published_bytes
+    connection = sqlite3.connect(tmp_path / "catalog.sqlite")
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM metric_aggregates WHERE artifact_id=?", (reference.artifact_id,)).fetchone()[0] == 19
+    finally:
+        connection.close()
+
+
+def test_ablation_recovers_after_late_catalog_registration_failure(tmp_path):
+    plan = _plan()
+    result = _ablation_with_reports(plan)
+    store = ExperimentArtifactStore(tmp_path / "artifacts")
+    catalog = ExperimentCatalog(tmp_path / "catalog.sqlite", store)
+    connection = sqlite3.connect(tmp_path / "catalog.sqlite")
+    connection.execute(
+        "CREATE TRIGGER reject_comparisons BEFORE INSERT ON ablation_comparisons "
+        "BEGIN SELECT RAISE(ABORT, 'controlled late failure'); END"
+    )
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(ExperimentCatalogError, match="catalog registration failed"):
+        catalog.save_ablation_result(result, ablation_plan=plan)
+
+    reference, = store.list_artifacts("ablation_result")
+    path = tmp_path / "artifacts" / reference.relative_path
+    published_bytes = path.read_bytes()
+    assert hashlib.sha256(published_bytes).hexdigest() == reference.artifact_id
+    assert store.list_artifacts("ablation_result") == (reference,)
+    restored_before_recovery = store.load_ablation_result(reference.artifact_id, ablation_plan=plan)
+    assert restored_before_recovery == result
+    connection = sqlite3.connect(tmp_path / "catalog.sqlite")
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM ablation_variants").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM metric_aggregates").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM ablation_comparisons").fetchone()[0] == 0
+    finally:
+        connection.close()
+
+    connection = sqlite3.connect(tmp_path / "catalog.sqlite")
+    connection.execute("DROP TRIGGER reject_comparisons")
+    connection.commit()
+    connection.close()
+
+    recovered = catalog.register_existing_ablation(reference.artifact_id, ablation_plan=plan)
+    restored = catalog.load_ablation_result(reference.artifact_id, ablation_plan=plan)
+    assert restored == result
+    assert recovered == catalog._artifact_record(reference, restored)
+    assert tuple(catalog.list_metric_aggregates(reference.artifact_id)) == catalog._metrics(reference.artifact_id, restored)
+    assert catalog.register_existing_ablation(reference.artifact_id, ablation_plan=plan) == recovered
+    assert path.read_bytes() == published_bytes
+
+    connection = sqlite3.connect(tmp_path / "catalog.sqlite")
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM ablation_variants WHERE artifact_id=?", (reference.artifact_id,)).fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM metric_aggregates WHERE artifact_id=?", (reference.artifact_id,)).fetchone()[0] == 6 * 19
+        assert connection.execute("SELECT COUNT(*) FROM ablation_comparisons WHERE artifact_id=?", (reference.artifact_id,)).fetchone()[0] == 19
+        rows = connection.execute(
+            "SELECT ordinal, variant_id, run_fingerprint FROM ablation_variants WHERE artifact_id=? ORDER BY ordinal",
+            (reference.artifact_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+    assert [(row[0], row[1], row[2]) for row in rows] == [
+        (ordinal, variant.variant_id, variant.run_plan.run_fingerprint)
+        for ordinal, variant in enumerate(plan.variants, 1)
+    ]
 
 
 def test_catalog_foreign_keys_and_filters_are_parameterized(tmp_path):

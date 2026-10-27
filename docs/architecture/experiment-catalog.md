@@ -19,13 +19,22 @@ database path is explicit, must be outside the artifact-store root, and must
 have an existing non-symlink parent; the catalog does not create arbitrary
 directory trees.
 
-Registration first writes and validates through the content-addressed artifact
-store, then derives all catalog fields from a strict reload. Repeating a
-registration is idempotent only when every metadata and related row agrees.
-If file publication succeeds but the SQLite transaction fails, the artifact is
-left intact and `register_existing_evaluation()` or
-`register_existing_ablation(..., ablation_plan=...)` can recover it later.
-Recovery is plan-bound for ablation artifacts and is also idempotent.
+Artifact publication happens before catalog registration. Registration reloads
+and validates the published bytes, then derives all catalog fields from that
+strict result. These filesystem and SQLite operations are separate; they are
+not one cross-resource atomic transaction. If publication succeeds and the
+SQLite transaction later fails, the immutable artifact can remain in the store
+without a catalog row. The transaction rollback leaves no partial artifact,
+variant, metric, or comparison rows, and it does not delete or replace the
+published file.
+
+After the registration problem is resolved, callers can explicitly recover
+metadata with `register_existing_evaluation()` or
+`register_existing_ablation(..., ablation_plan=...)`. Recovery reloads and
+validates the existing artifact before rebuilding its catalog rows; ablation
+recovery requires the accepted plan. Repeating recovery is idempotent when all
+stored metadata agrees. Recovery is explicit: the catalog does not scan for
+orphans, repair them in the background, or provide another recovery service.
 
 Loads require a registered row, reload the artifact through the artifact store,
 and cross-check the catalog against the reconstructed typed result. Catalog
