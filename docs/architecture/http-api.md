@@ -17,10 +17,21 @@ The API accepts strict Pydantic request models with forbidden extra fields and
 converts them into the existing `RunPlan`, `ResolvedRunConfig`, `BenchmarkSuite`
 and canonical ablation-plan contracts. Run-plan fingerprints are verified by
 the existing deserializer. Ablation requests use the canonical six definitions
-and force the existing non-destructive safety policy. Request JSON is bounded,
-decoded as strict UTF-8, rejects duplicate keys and non-finite constants, and
-does not accept storage or model paths. Responses use stable bounded error
-objects, `Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`.
+and force the existing non-destructive safety policy. The configured request
+body byte limit is enforced as ASGI stream chunks are consumed; a body over the
+limit returns `413 request_body_too_large`. JSON requests require
+`application/json`, decode as strict UTF-8, reject duplicate keys and non-finite
+constants, and must be a valid object matching the strict request schema.
+Invalid JSON and schemas return `400 request_invalid`; unsupported content
+types return `415 unsupported_content_type`. These are application request
+bounds, not network-level denial-of-service or rate-limiting controls.
+
+Responses use stable bounded error objects,
+`Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`. The serialized
+result-loading route applies the configured byte limit before returning the
+complete JSON body; oversized results return `413 response_body_too_large`
+without truncation. The same application setting currently bounds requests and
+serialized result responses. `/health` remains unauthenticated liveness only.
 
 Routes are provided for health, evaluation and ablation submission, artifact
 listing/metadata, metric aggregates, ablation comparisons, and serialized
