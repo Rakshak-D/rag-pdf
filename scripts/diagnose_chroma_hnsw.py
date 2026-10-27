@@ -146,27 +146,53 @@ def _sqlite_summary(chroma_root: Path) -> dict[str, Any]:
     return result
 
 
-def _snapshot(chroma_root: Path) -> dict[str, Any]:
-    return {
-        "captured_utc": _timestamp(),
-        "inventory": _inventory(chroma_root),
-        "index_metadata_pickle": _metadata_pickle_summary(chroma_root),
-        "sqlite": _sqlite_summary(chroma_root),
-        "note": "Post-exception snapshots may not reflect transient state at the instant the HNSW reader failed.",
-    }
+def _safe_snapshot(chroma_root: Path) -> tuple[dict[str, Any], list[str]]:
+    """Collect each diagnostic independently so one failure cannot hide another."""
+    snapshot: dict[str, Any] = {"captured_utc": _timestamp(), "timing": "post_exception_sequential"}
+    errors: list[str] = []
+    collectors = (
+        ("inventory", lambda: _inventory(chroma_root)),
+        ("index_metadata_pickle", lambda: _metadata_pickle_summary(chroma_root)),
+        ("sqlite", lambda: _sqlite_summary(chroma_root)),
+    )
+    for name, collect in collectors:
+        try:
+            snapshot[name] = collect()
+        except Exception as exc:
+            error_type = type(exc).__name__
+            snapshot[name] = {"collection_error_type": error_type}
+            errors.append(f"{name}:{error_type}")
+    snapshot["note"] = "Post-exception observations only; they do not establish filesystem state at the instant of query failure."
+    return snapshot, errors
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
 
-def _run_child(run_dir: Path, cache_override: int | None) -> int:
-    import chromadb
-    from chromadb.config import Settings
+def _save_failure_evidence(run_dir: Path, report: dict[str, Any], full_traceback: str) -> list[str]:
+    """Best-effort evidence writing that never replaces the original traceback."""
+    errors: list[str] = []
+    try:
+        _write_json(run_dir / "diagnostic.json", report)
+    except Exception as exc:
+        errors.append(f"diagnostic_json_write:{type(exc).__name__}")
+    try:
+        (run_dir / "traceback.txt").write_text(full_traceback, encoding="utf-8")
+    except Exception as exc:
+        errors.append(f"traceback_file_write:{type(exc).__name__}")
+    return errors
 
+
+def _run_child(run_dir: Path, cache_override: int | None) -> int:
+    chromadb = None
     operations: list[dict[str, str]] = []
     cache_observed: int | None = None
     try:
+        import chromadb as chromadb_package
+        from chromadb.config import Settings
+
+        chromadb = chromadb_package
         if cache_override is not None:
             # Diagnostic-only unsupported override. This is deliberately absent
             # from the default probe and is restored before the process exits.
@@ -216,29 +242,43 @@ def _run_child(run_dir: Path, cache_override: int | None) -> int:
         hnsw_config = config.get("hnsw") if isinstance(config, dict) else None
         try:
             result = anchor.query(query_embeddings=[embeddings[0]], n_results=_VECTOR_COUNT, include=["distances"])
-        except Exception:
+        except Exception as query_error:
             full_traceback = traceback.format_exc()
-            # Capture the first snapshot before doing any post-error inspection.
-            failure_snapshot = _snapshot(run_dir / "chroma")
-            post_exception_snapshot = _snapshot(run_dir / "chroma")
+            chroma_root = run_dir / "chroma"
+            first_snapshot, diagnostic_errors = _safe_snapshot(chroma_root)
+            second_snapshot, second_errors = _safe_snapshot(chroma_root)
+            diagnostic_errors.extend(second_errors)
+            hnsw_error = (
+                "Error creating hnsw segment reader: Nothing found on disk"
+                in str(query_error)
+            )
             report = {
                 "status": "failed",
+                "failure_kind": "hnsw_reader_error" if hnsw_error else "query_error",
                 "runtime": _runtime_info(chromadb.__version__, cache_observed, cache_override),
+                "eviction_observed": "unknown",
+                "eviction_observation_limit": "No supported read-only observation establishes whether this query followed an HNSW cache eviction.",
                 "operations": operations + [{"operation": "query", "collection": _ANCHOR_NAME, "requested_results": str(_VECTOR_COUNT)}],
                 "collection_hnsw_configuration": hnsw_config,
-                "failure_snapshot": failure_snapshot,
-                "post_exception_snapshot": post_exception_snapshot,
+                "post_exception_snapshot_before_second_inspection": first_snapshot,
+                "post_exception_snapshot_after_first_inspection": second_snapshot,
+                "diagnostic_collection_errors": diagnostic_errors,
                 "full_traceback_file": "traceback.txt",
             }
-            _write_json(run_dir / "diagnostic.json", report)
-            (run_dir / "traceback.txt").write_text(full_traceback, encoding="utf-8")
-            print("HNSW query failed; diagnostic directory preserved.", file=sys.stderr)
+            evidence_write_errors = _save_failure_evidence(run_dir, report, full_traceback)
+            print("Chroma query failed; diagnostic directory preserved.", file=sys.stderr)
             print(full_traceback, file=sys.stderr, end="")
+            if diagnostic_errors or evidence_write_errors:
+                print(
+                    "Diagnostic collection/write issues (exception types only): "
+                    + ", ".join(diagnostic_errors + evidence_write_errors),
+                    file=sys.stderr,
+                )
             return 1
 
         returned = len(result.get("ids", [[]])[0])
         report = {
-            "status": "passed" if returned == _VECTOR_COUNT else "partial_result_count",
+            "status": "passed" if returned == _VECTOR_COUNT else "unexpected_result_count",
             "runtime": _runtime_info(chromadb.__version__, cache_observed, cache_override),
             "operations": operations + [{"operation": "query", "collection": _ANCHOR_NAME, "requested_results": str(_VECTOR_COUNT)}],
             "collection_hnsw_configuration": hnsw_config,
@@ -249,16 +289,24 @@ def _run_child(run_dir: Path, cache_override: int | None) -> int:
         return 0 if returned == _VECTOR_COUNT else 2
     except Exception:
         full_traceback = traceback.format_exc()
+        chroma_root = run_dir / "chroma"
+        snapshot, diagnostic_errors = _safe_snapshot(chroma_root) if chroma_root.exists() else (None, [])
         report = {
             "status": "probe_failed_before_or_outside_query",
             "runtime": _runtime_info(getattr(chromadb, "__version__", "unknown"), cache_observed, cache_override),
             "operations": operations,
-            "failure_snapshot": _snapshot(run_dir / "chroma") if (run_dir / "chroma").exists() else None,
+            "post_exception_snapshot": snapshot,
+            "diagnostic_collection_errors": diagnostic_errors,
             "full_traceback_file": "traceback.txt",
         }
-        _write_json(run_dir / "diagnostic.json", report)
-        (run_dir / "traceback.txt").write_text(full_traceback, encoding="utf-8")
+        evidence_write_errors = _save_failure_evidence(run_dir, report, full_traceback)
         print(full_traceback, file=sys.stderr, end="")
+        if diagnostic_errors or evidence_write_errors:
+            print(
+                "Diagnostic collection/write issues (exception types only): "
+                + ", ".join(diagnostic_errors + evidence_write_errors),
+                file=sys.stderr,
+            )
         return 2
 
 
