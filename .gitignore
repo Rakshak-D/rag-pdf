@@ -208,3 +208,6 @@ __marimo__/
 
 rag-env
 .idea
+
+# Local experiment API state (SQLite, artifacts, and locally built indexes).
+/local-runtime/
