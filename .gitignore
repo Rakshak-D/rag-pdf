@@ -211,3 +211,11 @@ rag-env
 
 # Local experiment API state (SQLite, artifacts, and locally built indexes).
 /local-runtime/
+
+# Local frontend dependencies, build output, test reports, and secrets.
+/frontend/node_modules/
+/frontend/dist/
+/frontend/coverage/
+/frontend/test-results/
+/frontend/.env
+/frontend/.env.*
