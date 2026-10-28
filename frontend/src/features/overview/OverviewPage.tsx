@@ -1,4 +1,5 @@
 import type { CatalogArtifactRecord, ExperimentJobRecord, HealthResponse } from "../../api/types";
+import { Link } from "react-router-dom";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorState } from "../../components/ErrorState";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -26,6 +27,7 @@ function displayDate(value: string): string {
 function JobRow({ job }: { job: ExperimentJobRecord }) {
   return (
     <li className="record-row">
+      <Link className="overview-record-link" to={`/jobs/${encodeURIComponent(job.job_id)}`} aria-label={`Open ${job.job_type} job ${job.benchmark_id}`}>
       <div className="record-row__main">
         <span className={`record-kind record-kind--${job.job_type}`}>{job.job_type === "evaluation" ? "EV" : "AB"}</span>
         <div className="record-row__text">
@@ -34,6 +36,7 @@ function JobRow({ job }: { job: ExperimentJobRecord }) {
         </div>
       </div>
       <StatusBadge status={job.status} />
+      </Link>
     </li>
   );
 }
@@ -43,10 +46,12 @@ function ArtifactRow({ artifact }: { artifact: CatalogArtifactRecord }) {
   const count = artifact.case_count === null ? "Case count unavailable" : `${artifact.case_count} ${artifact.case_count === 1 ? "case" : "cases"}`;
   return (
     <li className="artifact-row">
+      <Link className="overview-artifact-link" to={`/artifacts/${encodeURIComponent(artifact.artifact_id)}`} aria-label={`Open ${type} artifact for ${artifact.benchmark_id}`}>
       <div className="artifact-row__top"><span className="eyebrow">{type}</span><StatusBadge status={artifact.status} /></div>
       <strong className="artifact-row__benchmark">{artifact.benchmark_id}<span className="record-version">v{artifact.benchmark_version}</span></strong>
       <span className="record-secondary">{count} · {formatBytes(artifact.byte_length)}</span>
       <code className="artifact-id" title={artifact.artifact_id}>{artifact.artifact_id.slice(0, 12)}…</code>
+      </Link>
     </li>
   );
 }
@@ -104,6 +109,7 @@ export function OverviewPage({
       <section className="panel" aria-labelledby="jobs-heading">
         <div className="panel__heading">
           <div><span className="eyebrow">PROCESS-LOCAL QUEUE</span><h2 id="jobs-heading">Recent jobs</h2></div>
+          {connected ? <Link className="inline-link" to="/jobs">View all</Link> : null}
           {connected && dataState === "ready" ? <span className="count-pill">{jobs.length}</span> : null}
         </div>
         {!connected ? <EmptyState title="Connect to view jobs" detail="Job records are available after the local API token is verified." /> : null}
@@ -116,6 +122,7 @@ export function OverviewPage({
       <section className="panel artifacts-panel" aria-labelledby="artifacts-heading">
         <div className="panel__heading">
           <div><span className="eyebrow">CONTENT-ADDRESSED RESULTS</span><h2 id="artifacts-heading">Registered artifacts</h2></div>
+          {connected ? <Link className="inline-link" to="/artifacts">View all</Link> : null}
           {connected && dataState === "ready" ? <span className="count-pill">{artifacts.length}</span> : null}
         </div>
         <p className="panel__note">Artifact records have no creation timestamp; the catalog does not identify which artifact is newest.</p>

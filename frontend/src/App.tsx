@@ -1,20 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ApiError, WorkbenchApiClient } from "./api/client";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { WorkbenchApiClient } from "./api/client";
 import type { CatalogArtifactRecord, ExperimentJobRecord, HealthResponse, RuntimeModelsResponse } from "./api/types";
 import { AppShell } from "./components/AppShell";
+import { apiErrorText } from "./components/apiErrorText";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { OverviewPage } from "./features/overview/OverviewPage";
+import { JobDetailPage } from "./features/jobs/JobDetailPage";
+import { JobsPage } from "./features/jobs/JobsPage";
+import { ArtifactDetailPage } from "./features/artifacts/ArtifactDetailPage";
+import { ArtifactsPage } from "./features/artifacts/ArtifactsPage";
 
 type DataState = "disconnected" | "loading" | "ready" | "error";
-
-function safeMessage(error: unknown): string {
-  if (!(error instanceof ApiError)) return "The local API request failed.";
-  if (error.status === 401 || error.code === "authentication_required") return "Authentication failed. Check the local bearer token.";
-  if (error.kind === "network") return "Could not reach the local API. Confirm that the backend is running.";
-  if (error.code === "job_execution_unconfigured") return "The backend job manager is not configured.";
-  if (error.kind === "non_json" || error.kind === "malformed_response") return "The backend returned an unexpected response.";
-  return `The API request failed (${error.code}).`;
-}
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
@@ -31,100 +28,72 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const client = useMemo(() => new WorkbenchApiClient({ token }), [token]);
+  const location = useLocation();
+  const connected = token !== null;
 
   const connect = useCallback(async (candidate: string): Promise<boolean> => {
-    setConnectionChecking(true);
-    setConnectionError(null);
+    setConnectionChecking(true); setConnectionError(null);
     try {
       const verifiedModels = await new WorkbenchApiClient({ token: candidate }).getRuntimeModels();
-      setRuntimeModels(verifiedModels);
-      setToken(candidate);
+      setRuntimeModels(verifiedModels); setToken(candidate);
       return true;
     } catch (error) {
-      setConnectionError(safeMessage(error));
+      setConnectionError(apiErrorText(error));
       return false;
-    } finally {
-      setConnectionChecking(false);
-    }
+    } finally { setConnectionChecking(false); }
   }, []);
 
   const disconnect = useCallback(() => {
-    setToken(null);
-    setRuntimeModels(null);
-    setConnectionError(null);
-    setJobs([]);
-    setEvaluationArtifacts([]);
-    setAblationArtifacts([]);
-    setDataError(null);
-    setDataState("disconnected");
+    setToken(null); setRuntimeModels(null); setConnectionError(null);
+    setJobs([]); setEvaluationArtifacts([]); setAblationArtifacts([]); setDataError(null); setDataState("disconnected");
   }, []);
 
   const refresh = useCallback(() => setRefreshVersion((version) => version + 1), []);
 
   useEffect(() => {
     let active = true;
-    setHealth(null);
-    setHealthError(null);
-    setRefreshing(true);
-    setDataError(null);
-    setDataState(token ? "loading" : "disconnected");
-
-    void client.getHealth().then((value) => {
-      if (active) setHealth(value);
-    }).catch((error: unknown) => {
-      if (active) setHealthError(safeMessage(error));
+    setHealth(null); setHealthError(null);
+    void client.getHealth().then((value) => { if (active) setHealth(value); }).catch((error: unknown) => {
+      if (active) setHealthError(apiErrorText(error));
     });
-
-    if (token) {
-      const requests = Promise.all([
-        client.getRuntimeModels(),
-        client.listJobs({ limit: 10 }),
-        client.listArtifacts({ artifact_type: "evaluation_result", limit: 10 }),
-        client.listArtifacts({ artifact_type: "ablation_result", limit: 10 }),
-      ]);
-      void requests.then(([models, recentJobs, evaluations, ablations]) => {
-        if (!active) return;
-        setRuntimeModels(models);
-        setJobs(recentJobs);
-        setEvaluationArtifacts(evaluations);
-        setAblationArtifacts(ablations);
-        setDataState("ready");
-      }).catch((error: unknown) => {
-        if (!active) return;
-        setDataError(safeMessage(error));
-        setDataState("error");
-      }).finally(() => {
-        if (active) setRefreshing(false);
-      });
-    } else {
-      setRefreshing(false);
-    }
-
     return () => { active = false; };
-  }, [client, refreshVersion, token]);
+  }, [client, refreshVersion]);
 
-  return (
-    <AppShell>
-      <ConnectionPanel
-        connected={token !== null}
-        checking={connectionChecking}
-        runtimeModels={runtimeModels}
-        error={connectionError}
-        onConnect={connect}
-        onDisconnect={disconnect}
-      />
-      <OverviewPage
-        connected={token !== null}
-        health={health}
-        healthError={healthError}
-        dataState={dataState}
-        jobs={jobs}
-        evaluationArtifacts={evaluationArtifacts}
-        ablationArtifacts={ablationArtifacts}
-        dataError={dataError}
-        refreshing={refreshing}
-        onRefresh={refresh}
-      />
-    </AppShell>
-  );
+  useEffect(() => {
+    let active = true;
+    if (!connected) {
+      setJobs([]); setEvaluationArtifacts([]); setAblationArtifacts([]); setDataError(null); setDataState("disconnected"); setRefreshing(false);
+      return () => { active = false; };
+    }
+    if (location.pathname !== "/") {
+      setJobs([]); setEvaluationArtifacts([]); setAblationArtifacts([]); setDataError(null); setDataState("disconnected"); setRefreshing(false);
+      return () => { active = false; };
+    }
+    setDataState("loading"); setRefreshing(true); setDataError(null);
+    void Promise.all([
+      client.getRuntimeModels(),
+      client.listJobs({ limit: 10 }),
+      client.listArtifacts({ artifact_type: "evaluation_result", limit: 10 }),
+      client.listArtifacts({ artifact_type: "ablation_result", limit: 10 }),
+    ]).then(([models, recentJobs, evaluations, ablations]) => {
+      if (!active) return;
+      setRuntimeModels(models); setJobs(recentJobs); setEvaluationArtifacts(evaluations); setAblationArtifacts(ablations); setDataState("ready");
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setDataError(apiErrorText(error)); setDataState("error");
+    }).finally(() => { if (active) setRefreshing(false); });
+    return () => { active = false; };
+  }, [client, connected, location.pathname, refreshVersion]);
+
+  return <AppShell>
+    <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} />
+    <Routes>
+      <Route path="/" element={<OverviewPage connected={connected} health={health} healthError={healthError} dataState={dataState} jobs={jobs} evaluationArtifacts={evaluationArtifacts} ablationArtifacts={ablationArtifacts} dataError={dataError} refreshing={refreshing} onRefresh={refresh} />} />
+      <Route path="/jobs" element={<JobsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
+      <Route path="/jobs/:jobId" element={<JobDetailPage key={location.pathname} client={client} connected={connected} onRefresh={refresh} />} />
+      <Route path="/artifacts" element={<ArtifactsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
+      <Route path="/artifacts/:artifactId" element={<ArtifactDetailPage key={location.pathname} client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
+      <Route path="*" element={<section className="panel not-found"><span className="eyebrow">ROUTE NOT FOUND</span><h1>This page is unavailable</h1><p>Use the workbench navigation to return to a supported view.</p><Link className="button button--primary" to="/">Open overview</Link></section>} />
+    </Routes>
+  </AppShell>;
 }

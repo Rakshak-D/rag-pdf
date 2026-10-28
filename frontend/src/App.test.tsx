@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import App from "./App";
 
@@ -10,11 +11,17 @@ function jsonResponse(value: unknown, status = 200): Response {
   return Response.json(value, { status });
 }
 
+function mount(initialPath = "/") {
+  const router = createMemoryRouter([{ path: "*", element: <App /> }], { initialEntries: [initialPath] });
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
 describe("workbench overview", () => {
   it("shows liveness and disconnected state without inventing records", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(health));
     vi.stubGlobal("fetch", fetcher);
-    render(<App />);
+    mount();
 
     expect(await screen.findByText("API process is responding")).toBeInTheDocument();
     expect(screen.getByText("Connect to view jobs")).toBeInTheDocument();
@@ -35,7 +42,7 @@ describe("workbench overview", () => {
     });
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup();
-    render(<App />);
+    mount();
 
     await user.type(screen.getByLabelText("Bearer token"), "memory-only-token");
     await user.click(screen.getByRole("button", { name: "Connect" }));
@@ -58,7 +65,7 @@ describe("workbench overview", () => {
     });
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup();
-    render(<App />);
+    mount();
 
     await user.type(screen.getByLabelText("Bearer token"), "invalid-secret");
     await user.click(screen.getByRole("button", { name: "Connect" }));
@@ -77,7 +84,7 @@ describe("workbench overview", () => {
     });
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup();
-    render(<App />);
+    mount();
     await user.type(screen.getByLabelText("Bearer token"), "valid-token");
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
