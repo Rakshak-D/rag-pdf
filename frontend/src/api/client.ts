@@ -8,6 +8,9 @@ import type {
   CatalogComparisonRecord,
   CatalogMetricRecord,
   EvaluationRequest,
+  DocumentManifest,
+  RunPlanPreparationRequest,
+  RunPlanPreparationResponse,
   EvaluationSubmissionResponse,
   ExperimentJobRecord,
   HealthResponse,
@@ -51,6 +54,30 @@ function isNullableNumber(value: unknown): value is number | null {
 
 function hasStrings(value: Record<string, unknown>, fields: readonly string[]): boolean {
   return fields.every((field) => typeof value[field] === "string");
+}
+
+const sha256 = (value: unknown): value is string => typeof value === "string" && /^[a-fA-F0-9]{64}$/.test(value);
+const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+function isManifest(value: unknown): value is DocumentManifest {
+  return isRecord(value) && typeof value.schema_version === "string" && sha256(value.content_hash) &&
+    count(value.entry_count) && typeof value.empty === "boolean" && Array.isArray(value.entries) &&
+    value.entry_count === value.entries.length && value.empty === (value.entry_count === 0) &&
+    value.entries.every((entry: unknown) => isRecord(entry) && typeof entry.relative_path === "string" &&
+      entry.relative_path.length > 0 && !entry.relative_path.startsWith("/") && !entry.relative_path.includes("\\") &&
+      !entry.relative_path.split("/").some((part: string) => part === ".." || part === "." || part === "") &&
+      !/^[A-Za-z]:/.test(entry.relative_path) && count(entry.size_bytes) && sha256(entry.sha256) &&
+      typeof entry.document_id === "string" && /^doc_[a-f0-9]{64}$/.test(entry.document_id));
+}
+
+function isPreparedPlan(value: unknown): value is RunPlanPreparationResponse {
+  if (!isRecord(value) || !isRecord(value.run_plan) || !isRecord(value.manifest)) return false;
+  const plan = value.run_plan;
+  const manifest = value.manifest;
+  return typeof plan.plan_schema_version === "string" && typeof plan.resolved_config_json === "string" &&
+    sha256(plan.document_manifest_hash) && sha256(plan.configuration_snapshot_hash) && sha256(plan.index_fingerprint) &&
+    sha256(plan.run_fingerprint) && typeof manifest.schema_version === "string" && sha256(manifest.content_hash) &&
+    count(manifest.entry_count) && manifest.entry_count > 0 && plan.document_manifest_hash === manifest.content_hash;
 }
 
 function isModelStatus(value: unknown): value is ModelComponentStatus {
@@ -182,6 +209,18 @@ export class WorkbenchApiClient {
     const value = await this.request("/health", { protected: false });
     if (!isRecord(value) || value.status !== "ok" || value.api_version !== "v1") malformed();
     return { status: "ok", api_version: "v1" };
+  }
+
+  async inspectDocuments(): Promise<DocumentManifest> {
+    const value = await this.request("/api/v1/documents/manifest");
+    if (!isManifest(value)) malformed();
+    return value;
+  }
+
+  async prepareRunPlan(input: RunPlanPreparationRequest): Promise<RunPlanPreparationResponse> {
+    const value = await this.request("/api/v1/run-plans", { method: "POST", body: input });
+    if (!isPreparedPlan(value) || value.manifest.content_hash !== input.expected_manifest_hash.toLowerCase()) malformed();
+    return value;
   }
 
   async getRuntimeModels(): Promise<RuntimeModelsResponse> {

@@ -29,9 +29,9 @@ For a static production build, configure the chosen static host to serve `index.
 
 The Experiments area submits through the existing authenticated job endpoints. Add benchmark cases using your own evaluation queries, references, and expected page identifiers; the form starts blank and does not invent benchmark content.
 
-Evaluation submission requires a serialized, integrity-linked `RunPlan` produced by trusted backend tooling. The browser checks its shape and non-destructive configuration fields but does not calculate or trust fingerprints. The backend remains authoritative for plan integrity, configuration, benchmark, and provenance validation.
+Connect, then select **Inspect documents** to read the configured PDF source manifest. Supply a complete resolved configuration JSON object from the trusted project configuration workflow. For an evaluation, select **Prepare RunPlan** and inspect the returned fingerprints before explicitly submitting the benchmark job. The backend validates the configuration, current manifest, safety policy, and fingerprints; the browser does not create them. Changing the configuration invalidates the prepared plan. If source documents change, inspect them again and prepare another plan.
 
-Ablation submission requires a resolved configuration object and the genuine 64-character SHA-256 document-manifest identity. The backend creates the canonical six-variant plan. This application currently has no endpoint to discover manifests, inspect a built index, or create a RunPlan, so users must obtain these inputs from the trusted local workflow. A syntactically valid manifest value does not prove that a compatible index exists; the backend execution boundary will validate the configured resources.
+For an ablation, the inspected manifest identity and supplied base configuration are passed to the existing job endpoint, which creates the canonical six variants. Manifest inspection and plan preparation do not build an index or prove that a compatible index exists. Index discovery and building remain unavailable through the UI.
 
 Submission uses a single POST. If the connection fails after sending, the UI explains that acceptance is uncertain and does not retry automatically; check Jobs before submitting again. Form payloads and tokens are transient in memory and are cleared on disconnect or when leaving the workflow.
 

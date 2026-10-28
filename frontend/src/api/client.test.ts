@@ -4,6 +4,41 @@ import { ApiError, WorkbenchApiClient } from "./client";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("WorkbenchApiClient", () => {
+  it("validates manifest structure and prepares a plan with the inspected hash", async () => {
+    const hash = "a".repeat(64);
+    const manifest = { schema_version: "1", content_hash: hash, entry_count: 1, empty: false, entries: [{ relative_path: "paper.pdf", size_bytes: 7, sha256: "b".repeat(64), document_id: "doc_" + "c".repeat(64) }] };
+    const plan = { plan_schema_version: "1", document_manifest_hash: hash, resolved_config_json: "{}", configuration_snapshot_hash: "b".repeat(64), index_fingerprint: "c".repeat(64), run_fingerprint: "d".repeat(64) };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json(manifest)).mockResolvedValueOnce(Response.json({ run_plan: plan, manifest: { schema_version: "1", content_hash: hash, entry_count: 1 } }));
+    const client = new WorkbenchApiClient({ token: "secret", fetcher });
+    await expect(client.inspectDocuments()).resolves.toEqual(manifest);
+    await expect(client.prepareRunPlan({ resolved_config: {}, expected_manifest_hash: hash })).resolves.toMatchObject({ run_plan: plan });
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({ resolved_config: {}, expected_manifest_hash: hash });
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe("Bearer secret");
+  });
+
+  it("rejects inconsistent manifest and malformed preparation responses", async () => {
+    const hash = "a".repeat(64);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({ schema_version: "1", content_hash: hash, entry_count: 1, empty: true, entries: [] })).mockResolvedValueOnce(Response.json({ run_plan: {}, manifest: {} }));
+    const client = new WorkbenchApiClient({ token: "secret", fetcher });
+    await expect(client.inspectDocuments()).rejects.toMatchObject({ kind: "malformed_response" });
+    await expect(client.prepareRunPlan({ resolved_config: {}, expected_manifest_hash: hash })).rejects.toMatchObject({ kind: "malformed_response" });
+  });
+
+  it("accepts an empty manifest and rejects malformed hashes", async () => {
+    const hash = "a".repeat(64);
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({ schema_version: "1", content_hash: hash, entry_count: 0, empty: true, entries: [] })).mockResolvedValueOnce(Response.json({ schema_version: "1", content_hash: "bad", entry_count: 0, empty: true, entries: [] }));
+    const client = new WorkbenchApiClient({ token: "secret", fetcher });
+    await expect(client.inspectDocuments()).resolves.toMatchObject({ empty: true, entry_count: 0 });
+    await expect(client.inspectDocuments()).rejects.toMatchObject({ kind: "malformed_response" });
+  });
+
+  it("preserves stable preparation errors and reports network failures safely", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({ error: { code: "manifest_changed" } }, { status: 409 })).mockRejectedValueOnce(new Error("private path"));
+    const client = new WorkbenchApiClient({ token: "secret", fetcher });
+    const request = { resolved_config: {}, expected_manifest_hash: "a".repeat(64) };
+    await expect(client.prepareRunPlan(request)).rejects.toMatchObject({ kind: "http", status: 409, code: "manifest_changed" });
+    await expect(client.prepareRunPlan(request)).rejects.toMatchObject({ kind: "network", code: "network_error" });
+  });
   it("calls health without attaching a token", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ status: "ok", api_version: "v1" }));
     const client = new WorkbenchApiClient({ token: "secret-test-token", fetcher });

@@ -113,6 +113,31 @@ export interface RunPlanInput {
   run_fingerprint: string;
 }
 
+export interface DocumentManifestEntry {
+  relative_path: string;
+  size_bytes: number;
+  sha256: string;
+  document_id: string;
+}
+
+export interface DocumentManifest {
+  schema_version: string;
+  content_hash: string;
+  entry_count: number;
+  empty: boolean;
+  entries: DocumentManifestEntry[];
+}
+
+export interface RunPlanPreparationRequest {
+  resolved_config: Record<string, unknown>;
+  expected_manifest_hash: string;
+}
+
+export interface RunPlanPreparationResponse {
+  run_plan: RunPlanInput;
+  manifest: { schema_version: string; content_hash: string; entry_count: number };
+}
+
 export interface BenchmarkCaseInput {
   case_id: string;
   query: string;

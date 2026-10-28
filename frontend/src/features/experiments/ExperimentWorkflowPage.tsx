@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiError, type WorkbenchApiClient } from "../../api/client";
-import type { AblationRequest, BenchmarkCaseInput, BenchmarkSuiteInput, ExperimentJobRecord, RunPlanInput } from "../../api/types";
+import type { AblationRequest, BenchmarkCaseInput, BenchmarkSuiteInput, DocumentManifest, ExperimentJobRecord, RunPlanInput } from "../../api/types";
 import { apiErrorText } from "../../components/apiErrorText";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeading } from "../shared";
 
 const identityPattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 const versionPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
-const hashPattern = /^[a-fA-F0-9]{64}$/;
 const maximumCases = 100;
 
 interface DraftCase {
@@ -125,38 +124,6 @@ function validateConfig(config: Record<string, unknown>, label: string): string[
   return errors;
 }
 
-function parseRunPlan(text: string): { value?: RunPlanInput; config?: Record<string, unknown>; errors: string[] } {
-  const parsed = parseObjectJson(text);
-  if (!parsed.value) return { errors: [parsed.error ?? "Enter a serialized RunPlan object."] };
-  const plan = parsed.value;
-  const expected = ["plan_schema_version", "document_manifest_hash", "resolved_config_json", "configuration_snapshot_hash", "index_fingerprint", "run_fingerprint"];
-  const errors: string[] = [];
-  if (Object.keys(plan).length !== expected.length || expected.some((key) => !Object.hasOwn(plan, key))) {
-    errors.push("RunPlan must contain exactly the six fields in the API schema.");
-  }
-  if (plan.plan_schema_version !== "1") errors.push("RunPlan schema version must be 1.");
-  for (const key of ["document_manifest_hash", "configuration_snapshot_hash", "index_fingerprint", "run_fingerprint"]) {
-    if (typeof plan[key] !== "string" || !hashPattern.test(plan[key])) errors.push(`RunPlan ${key} must be a 64-character SHA-256 value.`);
-  }
-  let config: Record<string, unknown> | undefined;
-  if (typeof plan.resolved_config_json !== "string") {
-    errors.push("RunPlan resolved_config_json must be a JSON string.");
-  } else {
-    const configResult = parseObjectJson(plan.resolved_config_json);
-    if (!configResult.value) errors.push("RunPlan resolved_config_json must contain a JSON object.");
-    else {
-      config = configResult.value;
-      errors.push(...validateConfig(config, "Resolved configuration"));
-    }
-  }
-  if (typeof plan.plan_schema_version === "string" && typeof plan.document_manifest_hash === "string" &&
-    typeof plan.resolved_config_json === "string" && typeof plan.configuration_snapshot_hash === "string" &&
-    typeof plan.index_fingerprint === "string" && typeof plan.run_fingerprint === "string" && errors.length === 0) {
-    return { value: plan as unknown as RunPlanInput, ...(config ? { config } : {}), errors };
-  }
-  return { ...(config ? { config } : {}), errors };
-}
-
 function validateSuite(draft: SuiteDraft, config?: Record<string, unknown>): { value?: BenchmarkSuiteInput; errors: string[] } {
   const errors: string[] = [];
   const benchmarkId = draft.benchmarkId;
@@ -222,40 +189,79 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
   const isEvaluation = workflow === "evaluation";
   const validWorkflow = isEvaluation || workflow === "ablation";
   const [suite, setSuite] = useState<SuiteDraft>(blankSuite);
-  const [runPlanText, setRunPlanText] = useState("");
   const [configText, setConfigText] = useState("");
-  const [manifestText, setManifestText] = useState("");
+  const [manifest, setManifest] = useState<DocumentManifest | null>(null);
+  const [plan, setPlan] = useState<RunPlanInput | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [preparationError, setPreparationError] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [acceptedJob, setAcceptedJob] = useState<ExperimentJobRecord | null>(null);
   const submitLock = useRef(false);
+  const inspectLock = useRef(false);
+  const prepareLock = useRef(false);
+  const prepareSerial = useRef(0);
+  const generation = useRef(0);
   const mounted = useRef(false);
   const connectedRef = useRef(connected);
   connectedRef.current = connected;
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; submitLock.current = false; };
+    return () => { mounted.current = false; generation.current += 1; prepareSerial.current += 1; };
   }, []);
 
   useEffect(() => {
-    if (!connected) {
-      setSuite(blankSuite()); setRunPlanText(""); setConfigText(""); setManifestText("");
-      setShowValidation(false); setSubmitError(null); setAcceptedJob(null);
-    }
-  }, [connected]);
+    generation.current += 1;
+    prepareSerial.current += 1;
+    submitLock.current = false; inspectLock.current = false; prepareLock.current = false;
+    setSuite(blankSuite()); setConfigText(""); setManifest(null); setPlan(null);
+    setInspecting(false); setPreparing(false); setSubmitting(false);
+    setShowValidation(false); setSubmitError(null); setPreparationError(null); setAcceptedJob(null);
+    return () => { generation.current += 1; };
+  }, [client, connected]);
 
-  const plan = useMemo(() => isEvaluation ? parseRunPlan(runPlanText) : null, [isEvaluation, runPlanText]);
-  const baseConfig = useMemo(() => !isEvaluation ? parseObjectJson(configText) : null, [isEvaluation, configText]);
-  const configErrors = !isEvaluation && baseConfig?.value ? validateConfig(baseConfig.value, "Base configuration") : [];
-  const manifest = manifestText;
-  const manifestErrors = !isEvaluation && !hashPattern.test(manifest) ? ["Document manifest hash must be a genuine 64-character SHA-256 value."] : [];
-  const suiteValidation = useMemo(() => validateSuite(suite, isEvaluation ? plan?.config : baseConfig?.value), [suite, isEvaluation, plan, baseConfig]);
-  const workflowErrors = isEvaluation
-    ? [...(plan?.errors ?? []), ...suiteValidation.errors]
-    : [...(baseConfig?.error ? [baseConfig.error] : []), ...configErrors, ...manifestErrors, ...suiteValidation.errors];
+  const baseConfig = useMemo(() => parseObjectJson(configText), [configText]);
+  const configErrors = baseConfig.value ? validateConfig(baseConfig.value, "Resolved configuration") : [];
+  const suiteValidation = useMemo(() => validateSuite(suite, baseConfig.value), [suite, baseConfig]);
+  const workflowErrors = [ ...(baseConfig.error ? [baseConfig.error] : []), ...configErrors,
+    ...(!manifest || manifest.empty ? ["Inspect a non-empty document manifest before submitting."] : []),
+    ...(isEvaluation && !plan ? ["Prepare a RunPlan before submitting."] : []), ...suiteValidation.errors];
   const canSubmit = connected && validWorkflow && workflowErrors.length === 0 && !submitting;
+
+  async function inspect() {
+    if (!connected || inspectLock.current) return;
+    inspectLock.current = true; setInspecting(true); setPreparationError(null); setPlan(null); setManifest(null);
+    const id = ++generation.current;
+    try {
+      const result = await client.inspectDocuments();
+      if (mounted.current && id === generation.current) setManifest(result);
+    } catch (error) {
+      if (mounted.current && id === generation.current) setPreparationError(apiErrorText(error));
+    } finally {
+      if (mounted.current && id === generation.current) { inspectLock.current = false; setInspecting(false); }
+    }
+  }
+
+  async function prepare() {
+    if (!connected || !manifest || manifest.empty || !baseConfig.value || configErrors.length || prepareLock.current) return;
+    prepareLock.current = true; setPreparing(true); setPlan(null); setPreparationError(null);
+    const id = ++generation.current;
+    const requestId = ++prepareSerial.current;
+    try {
+      const result = await client.prepareRunPlan({ resolved_config: baseConfig.value, expected_manifest_hash: manifest.content_hash });
+      if (result.manifest.entry_count !== manifest.entry_count || result.manifest.schema_version !== manifest.schema_version) throw new ApiError("malformed_response", "malformed_response");
+      if (mounted.current && id === generation.current) setPlan(result.run_plan);
+    } catch (error) {
+      if (mounted.current && requestId === prepareSerial.current && error instanceof ApiError && error.code === "manifest_changed") {
+        setManifest(null); setPlan(null); setPreparationError("Source documents changed. Inspect documents again, then prepare a new RunPlan.");
+      } else if (mounted.current && id === generation.current) setPreparationError(apiErrorText(error));
+    } finally {
+      if (mounted.current && requestId === prepareSerial.current) { prepareLock.current = false; setPreparing(false); }
+    }
+  }
 
   function updateCase(index: number, update: Partial<DraftCase>) {
     setSuite((current) => ({ ...current, cases: current.cases.map((item, caseIndex) => caseIndex === index ? { ...item, ...update } : item) }));
@@ -266,22 +272,24 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
     setShowValidation(true); setSubmitError(null); setAcceptedJob(null);
     if (!canSubmit || submitLock.current || !suiteValidation.value) return;
     submitLock.current = true; setSubmitting(true);
+    const id = generation.current;
     try {
       const accepted = isEvaluation
-        ? await client.submitEvaluationJob({ run_plan: plan!.value!, benchmark_suite: suiteValidation.value })
-        : await client.submitAblationJob({ base_config: baseConfig!.value!, document_manifest_hash: manifest, benchmark_suite: suiteValidation.value } satisfies AblationRequest);
-      if (mounted.current && connectedRef.current) { setAcceptedJob(accepted.job); onAccepted(); }
+        ? await client.submitEvaluationJob({ run_plan: plan!, benchmark_suite: suiteValidation.value })
+        : await client.submitAblationJob({ base_config: baseConfig.value!, document_manifest_hash: manifest!.content_hash, benchmark_suite: suiteValidation.value } satisfies AblationRequest);
+      if (mounted.current && connectedRef.current && id === generation.current) { setAcceptedJob(accepted.job); onAccepted(); }
     } catch (error) {
-      if (mounted.current && connectedRef.current) {
-        if (error instanceof ApiError && error.kind === "network") {
+      if (mounted.current && connectedRef.current && id === generation.current) {
+        if (error instanceof ApiError && error.code === "manifest_changed") {
+          setManifest(null); setPlan(null); setSubmitError("Source documents changed. Inspect documents again and prepare a new RunPlan.");
+        } else if (error instanceof ApiError && error.kind === "network") {
           setSubmitError("The connection failed after submission began. The server may have accepted the job; check Jobs before retrying. No automatic retry was made.");
         } else {
           setSubmitError(apiErrorText(error));
         }
       }
     } finally {
-      submitLock.current = false;
-      if (mounted.current) setSubmitting(false);
+      if (mounted.current && id === generation.current) { submitLock.current = false; setSubmitting(false); }
     }
   }
 
@@ -291,7 +299,7 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
     <PageHeading eyebrow="EXPERIMENT SUBMISSION" title="Experiments" description="Submit a validated benchmark to the existing local job API." actions={<Link className="button button--quiet" to="/jobs">Back to jobs</Link>} />
     <section className="panel experiment-prerequisite" aria-label="Workflow prerequisites">
       <span className="eyebrow">BEFORE YOU SUBMIT</span>
-      <p>A compatible built index, its genuine document manifest hash, and a matching configuration are required. This API does not discover manifests, build indexes, or create trusted run plans.</p>
+      <p>A compatible built index and matching configuration are required. Inspecting documents and preparing a RunPlan do not build or verify an index.</p>
       <p>Input is checked by this form and validated again by the backend. A queued job is not evidence that the index is ready.</p>
     </section>
     <nav className="workflow-tabs" aria-label="Experiment workflow">
@@ -302,24 +310,22 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
 
     <form className="experiment-form" onSubmit={(event) => void submit(event)} noValidate>
       <fieldset disabled={!connected || submitting}>
-        {isEvaluation ? <section className="panel" aria-labelledby="plan-heading">
-          <div className="panel__heading"><div><span className="eyebrow">TRUSTED INPUT</span><h2 id="plan-heading">Serialized run plan</h2></div></div>
-          <p className="panel__note">Paste the complete serialized RunPlan created by trusted backend tooling for the intended index and configuration. This UI does not compute or verify its hashes; the backend checks plan integrity and safety.</p>
-          <label className="form-field">RunPlan JSON
-            <textarea aria-label="RunPlan JSON" value={runPlanText} onChange={(event) => { setRunPlanText(event.target.value); setShowValidation(true); setSubmitError(null); }} rows={9} spellCheck={false} placeholder="Paste a serialized RunPlan JSON object" aria-describedby="run-plan-help" />
-            <small id="run-plan-help">The request requires the schema version, manifest hash, canonical configuration JSON string, snapshot hash, index fingerprint, and run fingerprint.</small>
-          </label>
-        </section> : <section className="panel" aria-labelledby="config-heading">
-          <div className="panel__heading"><div><span className="eyebrow">CANONICAL SIX-VARIANT PLAN</span><h2 id="config-heading">Base configuration and manifest</h2></div></div>
-          <p className="panel__note">Paste a genuine resolved configuration from trusted local tooling and the SHA-256 of its document manifest. The backend constructs the canonical six variants. This form does not create an index or verify that the configured index exists.</p>
+        <section className="panel" aria-labelledby="documents-heading">
+          <h2 id="documents-heading">1. Inspect source documents</h2>
+          <p className="panel__note">Inspection reads the configured PDF source. Index availability remains unknown.</p>
+          <button type="button" className="button button--quiet" onClick={() => void inspect()} disabled={inspecting || preparing}>{inspecting ? "Inspecting…" : "Inspect documents"}</button>
+          {manifest && <div role="status"><p>Manifest schema: {manifest.schema_version} · Documents: {manifest.entry_count}</p><p>Manifest hash: <code>{manifest.content_hash}</code></p>{manifest.empty ? <p>No PDF documents found. Add documents before preparing a plan.</p> : <ul>{manifest.entries.map((entry) => <li key={entry.document_id}>{entry.relative_path} — {entry.size_bytes} bytes</li>)}</ul>}</div>}
+        </section>
+        <section className="panel" aria-labelledby="config-heading">
+          <h2 id="config-heading">2. Resolved configuration</h2>
+          <p className="panel__note">Supply the complete resolved configuration from the project configuration workflow. The backend validates its full schema and safety policy.</p>
           <label className="form-field">Resolved base configuration JSON object
-            <textarea aria-label="Resolved base configuration JSON object" value={configText} onChange={(event) => { setConfigText(event.target.value); setShowValidation(true); setSubmitError(null); }} rows={11} spellCheck={false} placeholder="Paste the full resolved configuration object" />
-            <small>It must include positive text_k and image_k values and explicitly set reset_collections_on_start to false. Destructive policy flags are rejected.</small>
+            <textarea value={configText} onChange={(event) => { generation.current += 1; inspectLock.current = false; setInspecting(false); setPlan(null); setConfigText(event.target.value); setShowValidation(true); setPreparationError(null); setSubmitError(null); }} rows={11} spellCheck={false} />
           </label>
-          <label className="form-field">Document manifest SHA-256
-            <input value={manifestText} onChange={(event) => { setManifestText(event.target.value); setShowValidation(true); setSubmitError(null); }} autoComplete="off" spellCheck={false} placeholder="64 hexadecimal characters" />
-          </label>
-        </section>}
+          {isEvaluation && <><button type="button" className="button button--quiet" onClick={() => void prepare()} disabled={!manifest || manifest.empty || !baseConfig.value || configErrors.length > 0 || preparing || inspecting}>{preparing ? "Preparing…" : "Prepare RunPlan"}</button>
+            {plan && <div role="status"><h3>RunPlan prepared</h3><p>Schema: {plan.plan_schema_version}</p><p>Manifest: <code>{plan.document_manifest_hash}</code></p><p>Configuration snapshot: <code>{plan.configuration_snapshot_hash}</code></p><p>Index fingerprint: <code>{plan.index_fingerprint}</code></p><p>Run fingerprint: <code>{plan.run_fingerprint}</code></p></div>}</>}
+          {preparationError && <div className="result-error" role="alert">{preparationError}</div>}
+        </section>
 
         <section className="panel" aria-labelledby="suite-heading">
           <div className="panel__heading"><div><span className="eyebrow">USER-PROVIDED CASES</span><h2 id="suite-heading">Benchmark suite</h2></div><span className="count-pill">{suite.cases.length}/{maximumCases}</span></div>
