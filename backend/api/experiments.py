@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hmac
 import json
-from pathlib import Path
 from typing import Any
 
 from starlette.concurrency import run_in_threadpool
@@ -14,7 +13,14 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from backend.config.schema import ResolvedRunConfig
+from backend.engine.manifest import (
+    DocumentManifest,
+    ManifestSourceChangedError,
+    ManifestValidationError,
+    build_document_manifest,
+)
 from backend.experiments.ablation_plans import create_ablation_plan
+from backend.experiments.run_plan import build_run_plan
 from backend.experiments.artifact_store import ArtifactIntegrityError, ArtifactNotFoundError
 from backend.experiments.catalog import CatalogIntegrityError, CatalogNotFoundError, ExperimentCatalogError
 from backend.experiments.serialization import SerializationError, serialize_ablation_result, serialize_evaluation_result
@@ -36,7 +42,16 @@ from backend.services.job_manager import (
     JobStateError,
 )
 
-from .schemas import AblationRequest, EvaluationRequest, parse_json_object
+from .schemas import (
+    AblationRequest,
+    EvaluationRequest,
+    ManifestResponse,
+    RunPlanPreparationRequest,
+    RunPlanPreparationResponse,
+    RunPlanRequest,
+    canonical_sha256,
+    parse_json_object,
+)
 
 
 class ApiRequestError(ValueError):
@@ -185,6 +200,100 @@ def _ablation_submission(value: PersistedAblationRun) -> dict[str, Any]:
 
 async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "api_version": "v1"})
+
+
+async def _current_manifest(request: Request) -> DocumentManifest:
+    source_root = getattr(request.app.state, "document_source_root", None)
+    if source_root is None:
+        raise ApiRequestError("manifest_source_unconfigured", 503)
+    try:
+        return await run_in_threadpool(build_document_manifest, source_root)
+    except ManifestSourceChangedError as exc:
+        raise ApiRequestError("manifest_source_changed", 409) from exc
+    except ManifestValidationError as exc:
+        raise ApiRequestError("manifest_invalid", 409) from exc
+    except (FileNotFoundError, NotADirectoryError, PermissionError, OSError) as exc:
+        raise ApiRequestError("manifest_source_unavailable", 503) from exc
+
+
+async def inspect_document_manifest(request: Request) -> JSONResponse:
+    try:
+        manifest = await _current_manifest(request)
+        response_model = ManifestResponse(
+            schema_version=manifest.schema_version,
+            content_hash=manifest.content_hash,
+            entry_count=len(manifest.entries),
+            empty=not manifest.entries,
+            entries=tuple(entry.model_dump(mode="json") for entry in manifest.entries),
+        )
+        payload = response_model.model_dump(mode="json")
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > request.app.state.max_response_body_bytes:
+            raise ApiRequestError("manifest_response_too_large", 413)
+        response = JSONResponse(payload)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def prepare_run_plan(request: Request) -> JSONResponse:
+    try:
+        payload = await _read_json(request, request.app.state.max_request_body_bytes)
+        supplied_hash = payload.get("expected_manifest_hash")
+        if supplied_hash is not None:
+            try:
+                canonical_sha256(supplied_hash)
+            except ValueError as exc:
+                raise ApiRequestError("manifest_hash_invalid", 400) from exc
+        model = _model(RunPlanPreparationRequest, payload)
+        if set(model.resolved_config) != set(ResolvedRunConfig.model_fields):
+            raise ApiRequestError("configuration_invalid", 400)
+        try:
+            config = ResolvedRunConfig.model_validate(model.resolved_config)
+        except Exception as exc:
+            raise ApiRequestError("configuration_invalid", 400) from exc
+        if (
+            config.reset_collections_on_start
+            or config.workbench_policy.allow_destructive_index_reset
+            or config.workbench_policy.allow_collection_delete
+        ):
+            raise ApiRequestError("destructive_configuration_forbidden", 400)
+        try:
+            config.validate_for_workbench()
+        except Exception as exc:
+            raise ApiRequestError("configuration_invalid", 400) from exc
+
+        manifest = await _current_manifest(request)
+        if not manifest.entries:
+            raise ApiRequestError("manifest_empty", 409)
+        if manifest.content_hash != model.expected_manifest_hash:
+            raise ApiRequestError("manifest_changed", 409)
+        try:
+            plan = build_run_plan(config, manifest.content_hash)
+            plan.verify_integrity()
+        except Exception as exc:
+            raise ApiRequestError("run_plan_invalid", 400) from exc
+
+        response_model = RunPlanPreparationResponse(
+            run_plan=RunPlanRequest.model_validate(plan.model_dump(mode="json")),
+            manifest={
+                "schema_version": manifest.schema_version,
+                "content_hash": manifest.content_hash,
+                "entry_count": len(manifest.entries),
+            },
+        )
+        response_payload = response_model.model_dump(mode="json")
+        encoded = json.dumps(response_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > request.app.state.max_response_body_bytes:
+            raise ApiRequestError("response_body_too_large", 413)
+        response = JSONResponse(response_payload)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+    except Exception as exc:
+        return _map_error(exc)
 
 
 async def runtime_models(request: Request) -> JSONResponse:
@@ -390,6 +499,8 @@ async def load_result(request: Request) -> Response:
 def build_routes(service: ExperimentService, *, max_request_body_bytes: int, job_manager: ExperimentJobManager | None = None) -> list[Route]:
     routes = [
         Route("/health", health, methods=["GET"]),
+        Route("/api/v1/documents/manifest", inspect_document_manifest, methods=["GET"]),
+        Route("/api/v1/run-plans", prepare_run_plan, methods=["POST"]),
         Route("/api/v1/evaluations", submit_evaluation, methods=["POST"]),
         Route("/api/v1/ablations", submit_ablation, methods=["POST"]),
         Route("/api/v1/runtime/models", runtime_models, methods=["GET"]),

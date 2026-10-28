@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -13,7 +14,14 @@ from backend.services.job_manager import ExperimentJobManager
 from backend.api.experiments import build_routes, ExperimentSecurityMiddleware
 
 
-def create_app(service: ExperimentService, *, api_token: str, max_request_body_bytes: int = 24 * 1024 * 1024, job_manager: ExperimentJobManager | None = None) -> Starlette:
+def create_app(
+    service: ExperimentService,
+    *,
+    api_token: str,
+    max_request_body_bytes: int = 24 * 1024 * 1024,
+    job_manager: ExperimentJobManager | None = None,
+    document_source_root: str | Path | None = None,
+) -> Starlette:
     """Create an explicitly configured local experiment API.
 
     The factory never constructs pipeline components or opens storage. An
@@ -28,6 +36,12 @@ def create_app(service: ExperimentService, *, api_token: str, max_request_body_b
         raise ValueError("max_request_body_bytes is invalid")
     if job_manager is not None and not isinstance(job_manager, ExperimentJobManager):
         raise ValueError("job_manager is invalid")
+    if document_source_root is not None and (
+        not isinstance(document_source_root, (str, Path))
+        or not str(document_source_root).strip()
+        or not Path(document_source_root).is_absolute()
+    ):
+        raise ValueError("document_source_root is invalid")
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -45,6 +59,7 @@ def create_app(service: ExperimentService, *, api_token: str, max_request_body_b
     app.state.max_response_body_bytes = max_request_body_bytes
     app.state.job_manager = job_manager
     app.state.model_registry = service.model_registry
+    app.state.document_source_root = Path(document_source_root) if document_source_root is not None else None
     app.add_middleware(ExperimentSecurityMiddleware, api_token=api_token)
     return app
 

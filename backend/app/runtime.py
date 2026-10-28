@@ -258,7 +258,13 @@ def build_runtime(
             worker_count=selected.worker_count,
             max_pending_jobs=selected.max_pending_jobs,
         )
-        app = create_app(service, api_token=selected.api_token, max_request_body_bytes=selected.max_request_body_bytes, job_manager=jobs)
+        app = create_app(
+            service,
+            api_token=selected.api_token,
+            max_request_body_bytes=selected.max_request_body_bytes,
+            job_manager=jobs,
+            document_source_root=selected.data_dir,
+        )
     except RuntimeConfigurationError:
         raise
     except Exception as exc:

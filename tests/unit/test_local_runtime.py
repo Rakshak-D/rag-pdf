@@ -166,6 +166,7 @@ def test_composition_is_lazy_and_app_lifespan_owns_job_manager(tmp_path: Path):
     )
     assert runtime.model_registry.snapshot().components == ()
     assert runtime.job_manager._started is False
+    assert runtime.app.state.document_source_root == settings.data_dir
     assert settings.artifact_store_dir.is_dir()
     assert settings.catalog_db_path.is_file()
     assert settings.jobs_db_path.is_file()

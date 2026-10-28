@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 import json
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.config.schema import ResolvedRunConfig
 from backend.experiments.ablation_plans import create_ablation_plan
@@ -15,6 +16,13 @@ from backend.experiments.run_plan import RunPlan
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+def canonical_sha256(value: str) -> str:
+    """Validate the API's canonical SHA-256 text form and normalize casing."""
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", value):
+        raise ValueError("value must be exactly 64 hexadecimal characters")
+    return value.lower()
 
 
 class RunPlanRequest(_StrictModel):
@@ -28,6 +36,46 @@ class RunPlanRequest(_StrictModel):
     def to_domain(self) -> RunPlan:
         payload = self.model_dump(mode="json")
         return RunPlan.from_serializable_json(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+class RunPlanPreparationRequest(_StrictModel):
+    """Inputs for preparing a plan against the live configured PDF corpus."""
+
+    resolved_config: dict[str, Any]
+    expected_manifest_hash: str
+
+    @field_validator("expected_manifest_hash")
+    @classmethod
+    def validate_manifest_hash(cls, value: str) -> str:
+        # This is the same accepted hexadecimal SHA-256 form as RunPlan and
+        # index_fingerprint; the domain builder remains authoritative.
+        return canonical_sha256(value)
+
+
+class ManifestEntryResponse(_StrictModel):
+    relative_path: str
+    size_bytes: int
+    sha256: str
+    document_id: str
+
+
+class ManifestResponse(_StrictModel):
+    schema_version: str
+    content_hash: str
+    entry_count: int
+    empty: bool
+    entries: tuple[ManifestEntryResponse, ...]
+
+
+class ManifestSummaryResponse(_StrictModel):
+    schema_version: str
+    content_hash: str
+    entry_count: int
+
+
+class RunPlanPreparationResponse(_StrictModel):
+    run_plan: RunPlanRequest
+    manifest: ManifestSummaryResponse
 
 
 class BenchmarkCaseRequest(_StrictModel):

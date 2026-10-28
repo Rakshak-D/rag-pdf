@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from backend.api.schemas import BenchmarkSuiteRequest, EvaluationRequest, parse_json_object
+from backend.api.schemas import BenchmarkSuiteRequest, EvaluationRequest, RunPlanPreparationRequest, parse_json_object
 
 
 def _case(case_id="case-1"):
@@ -47,3 +47,22 @@ def test_json_parser_rejects_duplicate_keys_and_non_objects():
         parse_json_object("[]")
     with pytest.raises(ValueError):
         parse_json_object('{"value": NaN}')
+
+
+def test_run_plan_preparation_request_is_strict_and_normalizes_sha256():
+    valid = RunPlanPreparationRequest.model_validate({
+        "resolved_config": {"text_embed_model": "model"},
+        "expected_manifest_hash": "A" * 64,
+    })
+    assert valid.expected_manifest_hash == "a" * 64
+    with pytest.raises(ValidationError):
+        RunPlanPreparationRequest.model_validate({
+            "resolved_config": {},
+            "expected_manifest_hash": "g" * 64,
+        })
+    with pytest.raises(ValidationError):
+        RunPlanPreparationRequest.model_validate({
+            "resolved_config": {},
+            "expected_manifest_hash": "a" * 64,
+            "source_root": "C:/private",
+        })

@@ -35,7 +35,25 @@ serialized result responses. `/health` remains unauthenticated liveness only.
 
 Routes are provided for health, evaluation and ablation submission, artifact
 listing/metadata, metric aggregates, ablation comparisons, and serialized
-result loading. Execution and catalog calls run through Starlette's supported
+result loading. The authenticated `GET /api/v1/documents/manifest` route
+re-hashes the explicitly configured local PDF source root and returns the
+canonical manifest hash and relative entry metadata. It returns an explicit
+`empty` flag for an empty PDF corpus and never includes the source root. The
+authenticated `POST /api/v1/run-plans` route accepts a complete
+`resolved_config` and the previously observed `expected_manifest_hash`. It
+validates the configuration and non-destructive policy, rebuilds the live
+manifest, rejects an empty corpus or a changed hash, and then delegates plan
+construction and fingerprinting to the existing `build_run_plan()` domain
+function. Its `run_plan` object uses the same serialized fields accepted by
+evaluation submission. Neither route extracts PDFs, creates snapshots,
+initializes models, accesses Chroma, writes build reports, or creates indexes.
+Manifest and prepared-plan JSON responses are bounded by the configured
+response byte limit. Stable errors include `manifest_source_unconfigured`,
+`manifest_source_unavailable`, `manifest_invalid`, `manifest_source_changed`,
+`manifest_empty`, `manifest_changed`, `manifest_hash_invalid`, `configuration_invalid`, and
+`destructive_configuration_forbidden`.
+
+Execution and catalog calls run through Starlette's supported
 thread-pool utility so synchronous retrieval, generation and SQLite work does
 not execute directly on the event loop. Requests remain synchronous from the
 client's perspective and may run for a long time; this is not a durable job

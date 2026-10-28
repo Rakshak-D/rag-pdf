@@ -9,7 +9,7 @@ Set these environment variables before launch. All filesystem paths must be abso
 | Variable | Required | Meaning/default |
 |---|---:|---|
 | `RAG_WORKBENCH_API_TOKEN` | Yes | Bearer token; no default. Must be non-empty, at most 4096 characters, and contain no whitespace. Keep it in a local secret manager or uncommitted shell environment. |
-| `RAG_WORKBENCH_DATA_DIR` | Yes | Existing local PDF/source-data root. It must be separate from runtime stores. The runtime does not scan or modify it. |
+| `RAG_WORKBENCH_DATA_DIR` | Yes | Existing local PDF/source-data root. It must be separate from runtime stores. Runtime construction does not scan or modify it; the authenticated manifest inspection route hashes the current PDF files when requested and does not extract or copy them. |
 | `RAG_WORKBENCH_ARTIFACT_STORE_DIR` | Yes | Content-addressed result artifacts. May be created when its parent exists. |
 | `RAG_WORKBENCH_CATALOG_DB_PATH` | Yes | Catalog SQLite file; parent directory must exist. |
 | `RAG_WORKBENCH_JOBS_DB_PATH` | Yes | Job metadata SQLite file; parent directory must exist. |
