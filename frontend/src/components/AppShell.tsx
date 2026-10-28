@@ -11,6 +11,7 @@ export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
   const section = location.pathname.startsWith("/jobs") ? "Jobs"
     : location.pathname.startsWith("/artifacts") ? "Artifacts"
+      : location.pathname.startsWith("/experiments") ? "Experiments"
       : location.pathname === "/" ? "Overview" : "Not found";
 
   return (
@@ -25,6 +26,7 @@ export function AppShell({ children }: AppShellProps) {
           <NavLink end to="/" title="Overview" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">⌂</span>Overview</NavLink>
           <NavLink to="/jobs" title="Jobs" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">≡</span>Jobs</NavLink>
           <NavLink to="/artifacts" title="Artifacts" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">▧</span>Artifacts</NavLink>
+          <NavLink to="/experiments/evaluation" title="Experiments" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">＋</span>Experiments</NavLink>
           {comingSoon.map((item, index) => (
             <div className="nav-item nav-item--disabled" key={item} aria-disabled="true" title={`${item} is not available yet`}>
               <span className="nav-icon" aria-hidden="true">{["▤", "⌕", "◷", "⇄", "▧"][index]}</span>

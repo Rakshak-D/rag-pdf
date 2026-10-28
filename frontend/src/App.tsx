@@ -10,6 +10,7 @@ import { JobDetailPage } from "./features/jobs/JobDetailPage";
 import { JobsPage } from "./features/jobs/JobsPage";
 import { ArtifactDetailPage } from "./features/artifacts/ArtifactDetailPage";
 import { ArtifactsPage } from "./features/artifacts/ArtifactsPage";
+import { ExperimentWorkflowPage } from "./features/experiments/ExperimentWorkflowPage";
 
 type DataState = "disconnected" | "loading" | "ready" | "error";
 
@@ -93,6 +94,7 @@ export default function App() {
       <Route path="/jobs/:jobId" element={<JobDetailPage key={location.pathname} client={client} connected={connected} onRefresh={refresh} />} />
       <Route path="/artifacts" element={<ArtifactsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/artifacts/:artifactId" element={<ArtifactDetailPage key={location.pathname} client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
+      <Route path="/experiments/:workflow" element={<ExperimentWorkflowPage key={location.pathname} client={client} connected={connected} onAccepted={refresh} />} />
       <Route path="*" element={<section className="panel not-found"><span className="eyebrow">ROUTE NOT FOUND</span><h1>This page is unavailable</h1><p>Use the workbench navigation to return to a supported view.</p><Link className="button button--primary" to="/">Open overview</Link></section>} />
     </Routes>
   </AppShell>;
