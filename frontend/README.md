@@ -23,6 +23,11 @@ npm run dev
 
 Vite proxies `/health` and `/api` to `http://127.0.0.1:8000` by default. To use another local backend, set the non-secret `RAG_WORKBENCH_DEV_PROXY_TARGET` variable before starting Vite. This changes only the development proxy destination; it is not an API token.
 
+After `npm ci`, the isolated real-server proxy check can be run from the
+repository root with `.\rag-env\Scripts\python.exe scripts/local_runtime_smoke.py --vite`.
+See [the smoke-test guide](../docs/architecture/local-integration-smoke.md).
+It checks HTTP proxying without driving a browser or loading models.
+
 For a static production build, configure the chosen static host to serve `index.html` for the client routes (`/jobs`, `/jobs/*`, `/artifacts`, `/artifacts/*`, and `/experiments/*`). The Python runtime does not serve or mount the frontend assets.
 
 ## Experiments

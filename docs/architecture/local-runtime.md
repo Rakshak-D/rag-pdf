@@ -28,6 +28,8 @@ build report and current source manifest. It does not open Chroma or verify
 persisted collections. A matching report is a point-in-time compatibility
 observation; job execution still validates its own resources. The configured
 build report remains required at startup, and this does not add index discovery.
+For an isolated real-server check using synthetic report metadata, see
+[local integration smoke](local-integration-smoke.md).
 
 Example PowerShell configuration (replace paths with existing local locations; do not put a real token in a script committed to source control):
 
