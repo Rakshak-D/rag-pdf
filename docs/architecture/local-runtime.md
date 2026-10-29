@@ -47,7 +47,7 @@ Create `local-runtime` and its `state` parent yourself before launch. The runtim
 
 ## Prepare and launch
 
-Build the index and its successful build report using the existing indexing workflow before submitting evaluations. This launcher does not accept document uploads or build indexes. A configured path is not proof that the report is valid or that a plan-matching index exists: the existing retrieval boundary checks the report, manifest, index fingerprint, persisted collection counts, and index contents. If these checks fail, execution returns the established failure contract; no synthetic result is created.
+Build the index and its successful build report using the [first-run bootstrap](index-bootstrap.md) or the existing indexing workflow before submitting evaluations. This launcher does not accept document uploads or build indexes. A configured path is not proof that the report is valid or that a plan-matching index exists: the existing retrieval boundary checks the report, manifest, index fingerprint, persisted collection counts, and index contents. If these checks fail, execution returns the established failure contract; no synthetic result is created.
 
 Start from the repository root with its pinned environment:
 

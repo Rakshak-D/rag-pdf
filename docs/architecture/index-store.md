@@ -11,6 +11,7 @@ derived only from the verified full `RunPlan.index_fingerprint`:
     index-manifest.json
     chroma/                 # Chroma PersistentClient data
   snapshots/<document-manifest-hash>/
+  .writer-leases/<index-fingerprint>/  # exclusive cooperating process reservation
 ```
 
 Each index has separate `text_vectors` and `image_vectors` collections. Both
@@ -35,6 +36,16 @@ Existing manifests and collection metadata are checked before use. Missing,
 extra, or mismatched collections, unknown metadata, malformed manifests, and
 incomplete directories raise explicit errors. Existing data is never reset,
 deleted, silently repaired, or replaced by this adapter.
+
+Builders, writable store opens, and read-only `open_existing()` calls hold the
+same per-fingerprint reservation until their Chroma client is closed. The
+read-only API rejects upserts; its reservation also prevents a Chroma client
+open from overlapping a cooperating writer. A collision fails immediately.
+Fresh-only builds create the index directory exclusively and retain an
+incomplete marker until their successful report is published. A crash leaves
+reservations or incomplete state fail-closed; there is no automatic takeover.
+This protocol does not control external or older non-cooperating processes.
+See [index bootstrap](index-bootstrap.md) for recovery and operational limits.
 
 Persistent storage is not active-index promotion. There is no registry,
 active pointer, transaction spanning ingestion and indexing, or recovery

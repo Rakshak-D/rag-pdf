@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from backend.config.fingerprint import INDEX_SCHEMA_VERSION
 from backend.config.paths import resolve_disjoint_paths, resolve_owned_path
+from backend.config.writer_lease import WriterLease
 from backend.experiments.run_plan import RunPlan
 
 
@@ -263,10 +264,16 @@ class ChromaVectorStore:
         text_collection: Any,
         image_collection: Any,
         manifest: _IndexStoreManifest,
+        writer_lease: WriterLease | None = None,
+        owns_lease: bool = False,
+        writable: bool = False,
     ) -> None:
         self.storage_root = storage_root
         self.index_root = index_root
         self.manifest = manifest
+        self._writer_lease = writer_lease
+        self._owns_lease = owns_lease
+        self._writable = writable
         self._client = client
         self._collections = {
             "text": text_collection,
@@ -280,6 +287,10 @@ class ChromaVectorStore:
         run_plan: RunPlan,
         *,
         create: bool,
+        fresh_only: bool = False,
+        writer_lease: WriterLease | None = None,
+        owns_lease: bool = False,
+        writable: bool = False,
     ) -> "ChromaVectorStore":
         """Open a verified index, optionally creating a new empty store."""
 
@@ -307,11 +318,16 @@ class ChromaVectorStore:
         )
 
         is_new = not index_root.exists()
+        if fresh_only and not is_new:
+            raise ChromaStoreStateError("index store already exists")
         if is_new and not create:
             raise ChromaStoreStateError(
                 f"index store does not exist: {index_root}"
             )
         if not is_new:
+            incomplete_marker = index_root / ".fresh-build-incomplete"
+            if incomplete_marker.exists() or incomplete_marker.is_symlink():
+                raise ChromaStoreStateError("fresh index build is incomplete")
             if not index_root.is_dir():
                 raise ChromaStoreStateError(f"index path is not a directory: {index_root}")
             if not manifest_path.is_file() or not chroma_path.is_dir():
@@ -328,6 +344,11 @@ class ChromaVectorStore:
         if is_new:
             try:
                 index_root.mkdir(parents=True, exist_ok=False)
+                if fresh_only:
+                    with (index_root / ".fresh-build-incomplete").open("x", encoding="ascii") as marker:
+                        marker.write(run_plan.index_fingerprint)
+                        marker.flush()
+                        os.fsync(marker.fileno())
                 chroma_path.mkdir(exist_ok=False)
             except OSError as exc:
                 raise ChromaStoreStateError(f"could not create new index store: {index_root}") from exc
@@ -369,13 +390,60 @@ class ChromaVectorStore:
             text_collection=text_collection,
             image_collection=image_collection,
             manifest=manifest,
+            writer_lease=writer_lease,
+            owns_lease=owns_lease,
+            writable=writable,
         )
 
     @classmethod
-    def open(cls, storage_root: str | Path, run_plan: RunPlan) -> "ChromaVectorStore":
+    def open(cls, storage_root: str | Path, run_plan: RunPlan, *, _lease: WriterLease | None = None) -> "ChromaVectorStore":
         """Verify ``run_plan`` and open/create its isolated persistent store."""
+        return cls._open_writable(storage_root, run_plan, fresh_only=False, lease=_lease)
 
-        return cls._open(storage_root, run_plan, create=True)
+    @classmethod
+    def create_new(cls, storage_root: str | Path, run_plan: RunPlan, *, _lease: WriterLease | None = None) -> "ChromaVectorStore":
+        """Create only a previously absent index while holding writer ownership."""
+        if _lease is None:
+            raise ChromaStoreStateError("fresh creation requires writer ownership")
+        return cls._open_writable(storage_root, run_plan, fresh_only=True, lease=_lease)
+
+    @classmethod
+    def _finalize_new(cls, storage_root: str | Path, run_plan: RunPlan, lease: WriterLease) -> None:
+        """Release the incomplete marker after successful report publication."""
+        lease.verify(storage_root, run_plan.index_fingerprint)
+        root = Path(storage_root).expanduser().resolve(strict=False)
+        _, index_root, _, _ = _validate_index_hierarchy(root, run_plan.index_fingerprint)
+        marker = index_root / ".fresh-build-incomplete"
+        if marker.is_symlink() or marker.read_text(encoding="ascii") != run_plan.index_fingerprint:
+            raise ChromaStoreStateError("fresh index marker is invalid")
+        marker.unlink()
+
+    @classmethod
+    def _open_writable(cls, storage_root: str | Path, run_plan: RunPlan, *, fresh_only: bool, lease: WriterLease | None) -> "ChromaVectorStore":
+        if not isinstance(run_plan, RunPlan):
+            raise TypeError("ChromaVectorStore.open requires a RunPlan")
+        run_plan.verify_integrity()
+        resolved_root, _ = resolve_disjoint_paths(storage_root, run_plan.resolved_config().pdf_dir)
+        _validate_index_hierarchy(resolved_root, run_plan.index_fingerprint)
+        root = Path(storage_root).expanduser().absolute()
+        owns_lease = lease is None
+        if lease is None:
+            lease = WriterLease.acquire(root, run_plan.index_fingerprint)
+        elif not isinstance(lease, WriterLease):
+            raise ChromaStoreStateError("writer lease is invalid")
+        try:
+            lease.claim_store(root, run_plan.index_fingerprint)
+        except Exception:
+            if owns_lease:
+                lease.release()
+            raise
+        try:
+            return cls._open(storage_root, run_plan, create=True, fresh_only=fresh_only, writer_lease=lease, owns_lease=owns_lease, writable=True)
+        except BaseException:
+            lease.release_store()
+            if owns_lease:
+                lease.release()
+            raise
 
     @classmethod
     def open_existing(
@@ -383,15 +451,42 @@ class ChromaVectorStore:
         storage_root: str | Path,
         run_plan: RunPlan,
     ) -> "ChromaVectorStore":
-        """Open only an existing verified store; never create or repair it."""
-
-        return cls._open(storage_root, run_plan, create=False)
+        """Open an existing store read-only while holding its shared reservation."""
+        if not isinstance(run_plan, RunPlan):
+            raise TypeError("ChromaVectorStore.open_existing requires a RunPlan")
+        run_plan.verify_integrity()
+        root, _ = resolve_disjoint_paths(storage_root, run_plan.resolved_config().pdf_dir)
+        _, index_root, _, _ = _validate_index_hierarchy(root, run_plan.index_fingerprint)
+        if not index_root.exists():
+            raise ChromaStoreStateError("index store does not exist")
+        lease = WriterLease.acquire(Path(storage_root).expanduser().absolute(), run_plan.index_fingerprint)
+        try:
+            lease.claim_store(root, run_plan.index_fingerprint)
+            try:
+                return cls._open(storage_root, run_plan, create=False, writer_lease=lease, owns_lease=True)
+            except BaseException:
+                lease.release_store()
+                raise
+        except BaseException:
+            lease.release()
+            raise
 
     def close(self) -> None:
         """Release adapter references; Chroma 1.5 has no client close method."""
 
         self._client = None
         self._collections = {}
+        if self._writer_lease is not None:
+            lease = self._writer_lease
+            lease.release_store()
+            if self._owns_lease:
+                lease.release()
+            self._writer_lease = None
+
+    def _require_writer(self) -> None:
+        if self._writer_lease is None or not self._writable:
+            raise ChromaStoreStateError("store is read-only or closed")
+        self._writer_lease.verify(self.storage_root, self.manifest.index_fingerprint)
 
     def _collection(self, modality: str) -> Any:
         if self._client is None:
@@ -420,6 +515,7 @@ class ChromaVectorStore:
         documents: Sequence[str],
         metadatas: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
+        self._require_writer()
         values = _validate_ids(ids)
         vectors = self._validate_embeddings(embeddings, len(values))
         docs = list(documents) if not isinstance(documents, (str, bytes, bytearray)) else []
@@ -439,6 +535,7 @@ class ChromaVectorStore:
         embeddings: Sequence[Any],
         metadatas: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
+        self._require_writer()
         values = _validate_ids(ids)
         vectors = self._validate_embeddings(embeddings, len(values))
         metadata = _validate_metadatas(metadatas, len(values))

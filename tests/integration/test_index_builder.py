@@ -385,8 +385,8 @@ def test_text_persisted_then_image_failure_reports_partial_progress(tmp_path, mo
         def close(self):
             self.store.close()
 
-    def open_store(storage_root, run_plan):
-        return FailingImageStore(original_open(storage_root, run_plan))
+    def open_store(storage_root, run_plan, **kwargs):
+        return FailingImageStore(original_open(storage_root, run_plan, **kwargs))
 
     monkeypatch.setattr("backend.engine.index_builder.ChromaVectorStore.open", open_store)
     result = build_index(

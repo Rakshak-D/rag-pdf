@@ -15,10 +15,12 @@ import numpy as np
 
 from backend.config.paths import PathContainmentError, resolve_disjoint_paths, resolve_owned_path
 from backend.config.schema import ResolvedRunConfig
+from backend.config.writer_lease import WriterLease
 from backend.embeddings.image import ImageEmbeddingAdapter, ImageEmbeddingBatchResult
 from backend.embeddings.text import EmbeddingBatchResult, TextEmbeddingAdapter
 from backend.experiments.run_plan import RunPlan
 from backend.vectorstore import ChromaVectorStore
+from backend.vectorstore.chroma_store import _validate_index_hierarchy
 
 from .ingestion import (
     PdfExtractionResult,
@@ -39,6 +41,7 @@ FailureStage = Literal[
     "vector_store_open",
     "vector_persistence",
     "vector_verification",
+    "source_verification",
 ]
 REPORT_SCHEMA_VERSION = "1"
 
@@ -47,12 +50,20 @@ class IndexBuildError(RuntimeError):
     """Raised for invalid build inputs or failures before a result can be returned."""
 
 
+class FreshIndexExistsError(IndexBuildError):
+    """The fingerprint-owned directory already exists."""
+
+
 class MetadataSerializationError(IndexBuildError, ValueError):
     """Raised when structured metadata cannot be safely represented in Chroma."""
 
 
 class ReportWriteError(IndexBuildError):
     """Raised when an operational result cannot be written atomically."""
+
+
+class FreshIndexFinalizationError(IndexBuildError):
+    """A completed report exists but the fresh index remains unavailable."""
 
 
 @dataclass(frozen=True)
@@ -408,8 +419,47 @@ def build_index(
     *,
     text_adapter: Any | None = None,
     image_adapter: Any | None = None,
+    creation_policy: Literal["legacy", "fresh_only"] = "legacy",
 ) -> IndexBuildResult:
-    """Build one plan-bound text/image index without active-index promotion."""
+    """Build under exclusive writer ownership without active-index promotion."""
+    if creation_policy not in {"legacy", "fresh_only"}:
+        raise ValueError("creation_policy_invalid")
+    if not isinstance(run_plan, RunPlan):
+        raise TypeError("build_index requires a RunPlan")
+    run_plan.verify_integrity()
+    config = run_plan.resolved_config()
+    owned_root = _validate_build_paths(storage_root, input_dir, config)
+    manifest = build_document_manifest(input_dir)
+    if manifest.content_hash != run_plan.document_manifest_hash:
+        raise ManifestMismatchError("run-plan document_manifest_hash does not match source directory")
+    _validate_adapter_configuration(text_adapter, image_adapter, config)
+    with WriterLease.acquire(Path(storage_root).expanduser().absolute(), run_plan.index_fingerprint) as lease:
+        run_plan.verify_integrity()
+        _validate_build_paths(storage_root, input_dir, config)
+        if build_document_manifest(input_dir).content_hash != run_plan.document_manifest_hash:
+            raise ManifestMismatchError("run-plan document_manifest_hash does not match source directory")
+        if creation_policy == "fresh_only":
+            _, index_root, _, _ = _validate_index_hierarchy(owned_root, run_plan.index_fingerprint)
+            try:
+                index_root.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                raise FreshIndexExistsError("index_already_exists")
+        return _build_index_owned(run_plan, input_dir, storage_root, text_adapter=text_adapter, image_adapter=image_adapter, lease=lease, creation_policy=creation_policy)
+
+
+def _build_index_owned(
+    run_plan: RunPlan,
+    input_dir: str | Path,
+    storage_root: str | Path,
+    *,
+    text_adapter: Any | None,
+    image_adapter: Any | None,
+    lease: WriterLease,
+    creation_policy: Literal["legacy", "fresh_only"],
+) -> IndexBuildResult:
+    """Run the existing build pipeline with the caller's writer capability."""
 
     started = perf_counter()
     if not isinstance(run_plan, RunPlan):
@@ -541,7 +591,8 @@ def build_index(
         store = None
         try:
             stage = "vector_store_open"
-            store = ChromaVectorStore.open(storage_root, run_plan)
+            opener = ChromaVectorStore.create_new if creation_policy == "fresh_only" else ChromaVectorStore.open
+            store = opener(storage_root, run_plan, _lease=lease)
             stage = "vector_persistence"
             if text_embeddings is not None:
                 store.upsert_text(text_ids, text_embeddings, text_documents, text_metadata)
@@ -563,6 +614,13 @@ def build_index(
         finally:
             if store is not None:
                 store.close()
+
+        if creation_policy == "fresh_only":
+            try:
+                if build_document_manifest(input_dir).content_hash != run_plan.document_manifest_hash:
+                    raise ManifestMismatchError("source changed during build")
+            except Exception as exc:
+                return operational_failure("source_verification", exc)
 
         status: BuildStatus = (
             "completed_with_warnings"
@@ -594,7 +652,14 @@ def build_index(
             image_records_persisted=image_records_persisted,
         )
         _write_report(result)
+        if creation_policy == "fresh_only":
+            try:
+                ChromaVectorStore._finalize_new(storage_root, run_plan, lease)
+            except Exception as exc:
+                raise FreshIndexFinalizationError("fresh_index_finalization_failed") from exc
         return result
+    except FreshIndexFinalizationError:
+        raise
     except ManifestMismatchError:
         raise
     except Exception as exc:
