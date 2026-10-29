@@ -39,6 +39,22 @@ class RetrievalReportError(SemanticRetrievalError):
     """Raised when a build report is missing, malformed, or not successful."""
 
 
+class RetrievalReportUnavailable(RetrievalReportError):
+    """The configured report could not be accessed."""
+
+
+class RetrievalReportMismatch(RetrievalReportError):
+    """A validated report identity differs from the requested plan."""
+
+
+class RetrievalReportFailed(RetrievalReportError):
+    """The build report does not describe a successful build."""
+
+
+class RetrievalReportPartial(RetrievalReportError):
+    """The build report indicates possible partial persistence."""
+
+
 class RetrievalStoreError(SemanticRetrievalError):
     """Raised when the referenced existing index cannot be opened or checked."""
 
@@ -144,6 +160,7 @@ class _SuccessfulBuildReport:
     document_manifest_hash: str
     text_records_persisted: int
     image_records_persisted: int
+    status: str = "completed"
     text_embedding_seconds: object | None = None
     image_embedding_seconds: object | None = None
 
@@ -183,10 +200,12 @@ def _validate_build_report(storage_root: str | Path, report_path: str | Path, pl
         )
     build_id = parts[1]
     if not build_id or not resolved_report.is_file():
-        raise RetrievalReportError("build report does not exist")
+        raise RetrievalReportUnavailable("build report does not exist")
     try:
         payload = json.loads(resolved_report.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except OSError as exc:
+        raise RetrievalReportUnavailable("build report is not valid UTF-8 JSON") from exc
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise RetrievalReportError("build report is not valid UTF-8 JSON") from exc
     if not isinstance(payload, dict):
         raise RetrievalReportError("build report must contain a JSON object")
@@ -205,18 +224,20 @@ def _validate_build_report(storage_root: str | Path, report_path: str | Path, pl
         expected = resolved_report.parent if key == "artifact_root" else resolved_report
         if resolved_value != expected:
             raise RetrievalReportError(f"build report {key} does not match its artifact location")
-    if payload.get("status") not in {"completed", "completed_with_warnings"}:
-        raise RetrievalReportError("build report is not a successful build")
+    if not isinstance(payload.get("status"), str) or payload.get("status") not in {"completed", "completed_with_warnings"}:
+        error = RetrievalReportFailed if payload.get("status") == "failed" else RetrievalReportError
+        raise error("build report is not a successful build")
     if payload.get("partial_persistence") is not False:
-        raise RetrievalReportError("build report indicates possible partial vector persistence")
+        error = RetrievalReportPartial if payload.get("partial_persistence") is True else RetrievalReportError
+        raise error("build report indicates possible partial vector persistence")
     index_fingerprint = _sha256_hash(payload.get("index_fingerprint"), label="index_fingerprint")
     document_manifest_hash = _sha256_hash(
         payload.get("document_manifest_hash"), label="document_manifest_hash"
     )
     if index_fingerprint != plan.index_fingerprint:
-        raise RetrievalReportError("build report index fingerprint does not match the RunPlan")
+        raise RetrievalReportMismatch("build report index fingerprint does not match the RunPlan")
     if document_manifest_hash != plan.document_manifest_hash:
-        raise RetrievalReportError("build report document manifest does not match the RunPlan")
+        raise RetrievalReportMismatch("build report document manifest does not match the RunPlan")
     return _SuccessfulBuildReport(
         build_id=build_id,
         index_fingerprint=index_fingerprint,
@@ -227,6 +248,7 @@ def _validate_build_report(storage_root: str | Path, report_path: str | Path, pl
         image_records_persisted=_nonnegative_count(
             payload, "image_records_persisted"
         ),
+        status=payload["status"],
         text_embedding_seconds=payload.get("text_embedding_seconds"),
         image_embedding_seconds=payload.get("image_embedding_seconds"),
     )

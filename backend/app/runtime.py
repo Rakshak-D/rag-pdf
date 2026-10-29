@@ -21,6 +21,7 @@ from backend.experiments.catalog import ExperimentCatalog
 from backend.services.experiment_service import ExperimentService
 from backend.services.job_manager import ExperimentJobManager
 from backend.services.model_registry import ModelAdapterRegistry
+from backend.services.index_readiness import IndexReadinessService
 from .main import create_app
 
 
@@ -264,6 +265,7 @@ def build_runtime(
             max_request_body_bytes=selected.max_request_body_bytes,
             job_manager=jobs,
             document_source_root=selected.data_dir,
+            index_readiness_service=IndexReadinessService(selected.data_dir, selected.index_storage_root, selected.build_report_path),
         )
     except RuntimeConfigurationError:
         raise

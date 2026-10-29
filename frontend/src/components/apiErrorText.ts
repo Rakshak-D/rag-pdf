@@ -6,6 +6,8 @@ export function apiErrorText(error: unknown): string {
   if (error.kind === "network") return "Could not reach the local API. Confirm that the backend is running.";
   if (error.kind === "non_json" || error.kind === "malformed_response") return "The backend returned an unexpected response.";
   if (error.code === "manifest_empty") return "No PDF documents were found. Inspect documents again after adding PDFs.";
+  if (error.code === "manifest_changed") return "Source documents changed. Inspect documents again before checking the index.";
+  if (error.code === "index_readiness_unconfigured") return "The configured index report check is unavailable in this application.";
   if (error.code === "manifest_source_changed" || error.code === "manifest_invalid") return "The document source could not be inspected safely. Check the source and inspect again.";
   if (error.code === "manifest_source_unavailable" || error.code === "manifest_source_unconfigured") return "The configured document source is unavailable. Check the local runtime configuration.";
   if (error.code === "configuration_invalid" || error.code === "destructive_configuration_forbidden") return "The backend rejected the configuration. Check the complete configuration and safety settings.";

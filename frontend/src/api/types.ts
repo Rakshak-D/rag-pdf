@@ -138,6 +138,28 @@ export interface RunPlanPreparationResponse {
   manifest: { schema_version: string; content_hash: string; entry_count: number };
 }
 
+export interface IndexReadinessRequest {
+  workflow: "evaluation" | "ablation";
+  resolved_config: Record<string, unknown>;
+  expected_manifest_hash: string;
+}
+
+export interface IndexReadinessResponse {
+  status: "report_match" | "mismatch" | "unavailable" | "indeterminate";
+  reason_code: string;
+  workflow: "evaluation" | "ablation";
+  document_manifest_hash: string;
+  expected_index_fingerprint: string;
+  build_id: string | null;
+  report_status: string | null;
+  reported_text_records: number | null;
+  reported_image_records: number | null;
+  observed_text_records: null;
+  observed_image_records: null;
+  store_checked: false;
+  check_level: "report";
+}
+
 export interface BenchmarkCaseInput {
   case_id: string;
   query: string;

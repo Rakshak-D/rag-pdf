@@ -33,6 +33,13 @@ Connect, then select **Inspect documents** to read the configured PDF source man
 
 For an ablation, the inspected manifest identity and supplied base configuration are passed to the existing job endpoint, which creates the canonical six variants. Manifest inspection and plan preparation do not build an index or prove that a compatible index exists. Index discovery and building remain unavailable through the UI.
 
+Use **Check configured index** to compare the configured build report against
+the inspected manifest and configuration. A `report_match` confirms report
+compatibility only; vector collections and their counts are not independently
+checked. `mismatch`, `unavailable`, and `indeterminate` describe a report
+that differs, cannot be accessed, or cannot be validated. Execution repeats its
+own checks, and this point-in-time observation does not guarantee success.
+
 Submission uses a single POST. If the connection fails after sending, the UI explains that acceptance is uncertain and does not retry automatically; check Jobs before submitting again. Form payloads and tokens are transient in memory and are cleared on disconnect or when leaving the workflow.
 
 ## Authentication

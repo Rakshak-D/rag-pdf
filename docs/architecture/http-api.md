@@ -53,6 +53,18 @@ response byte limit. Stable errors include `manifest_source_unconfigured`,
 `manifest_empty`, `manifest_changed`, `manifest_hash_invalid`, `configuration_invalid`, and
 `destructive_configuration_forbidden`.
 
+`POST /api/v1/index/readiness` accepts `workflow` (`evaluation` or
+`ablation`), a complete `resolved_config`, and `expected_manifest_hash`.
+It rechecks the configured source manifest and uses the existing plan and
+report validation contracts against the runtime's configured build report.
+`report_match` means the report matches; `mismatch` means the report is
+incompatible, `unavailable` means it cannot be read, and `indeterminate`
+means report validation could not establish compatibility. The response's
+`store_checked` is always false and observed counts are null: this endpoint
+does not open Chroma. Reported counts are returned only for validated reports.
+This is a point-in-time report check, not index discovery or a guarantee of
+retrieval, model availability, or execution success.
+
 Execution and catalog calls run through Starlette's supported
 thread-pool utility so synchronous retrieval, generation and SQLite work does
 not execute directly on the event loop. Requests remain synchronous from the

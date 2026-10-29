@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.services.experiment_service import ExperimentService
 from backend.services.job_manager import ExperimentJobManager
+from backend.services.index_readiness import IndexReadinessService
 
 from backend.api.experiments import build_routes, ExperimentSecurityMiddleware
 
@@ -21,6 +22,7 @@ def create_app(
     max_request_body_bytes: int = 24 * 1024 * 1024,
     job_manager: ExperimentJobManager | None = None,
     document_source_root: str | Path | None = None,
+    index_readiness_service: IndexReadinessService | None = None,
 ) -> Starlette:
     """Create an explicitly configured local experiment API.
 
@@ -36,6 +38,8 @@ def create_app(
         raise ValueError("max_request_body_bytes is invalid")
     if job_manager is not None and not isinstance(job_manager, ExperimentJobManager):
         raise ValueError("job_manager is invalid")
+    if index_readiness_service is not None and not isinstance(index_readiness_service, IndexReadinessService):
+        raise ValueError("index_readiness_service is invalid")
     if document_source_root is not None and (
         not isinstance(document_source_root, (str, Path))
         or not str(document_source_root).strip()
@@ -60,6 +64,7 @@ def create_app(
     app.state.job_manager = job_manager
     app.state.model_registry = service.model_registry
     app.state.document_source_root = Path(document_source_root) if document_source_root is not None else None
+    app.state.index_readiness_service = index_readiness_service
     app.add_middleware(ExperimentSecurityMiddleware, api_token=api_token)
     return app
 

@@ -4,6 +4,22 @@ import { ApiError, WorkbenchApiClient } from "./client";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("WorkbenchApiClient", () => {
+  it.each(["report_match", "mismatch", "unavailable", "indeterminate"] as const)("validates %s report compatibility", async (status) => {
+    const hash = "a".repeat(64);
+    const response = { status, reason_code: "report_checked", workflow: "evaluation", document_manifest_hash: hash, expected_index_fingerprint: "c".repeat(64), build_id: null, report_status: status === "report_match" ? "completed" : null, reported_text_records: status === "report_match" ? 3 : null, reported_image_records: status === "report_match" ? 0 : null, observed_text_records: null, observed_image_records: null, store_checked: false, check_level: "report" };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(response));
+    const client = new WorkbenchApiClient({ token: "token", fetcher });
+    const request = { workflow: "evaluation" as const, resolved_config: {}, expected_manifest_hash: hash };
+    await expect(client.checkIndexReadiness(request)).resolves.toEqual(response);
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(request);
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe("Bearer token");
+  });
+
+  it("rejects readiness responses claiming store verification", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ status: "report_match", store_checked: true }));
+    const client = new WorkbenchApiClient({ token: "token", fetcher });
+    await expect(client.checkIndexReadiness({ workflow: "evaluation", resolved_config: {}, expected_manifest_hash: "a".repeat(64) })).rejects.toMatchObject({ kind: "malformed_response" });
+  });
   it("validates manifest structure and prepares a plan with the inspected hash", async () => {
     const hash = "a".repeat(64);
     const manifest = { schema_version: "1", content_hash: hash, entry_count: 1, empty: false, entries: [{ relative_path: "paper.pdf", size_bytes: 7, sha256: "b".repeat(64), document_id: "doc_" + "c".repeat(64) }] };

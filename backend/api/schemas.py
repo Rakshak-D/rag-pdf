@@ -52,6 +52,26 @@ class RunPlanPreparationRequest(_StrictModel):
         return canonical_sha256(value)
 
 
+class IndexReadinessRequest(RunPlanPreparationRequest):
+    workflow: Literal["evaluation", "ablation"]
+
+
+class IndexReadinessResponse(_StrictModel):
+    status: Literal["report_match", "mismatch", "unavailable", "indeterminate"]
+    reason_code: str
+    workflow: Literal["evaluation", "ablation"]
+    document_manifest_hash: str
+    expected_index_fingerprint: str
+    build_id: str | None
+    report_status: str | None
+    reported_text_records: int | None
+    reported_image_records: int | None
+    observed_text_records: int | None
+    observed_image_records: int | None
+    store_checked: Literal[False]
+    check_level: Literal["report"]
+
+
 class ManifestEntryResponse(_StrictModel):
     relative_path: str
     size_bytes: int

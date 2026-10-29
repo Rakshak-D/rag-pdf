@@ -11,6 +11,8 @@ import type {
   DocumentManifest,
   RunPlanPreparationRequest,
   RunPlanPreparationResponse,
+  IndexReadinessRequest,
+  IndexReadinessResponse,
   EvaluationSubmissionResponse,
   ExperimentJobRecord,
   HealthResponse,
@@ -78,6 +80,22 @@ function isPreparedPlan(value: unknown): value is RunPlanPreparationResponse {
     sha256(plan.document_manifest_hash) && sha256(plan.configuration_snapshot_hash) && sha256(plan.index_fingerprint) &&
     sha256(plan.run_fingerprint) && typeof manifest.schema_version === "string" && sha256(manifest.content_hash) &&
     count(manifest.entry_count) && manifest.entry_count > 0 && plan.document_manifest_hash === manifest.content_hash;
+}
+
+function isIndexReadiness(value: unknown): value is IndexReadinessResponse {
+  if (!isRecord(value)) return false;
+  if (!["report_match", "mismatch", "unavailable", "indeterminate"].includes(String(value.status)) ||
+    (value.workflow !== "evaluation" && value.workflow !== "ablation") ||
+    typeof value.reason_code !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(value.reason_code) ||
+    !sha256(value.document_manifest_hash) || !sha256(value.expected_index_fingerprint) ||
+    !isNullableString(value.build_id) || !isNullableString(value.report_status) ||
+    !(value.reported_text_records === null || count(value.reported_text_records)) ||
+    !(value.reported_image_records === null || count(value.reported_image_records)) ||
+    value.observed_text_records !== null || value.observed_image_records !== null ||
+    value.store_checked !== false || value.check_level !== "report") return false;
+  return value.status === "report_match"
+    ? value.reported_text_records !== null && value.reported_image_records !== null && (value.report_status === "completed" || value.report_status === "completed_with_warnings")
+    : value.reported_text_records === null && value.reported_image_records === null && value.report_status === null && value.build_id === null;
 }
 
 function isModelStatus(value: unknown): value is ModelComponentStatus {
@@ -220,6 +238,12 @@ export class WorkbenchApiClient {
   async prepareRunPlan(input: RunPlanPreparationRequest): Promise<RunPlanPreparationResponse> {
     const value = await this.request("/api/v1/run-plans", { method: "POST", body: input });
     if (!isPreparedPlan(value) || value.manifest.content_hash !== input.expected_manifest_hash.toLowerCase()) malformed();
+    return value;
+  }
+
+  async checkIndexReadiness(input: IndexReadinessRequest): Promise<IndexReadinessResponse> {
+    const value = await this.request("/api/v1/index/readiness", { method: "POST", body: input });
+    if (!isIndexReadiness(value) || value.workflow !== input.workflow || value.document_manifest_hash !== input.expected_manifest_hash.toLowerCase()) malformed();
     return value;
   }
 

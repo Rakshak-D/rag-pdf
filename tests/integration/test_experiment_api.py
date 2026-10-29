@@ -122,6 +122,7 @@ def test_all_api_routes_authenticate_before_parsing_or_execution(tmp_path: Path)
         ("POST", "/api/v1/jobs/123e4567-e89b-12d3-a456-426614174000/cancel"),
         ("GET", "/api/v1/runtime/models"),
         ("GET", "/api/v1/documents/manifest"),
+        ("POST", "/api/v1/index/readiness"),
         ("POST", "/api/v1/run-plans"),
         ("GET", "/api/v1/jobs"),
         ("GET", "/api/v1/jobs/123e4567-e89b-12d3-a456-426614174000"),

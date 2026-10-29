@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+from dataclasses import asdict
 from typing import Any
 
 from starlette.concurrency import run_in_threadpool
@@ -41,11 +42,14 @@ from backend.services.job_manager import (
     JobNotFoundError,
     JobStateError,
 )
+from backend.services.index_readiness import IndexReadinessInputError
 
 from .schemas import (
     AblationRequest,
     EvaluationRequest,
     ManifestResponse,
+    IndexReadinessRequest,
+    IndexReadinessResponse,
     RunPlanPreparationRequest,
     RunPlanPreparationResponse,
     RunPlanRequest,
@@ -234,6 +238,34 @@ async def inspect_document_manifest(request: Request) -> JSONResponse:
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def index_readiness(request: Request) -> JSONResponse:
+    try:
+        payload = await _read_json(request, request.app.state.max_request_body_bytes)
+        model = _model(IndexReadinessRequest, payload)
+        if set(model.resolved_config) != set(ResolvedRunConfig.model_fields):
+            raise ApiRequestError("configuration_invalid", 400)
+        try:
+            config = ResolvedRunConfig.model_validate(model.resolved_config)
+        except Exception as exc:
+            raise ApiRequestError("configuration_invalid", 400) from exc
+        service = getattr(request.app.state, "index_readiness_service", None)
+        if service is None:
+            raise ApiRequestError("index_readiness_unconfigured", 503)
+        try:
+            result = await run_in_threadpool(service.check, config, model.expected_manifest_hash, model.workflow)
+        except IndexReadinessInputError as exc:
+            raise ApiRequestError(exc.code, 409 if exc.code in {"manifest_empty", "manifest_changed"} else 400) from exc
+        except ManifestSourceChangedError as exc:
+            raise ApiRequestError("manifest_source_changed", 409) from exc
+        except ManifestValidationError as exc:
+            raise ApiRequestError("manifest_invalid", 409) from exc
+        except OSError as exc:
+            raise ApiRequestError("manifest_source_unavailable", 503) from exc
+        return JSONResponse(IndexReadinessResponse.model_validate(asdict(result)).model_dump(mode="json"))
     except Exception as exc:
         return _map_error(exc)
 
@@ -500,6 +532,7 @@ def build_routes(service: ExperimentService, *, max_request_body_bytes: int, job
     routes = [
         Route("/health", health, methods=["GET"]),
         Route("/api/v1/documents/manifest", inspect_document_manifest, methods=["GET"]),
+        Route("/api/v1/index/readiness", index_readiness, methods=["POST"]),
         Route("/api/v1/run-plans", prepare_run_plan, methods=["POST"]),
         Route("/api/v1/evaluations", submit_evaluation, methods=["POST"]),
         Route("/api/v1/ablations", submit_ablation, methods=["POST"]),

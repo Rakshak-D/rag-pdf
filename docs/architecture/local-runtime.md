@@ -23,6 +23,12 @@ Set these environment variables before launch. All filesystem paths must be abso
 
 The data root, artifact store, catalog file, jobs file, and index root must be pairwise disjoint. Symlinked path components are rejected. The build report is intentionally inside the index root and must have the required build-artifact layout. Place runtime state in the ignored `/local-runtime/` directory (for example, separate `artifacts/`, `state/`, and `index/` siblings) and keep source PDFs elsewhere. Never put private credentials, user PDFs, model caches, or generated results in tracked project directories.
 
+The authenticated index readiness operation inspects only this configured
+build report and current source manifest. It does not open Chroma or verify
+persisted collections. A matching report is a point-in-time compatibility
+observation; job execution still validates its own resources. The configured
+build report remains required at startup, and this does not add index discovery.
+
 Example PowerShell configuration (replace paths with existing local locations; do not put a real token in a script committed to source control):
 
 ```powershell

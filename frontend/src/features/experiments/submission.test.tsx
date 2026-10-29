@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -293,6 +293,56 @@ describe("experiment submission workflows", () => {
     expect(screen.getByRole("button", { name: "Submit evaluation job" })).toBeDisabled();
   });
 
+  it("checks the configured report explicitly without claiming stored collections are verified", async () => {
+    const response = { status: "report_match", reason_code: "report_matches", workflow: "evaluation", document_manifest_hash: "a".repeat(64), expected_index_fingerprint: "c".repeat(64), build_id: null, report_status: "completed", reported_text_records: 3, reported_image_records: 0, observed_text_records: null, observed_image_records: null, store_checked: false, check_level: "report" };
+    const fetcher = fetchWith((path) => path === "/api/v1/index/readiness" ? jsonResponse(response) : jsonResponse({ jobs: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user);
+    expect(screen.getByRole("button", { name: "Check configured index" })).toBeDisabled();
+    await prepareEvaluation(user);
+    expect(fetcher.mock.calls.some(([path]) => String(path) === "/api/v1/index/readiness")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Check configured index" }));
+    expect(await screen.findByText(/Report compatibility:/)).toHaveTextContent("report_match");
+    expect(screen.getByText(/store checked: no/)).toBeInTheDocument();
+    expect(fetcher.mock.calls.some(([path]) => String(path) === "/api/v1/jobs/evaluations")).toBe(false);
+    fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: baseConfig + " " } });
+    expect(screen.queryByText(/Report compatibility:/)).not.toBeInTheDocument();
+  });
+
+  it("checks the ablation base configuration using the inspected manifest", async () => {
+    let request: unknown;
+    const response = { status: "report_match", reason_code: "report_matches", workflow: "ablation", document_manifest_hash: "a".repeat(64), expected_index_fingerprint: "c".repeat(64), build_id: null, report_status: "completed", reported_text_records: 2, reported_image_records: 1, observed_text_records: null, observed_image_records: null, store_checked: false, check_level: "report" };
+    const fetcher = fetchWith((path, init) => { if (path === "/api/v1/index/readiness") { request = JSON.parse(String(init?.body)); return jsonResponse(response); } return jsonResponse({ jobs: [] }); });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup(); mount("/experiments/ablation"); await connect(user);
+    fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: baseConfig } });
+    await user.click(screen.getByRole("button", { name: "Inspect documents" })); await screen.findByText(/Documents: 1/);
+    await user.click(screen.getByRole("button", { name: "Check configured index" }));
+    expect(await screen.findByText(/Report compatibility:/)).toHaveTextContent("report_match");
+    expect(request).toEqual({ workflow: "ablation", resolved_config: JSON.parse(baseConfig), expected_manifest_hash: "a".repeat(64) });
+    expect(fetcher.mock.calls.some(([path]) => String(path) === "/api/v1/jobs/ablations")).toBe(false);
+  });
+
+  it("rejects a report check for a different prepared index fingerprint", async () => {
+    const response = { status: "report_match", reason_code: "report_matches", workflow: "evaluation", document_manifest_hash: "a".repeat(64), expected_index_fingerprint: "e".repeat(64), build_id: null, report_status: "completed", reported_text_records: 2, reported_image_records: 1, observed_text_records: null, observed_image_records: null, store_checked: false, check_level: "report" };
+    vi.stubGlobal("fetch", fetchWith((path) => path === "/api/v1/index/readiness" ? jsonResponse(response) : jsonResponse({ jobs: [] })));
+    const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user); await prepareEvaluation(user);
+    await user.click(screen.getByRole("button", { name: "Check configured index" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("unexpected response");
+    expect(screen.queryByText(/Report compatibility:/)).not.toBeInTheDocument();
+  });
+
+  it("does not restore an old report check after configuration changes", async () => {
+    let finish: ((response: Response) => void) | undefined;
+    const fetcher = fetchWith((path) => path === "/api/v1/index/readiness" ? new Promise<Response>((resolve) => { finish = resolve; }) : jsonResponse({ jobs: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user); await prepareEvaluation(user);
+    await user.click(screen.getByRole("button", { name: "Check configured index" })); await waitFor(() => expect(finish).toBeDefined());
+    fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: baseConfig + " " } });
+    await act(async () => { finish?.(jsonResponse({ status: "report_match", reason_code: "report_matches", workflow: "evaluation", document_manifest_hash: "a".repeat(64), expected_index_fingerprint: "c".repeat(64), build_id: null, report_status: "completed", reported_text_records: 2, reported_image_records: 1, observed_text_records: null, observed_image_records: null, store_checked: false, check_level: "report" })); });
+    expect(screen.queryByText(/Report compatibility:/)).not.toBeInTheDocument();
+  });
+
   it("clears a stale manifest after the backend reports a change", async () => {
     const manifest = { schema_version: "1", content_hash: "a".repeat(64), entry_count: 1, empty: false, entries: [{ relative_path: "paper.pdf", size_bytes: 10, sha256: "b".repeat(64), document_id: "doc_" + "c".repeat(64) }] };
     const fetcher = fetchWith((path) => path === "/api/v1/documents/manifest" ? jsonResponse(manifest) : path === "/api/v1/run-plans" ? jsonResponse({ error: { code: "manifest_changed" } }, 409) : jsonResponse({ jobs: [] }), true);
@@ -347,18 +397,22 @@ describe("experiment submission workflows", () => {
     expect(screen.getByRole("button", { name: "Submit evaluation job" })).toBeDisabled();
   });
 
-  it("invalidates the manifest when an in-flight preparation reports changes after a configuration edit", async () => {
+  it("ignores an old manifest-changed error after a configuration edit and newer inspection", async () => {
     let finish: ((response: Response) => void) | undefined;
     const manifest = { schema_version: "1", content_hash: "a".repeat(64), entry_count: 1, empty: false, entries: [{ relative_path: "paper.pdf", size_bytes: 10, sha256: "b".repeat(64), document_id: "doc_" + "c".repeat(64) }] };
-    vi.stubGlobal("fetch", fetchWith((path) => path === "/api/v1/documents/manifest" ? jsonResponse(manifest) : path === "/api/v1/run-plans" ? new Promise<Response>((resolve) => { finish = resolve; }) : jsonResponse({ jobs: [] }), true));
+    let inspections = 0;
+    vi.stubGlobal("fetch", fetchWith((path) => path === "/api/v1/documents/manifest" ? jsonResponse({ ...manifest, content_hash: (++inspections === 1 ? "a" : "d").repeat(64) }) : path === "/api/v1/run-plans" ? new Promise<Response>((resolve) => { finish = resolve; }) : jsonResponse({ jobs: [] }), true));
     const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user);
     fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: baseConfig } });
     await user.click(screen.getByRole("button", { name: "Inspect documents" })); await screen.findByText(/Documents: 1/);
     await user.click(screen.getByRole("button", { name: "Prepare RunPlan" })); await waitFor(() => expect(finish).toBeDefined());
     fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: baseConfig + " " } });
+    await user.click(screen.getByRole("button", { name: "Inspect documents" }));
+    await screen.findByText("d".repeat(64));
     finish?.(jsonResponse({ error: { code: "manifest_changed" } }, 409));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Source documents changed");
-    expect(screen.queryByText(/Documents: 1/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Prepare RunPlan" })).toBeEnabled());
+    expect(screen.getByText("d".repeat(64))).toBeInTheDocument();
+    expect(screen.queryByText("Source documents changed. Inspect documents again, then prepare a new RunPlan.")).not.toBeInTheDocument();
   });
 
   it("does not restore a pending inspection after leaving and returning", async () => {

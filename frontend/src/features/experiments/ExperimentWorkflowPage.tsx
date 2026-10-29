@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiError, type WorkbenchApiClient } from "../../api/client";
-import type { AblationRequest, BenchmarkCaseInput, BenchmarkSuiteInput, DocumentManifest, ExperimentJobRecord, RunPlanInput } from "../../api/types";
+import type { AblationRequest, BenchmarkCaseInput, BenchmarkSuiteInput, DocumentManifest, ExperimentJobRecord, IndexReadinessResponse, RunPlanInput } from "../../api/types";
 import { apiErrorText } from "../../components/apiErrorText";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeading } from "../shared";
@@ -192,6 +192,9 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
   const [configText, setConfigText] = useState("");
   const [manifest, setManifest] = useState<DocumentManifest | null>(null);
   const [plan, setPlan] = useState<RunPlanInput | null>(null);
+  const [readiness, setReadiness] = useState<IndexReadinessResponse | null>(null);
+  const [checkingIndex, setCheckingIndex] = useState(false);
+  const [readinessError, setReadinessError] = useState<string | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [preparationError, setPreparationError] = useState<string | null>(null);
@@ -203,6 +206,8 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
   const inspectLock = useRef(false);
   const prepareLock = useRef(false);
   const prepareSerial = useRef(0);
+  const readinessSerial = useRef(0);
+  const readinessLock = useRef(false);
   const generation = useRef(0);
   const mounted = useRef(false);
   const connectedRef = useRef(connected);
@@ -216,9 +221,12 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
   useEffect(() => {
     generation.current += 1;
     prepareSerial.current += 1;
+    readinessSerial.current += 1;
+    readinessLock.current = false;
     submitLock.current = false; inspectLock.current = false; prepareLock.current = false;
     setSuite(blankSuite()); setConfigText(""); setManifest(null); setPlan(null);
     setInspecting(false); setPreparing(false); setSubmitting(false);
+    setReadiness(null); setReadinessError(null); setCheckingIndex(false);
     setShowValidation(false); setSubmitError(null); setPreparationError(null); setAcceptedJob(null);
     return () => { generation.current += 1; };
   }, [client, connected]);
@@ -233,7 +241,7 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
 
   async function inspect() {
     if (!connected || inspectLock.current) return;
-    inspectLock.current = true; setInspecting(true); setPreparationError(null); setPlan(null); setManifest(null);
+    inspectLock.current = true; setInspecting(true); setPreparationError(null); setPlan(null); setManifest(null); setReadiness(null); setReadinessError(null); readinessSerial.current += 1; readinessLock.current = false; setCheckingIndex(false);
     const id = ++generation.current;
     try {
       const result = await client.inspectDocuments();
@@ -247,7 +255,7 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
 
   async function prepare() {
     if (!connected || !manifest || manifest.empty || !baseConfig.value || configErrors.length || prepareLock.current) return;
-    prepareLock.current = true; setPreparing(true); setPlan(null); setPreparationError(null);
+    prepareLock.current = true; setPreparing(true); setPlan(null); setPreparationError(null); setReadiness(null); setReadinessError(null); readinessSerial.current += 1; readinessLock.current = false; setCheckingIndex(false);
     const id = ++generation.current;
     const requestId = ++prepareSerial.current;
     try {
@@ -255,11 +263,30 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
       if (result.manifest.entry_count !== manifest.entry_count || result.manifest.schema_version !== manifest.schema_version) throw new ApiError("malformed_response", "malformed_response");
       if (mounted.current && id === generation.current) setPlan(result.run_plan);
     } catch (error) {
-      if (mounted.current && requestId === prepareSerial.current && error instanceof ApiError && error.code === "manifest_changed") {
+      if (mounted.current && requestId === prepareSerial.current && id === generation.current && error instanceof ApiError && error.code === "manifest_changed") {
         setManifest(null); setPlan(null); setPreparationError("Source documents changed. Inspect documents again, then prepare a new RunPlan.");
       } else if (mounted.current && id === generation.current) setPreparationError(apiErrorText(error));
     } finally {
       if (mounted.current && requestId === prepareSerial.current) { prepareLock.current = false; setPreparing(false); }
+    }
+  }
+
+  async function checkIndex() {
+    if (!connected || !manifest || manifest.empty || !baseConfig.value || configErrors.length || (isEvaluation && !plan) || readinessLock.current) return;
+    const id = generation.current;
+    const serial = ++readinessSerial.current;
+    readinessLock.current = true; setCheckingIndex(true); setReadiness(null); setReadinessError(null);
+    try {
+      const result = await client.checkIndexReadiness({ workflow: isEvaluation ? "evaluation" : "ablation", resolved_config: baseConfig.value, expected_manifest_hash: manifest.content_hash });
+      if (isEvaluation && result.expected_index_fingerprint !== plan?.index_fingerprint) throw new ApiError("malformed_response", "malformed_response");
+      if (mounted.current && id === generation.current && serial === readinessSerial.current) setReadiness(result);
+    } catch (error) {
+      if (mounted.current && id === generation.current && serial === readinessSerial.current) {
+        if (error instanceof ApiError && error.code === "manifest_changed") { setManifest(null); setPlan(null); }
+        setReadinessError(apiErrorText(error));
+      }
+    } finally {
+      if (mounted.current && serial === readinessSerial.current) { readinessLock.current = false; setCheckingIndex(false); }
     }
   }
 
@@ -313,18 +340,26 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
         <section className="panel" aria-labelledby="documents-heading">
           <h2 id="documents-heading">1. Inspect source documents</h2>
           <p className="panel__note">Inspection reads the configured PDF source. Index availability remains unknown.</p>
-          <button type="button" className="button button--quiet" onClick={() => void inspect()} disabled={inspecting || preparing}>{inspecting ? "Inspecting…" : "Inspect documents"}</button>
+          <button type="button" className="button button--quiet" onClick={() => void inspect()} disabled={inspecting}>{inspecting ? "Inspecting…" : "Inspect documents"}</button>
           {manifest && <div role="status"><p>Manifest schema: {manifest.schema_version} · Documents: {manifest.entry_count}</p><p>Manifest hash: <code>{manifest.content_hash}</code></p>{manifest.empty ? <p>No PDF documents found. Add documents before preparing a plan.</p> : <ul>{manifest.entries.map((entry) => <li key={entry.document_id}>{entry.relative_path} — {entry.size_bytes} bytes</li>)}</ul>}</div>}
         </section>
         <section className="panel" aria-labelledby="config-heading">
           <h2 id="config-heading">2. Resolved configuration</h2>
           <p className="panel__note">Supply the complete resolved configuration from the project configuration workflow. The backend validates its full schema and safety policy.</p>
           <label className="form-field">Resolved base configuration JSON object
-            <textarea value={configText} onChange={(event) => { generation.current += 1; inspectLock.current = false; setInspecting(false); setPlan(null); setConfigText(event.target.value); setShowValidation(true); setPreparationError(null); setSubmitError(null); }} rows={11} spellCheck={false} />
+            <textarea value={configText} onChange={(event) => { generation.current += 1; readinessSerial.current += 1; readinessLock.current = false; setReadiness(null); setReadinessError(null); setCheckingIndex(false); inspectLock.current = false; setInspecting(false); setPlan(null); setConfigText(event.target.value); setShowValidation(true); setPreparationError(null); setSubmitError(null); }} rows={11} spellCheck={false} />
           </label>
           {isEvaluation && <><button type="button" className="button button--quiet" onClick={() => void prepare()} disabled={!manifest || manifest.empty || !baseConfig.value || configErrors.length > 0 || preparing || inspecting}>{preparing ? "Preparing…" : "Prepare RunPlan"}</button>
             {plan && <div role="status"><h3>RunPlan prepared</h3><p>Schema: {plan.plan_schema_version}</p><p>Manifest: <code>{plan.document_manifest_hash}</code></p><p>Configuration snapshot: <code>{plan.configuration_snapshot_hash}</code></p><p>Index fingerprint: <code>{plan.index_fingerprint}</code></p><p>Run fingerprint: <code>{plan.run_fingerprint}</code></p></div>}</>}
           {preparationError && <div className="result-error" role="alert">{preparationError}</div>}
+        </section>
+
+        <section className="panel" aria-labelledby="index-heading">
+          <h2 id="index-heading">Check configured index report</h2>
+          <p>The configured build report can be checked. Persisted vector collections are not verified.</p>
+          <button type="button" className="button button--quiet" onClick={() => void checkIndex()} disabled={!manifest || manifest.empty || !baseConfig.value || configErrors.length > 0 || (isEvaluation && !plan) || checkingIndex || inspecting || preparing}>{checkingIndex ? "Checking…" : "Check configured index"}</button>
+          {readiness && <div role="status"><p>Report compatibility: <strong>{readiness.status}</strong> ({readiness.reason_code})</p><p>Verification level: {readiness.check_level}; store checked: no.</p><p>Manifest: <code>{readiness.document_manifest_hash}</code></p><p>Expected index fingerprint: <code>{readiness.expected_index_fingerprint}</code></p><p>Reported text records: {readiness.reported_text_records ?? "unavailable"}; image records: {readiness.reported_image_records ?? "unavailable"}.</p><p>{readiness.status === "report_match" ? "The report matches. Execution will check the stored index separately." : "Check the configured build report and source before running."}</p></div>}
+          {readinessError && <div className="result-error" role="alert">{readinessError}</div>}
         </section>
 
         <section className="panel" aria-labelledby="suite-heading">
