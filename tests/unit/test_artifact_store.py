@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import traceback
+from time import monotonic
 from pathlib import Path
 
 import pytest
@@ -81,50 +83,136 @@ def test_size_limit_is_validated_before_publication(tmp_path):
 
 
 def _publish_concurrently(monkeypatch, publish, count=4):
-    original_link = artifact_store_module.os.link
+    original_os = artifact_store_module.os
+    original_link = original_os.link
     start = threading.Barrier(count)
-    all_staged = threading.Event()
+    gate_release = threading.Event()
+    peer_failed = threading.Event()
     lock = threading.Lock()
     arrivals = 0
     results = [None] * count
     errors = [None] * count
+    original_errors = [None] * count
+    first_failure = [None]
+    checkpoints = ["created"] * count
+    staged_names = []
+    started = monotonic()
 
     def coordinated_link(source, destination, *args, **kwargs):
         nonlocal arrivals
+        index = int(threading.current_thread().name.rsplit("-", 1)[1])
         with lock:
             arrivals += 1
+            staged_names.append(Path(source))
+            checkpoints[index] = "final_link"
             if arrivals == count:
-                all_staged.set()
-        if not all_staged.wait(10):
-            raise AssertionError("concurrent publishers did not reach the final link")
+                gate_release.set()
+        if not gate_release.wait(10):
+            raise TimeoutError("all publishers did not reach the final link boundary")
         return original_link(source, destination, *args, **kwargs)
 
-    monkeypatch.setattr(artifact_store_module.os, "link", coordinated_link)
+    class OsProxy:
+        """Redirect only this module's link call; leave process-wide os untouched."""
+        link = staticmethod(coordinated_link)
+
+        def __getattr__(self, name):
+            return getattr(original_os, name)
+
+    monkeypatch.setattr(artifact_store_module, "os", OsProxy())
 
     def run(index):
         try:
+            checkpoints[index] = "started"
             start.wait(timeout=5)
+            checkpoints[index] = "start_barrier_passed"
+            checkpoints[index] = "publication_entered"
             results[index] = publish()
+            checkpoints[index] = "completed"
         except BaseException as exc:
-            errors[index] = exc
+            failure = {
+                "index": index,
+                "thread": threading.current_thread().name,
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(),
+                "cause": repr(exc.__cause__) if exc.__cause__ is not None else None,
+                "context": repr(exc.__context__) if exc.__context__ is not None else None,
+                "checkpoint": checkpoints[index],
+                "elapsed": monotonic() - started,
+            }
+            with lock:
+                errors[index] = failure
+                original_errors[index] = exc
+                if first_failure[0] is None:
+                    first_failure[0] = index
+                checkpoints[index] = f"raised_after_{checkpoints[index]}"
+                failure["link_arrivals"] = arrivals
+            peer_failed.set()
+            gate_release.set()
 
     threads = [threading.Thread(target=run, args=(index,), name=f"artifact-publisher-{index}") for index in range(count)]
+    timed_out = False
     try:
         for thread in threads:
             thread.start()
-        assert all_staged.wait(10), "concurrent publishers did not reach the final link"
+        timed_out = not gate_release.wait(10) and not peer_failed.is_set()
     finally:
-        # The link gate releases automatically when every call arrives; this
-        # bounded wait prevents a broken assertion from leaking worker threads.
-        all_staged.set()
+        gate_release.set()
         for thread in threads:
             if thread.ident is not None:
-                thread.join(timeout=5)
-        monkeypatch.setattr(artifact_store_module.os, "link", original_link)
+                thread.join(timeout=10)
+        monkeypatch.setattr(artifact_store_module, "os", original_os)
+    if first_failure[0] is not None:
+        first_index = first_failure[0]
+        first_error = errors[first_index]
+        raise AssertionError(
+            f"publisher failure: {first_error}; arrivals={arrivals}/{count}; "
+            f"checkpoints={checkpoints}; alive={[thread.is_alive() for thread in threads]}; "
+            f"temporary_files={[path.name for path in staged_names if path.exists()]}; "
+            f"elapsed={monotonic() - started:.3f}s"
+        ) from original_errors[first_index]
+    if timed_out:
+        raise AssertionError(
+            f"publishers at final link={arrivals}/{count}; checkpoints={checkpoints}; "
+            f"alive={[thread.is_alive() for thread in threads]}; "
+            f"errors={errors}; "
+            f"staged_files={[path.name for path in staged_names if path.exists()]}; "
+            f"elapsed={monotonic() - started:.1f}s"
+        )
     assert all(not thread.is_alive() for thread in threads), "artifact publication thread did not terminate"
     assert errors == [None] * count
     assert all(item == results[0] for item in results)
     return results[0]
+
+
+def test_concurrent_publication_helper_preserves_first_prelink_exception(tmp_path, monkeypatch):
+    base = ResolvedRunConfig.from_legacy(Config(reset_collections_on_start=False))
+    plan = build_ablation_plan(base, "d" * 64)
+    result = _failed_ablation(plan)
+    store = ExperimentArtifactStore(tmp_path / "artifacts")
+    original_os = artifact_store_module.os
+    original_serialize = artifact_store_module.serialize_ablation_result
+
+    def fail_selected(result_value):
+        if threading.current_thread().name == "artifact-publisher-2":
+            raise ArtifactIntegrityError("controlled pre-link diagnostic fault")
+        return original_serialize(result_value)
+
+    monkeypatch.setattr(artifact_store_module, "serialize_ablation_result", fail_selected)
+    with pytest.raises(AssertionError, match="publisher failure") as caught:
+        _publish_concurrently(
+            monkeypatch,
+            lambda: store.save_ablation_result(result, ablation_plan=plan),
+        )
+    diagnostic = str(caught.value)
+    assert "artifact-publisher-2" in diagnostic
+    assert "ArtifactIntegrityError" in diagnostic
+    assert "controlled pre-link diagnostic fault" in diagnostic
+    assert "Traceback (most recent call last)" in diagnostic
+    assert "arrivals=" in diagnostic and "alive=[False, False, False, False]" in diagnostic
+    assert isinstance(caught.value.__cause__, ArtifactIntegrityError)
+    assert artifact_store_module.os is original_os
+    assert not list((tmp_path / "artifacts").rglob(".artifact-*.tmp"))
 
 
 def test_concurrent_evaluation_saves_publish_one_complete_canonical_artifact(tmp_path, monkeypatch):

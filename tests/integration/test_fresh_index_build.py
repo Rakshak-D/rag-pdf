@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
+from queue import Empty
 from threading import Event
+from time import monotonic
 
 import pytest
 
@@ -186,17 +188,41 @@ def test_existing_store_open_cannot_bypass_a_legacy_builder_lease(tmp_path, monk
         assert pending.result(timeout=20).status == "failed"
 
 
-def _hold_builder(plan_json, source, storage, policy, entered, release):
+def _hold_builder(plan_json, source, storage, policy, entered, release, checkpoints):
+    checkpoints.put("child_entry")
     import backend.engine.index_builder as module
+    checkpoints.put("builder_imported")
+    plan = RunPlan.from_serializable_json(plan_json)
+    checkpoints.put("plan_reconstructed")
+    original_acquire = module.WriterLease.acquire
+    original_manifest = module.build_document_manifest
+
+    def acquired(*args, **kwargs):
+        lease = original_acquire(*args, **kwargs)
+        checkpoints.put("writer_lease_acquired")
+        return lease
+
+    def inspected(*args, **kwargs):
+        manifest = original_manifest(*args, **kwargs)
+        checkpoints.put("source_manifest_checked")
+        return manifest
+
+    module.WriterLease.acquire = acquired
+    module.build_document_manifest = inspected
 
     def blocked(*_args, **_kwargs):
+        checkpoints.put("extractor_entered")
         entered.set()
         if not release.wait(20):
             raise RuntimeError("test timeout")
         raise RuntimeError("controlled failure")
 
     module.extract_pdfs = blocked
-    result = module.build_index(RunPlan.from_serializable_json(plan_json), source, storage, creation_policy=policy)
+    try:
+        result = module.build_index(plan, source, storage, creation_policy=policy)
+    except BaseException as exc:
+        checkpoints.put(f"child_exception:{type(exc).__name__}")
+        raise
     if result.status != "failed":
         raise AssertionError("expected controlled failure")
 
@@ -220,7 +246,9 @@ def test_process_termination_during_fresh_store_keeps_index_unavailable(tmp_path
     process = context.Process(target=_hold_fresh_store, args=(plan.to_serializable_json(), storage, ready, release))
     process.start()
     try:
-        assert ready.wait(20), "child did not create the fresh store"
+        # A spawned Windows process may need longer to initialize the native
+        # Chroma client; the event still proves readiness without a timing race.
+        assert ready.wait(60), "child did not create the fresh store"
         process.terminate()
         process.join(10)
         assert not process.is_alive()
@@ -244,10 +272,23 @@ def test_builder_ownership_excludes_other_processes(tmp_path, held_policy, compe
     storage = tmp_path / "owned"
     context = multiprocessing.get_context("spawn")
     entered, release = context.Event(), context.Event()
-    process = context.Process(target=_hold_builder, args=(plan.to_serializable_json(), source, storage, held_policy, entered, release))
+    checkpoints = context.Queue()
+    process = context.Process(target=_hold_builder, args=(plan.to_serializable_json(), source, storage, held_policy, entered, release, checkpoints))
+    started = monotonic()
     process.start()
     try:
-        assert entered.wait(20), "child did not enter the build"
+        if not entered.wait(20):
+            observed = []
+            while True:
+                try:
+                    observed.append(checkpoints.get_nowait())
+                except Empty:
+                    break
+            raise AssertionError(
+                f"child did not enter the build; checkpoints={observed}; "
+                f"alive={process.is_alive()}; exitcode={process.exitcode}; "
+                f"elapsed={monotonic() - started:.1f}s"
+            )
         with pytest.raises(WriterLeaseError, match="writer_lease_busy"):
             build_index(plan, source, storage, creation_policy=competing_policy)
         with pytest.raises(WriterLeaseError, match="writer_lease_busy"):
@@ -258,4 +299,6 @@ def test_builder_ownership_excludes_other_processes(tmp_path, held_policy, compe
         if process.is_alive():
             process.terminate()
             process.join(10)
+        checkpoints.close()
+        checkpoints.join_thread()
     assert process.exitcode == 0
