@@ -4,6 +4,9 @@ import type {
   AblationSubmissionResponse,
   ApiErrorEnvelope,
   ArtifactListFilters,
+  BootstrapInventoryCandidate,
+  BootstrapInventoryPage,
+  BootstrapInventoryRequest,
   BootstrapJobEnvelope,
   BootstrapJobRecord,
   BootstrapJobRequest,
@@ -396,6 +399,79 @@ function isBootstrapPreview(value: unknown): value is BootstrapPreviewResponse {
       (!value.existing_index && value.reason_code === "fresh_build_available"));
 }
 
+const inventoryStates = ["report_match", "mismatch", "failed", "incomplete", "invalid", "unavailable"] as const;
+const inventoryCandidateKeys = [
+  "candidate_id", "build_id", "report_reference", "compatibility", "reason_code",
+  "expected_index_fingerprint", "document_manifest_hash", "reported_index_fingerprint",
+  "reported_document_manifest_hash", "report_status", "reported_text_records",
+  "reported_image_records", "check_level", "store_checked",
+] as const;
+const inventoryPageKeys = [
+  "expected_index_fingerprint", "document_manifest_hash", "candidates", "total_candidates",
+  "offset", "limit", "complete", "reason_code", "check_level", "store_checked",
+] as const;
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function isInventoryCandidate(value: unknown, expectedFingerprint: string, manifestHash: string): value is BootstrapInventoryCandidate {
+  if (!isRecord(value) || !hasExactKeys(value, inventoryCandidateKeys) ||
+    typeof value.candidate_id !== "string" || !/^(?:[0-9a-f]{32}|entry-[0-9a-f]{16})$/.test(value.candidate_id) ||
+    !isNullableString(value.build_id) || (value.build_id !== null && !/^[0-9a-f]{32}$/.test(value.build_id)) ||
+    !isNullableString(value.report_reference) ||
+    (value.report_reference !== null && !/^build-artifacts\/[0-9a-f]{32}\/build-report\.json$/.test(value.report_reference)) ||
+    !inventoryStates.includes(value.compatibility as typeof inventoryStates[number]) ||
+    typeof value.reason_code !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(value.reason_code) ||
+    typeof value.expected_index_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(value.expected_index_fingerprint) ||
+    typeof value.document_manifest_hash !== "string" || !/^[0-9a-f]{64}$/.test(value.document_manifest_hash) ||
+    !isNullableString(value.reported_index_fingerprint) || (value.reported_index_fingerprint !== null && !/^[0-9a-f]{64}$/.test(value.reported_index_fingerprint)) ||
+    !isNullableString(value.reported_document_manifest_hash) || (value.reported_document_manifest_hash !== null && !/^[0-9a-f]{64}$/.test(value.reported_document_manifest_hash)) ||
+    !(value.report_status === null || value.report_status === "completed" || value.report_status === "completed_with_warnings" || value.report_status === "failed") ||
+    !(value.reported_text_records === null || count(value.reported_text_records)) ||
+    !(value.reported_image_records === null || count(value.reported_image_records)) ||
+    value.check_level !== "report" || value.store_checked !== false ||
+    value.expected_index_fingerprint !== expectedFingerprint || value.document_manifest_hash !== manifestHash) return false;
+
+  if (value.build_id === null) {
+    if (value.report_reference !== null || !/^entry-[0-9a-f]{16}$/.test(value.candidate_id)) return false;
+  } else if (value.candidate_id !== value.build_id || value.report_reference !== `build-artifacts/${value.build_id}/build-report.json`) return false;
+
+  if (value.compatibility === "report_match") {
+    return value.reported_index_fingerprint === expectedFingerprint &&
+      value.reported_document_manifest_hash === manifestHash &&
+      (value.report_status === "completed" || value.report_status === "completed_with_warnings") &&
+      value.reported_text_records !== null && value.reported_image_records !== null && value.build_id !== null;
+  }
+  return value.reported_text_records === null && value.reported_image_records === null &&
+    (value.compatibility !== "failed" || value.report_status === "failed");
+}
+
+function isInventoryPage(
+  value: unknown,
+  expectedManifestHash: string,
+  expectedIndexFingerprint: string,
+  limit: number,
+  offset: number,
+): value is BootstrapInventoryPage {
+  if (!isRecord(value) || !hasExactKeys(value, inventoryPageKeys) ||
+    typeof value.expected_index_fingerprint !== "string" || !/^[0-9a-f]{64}$/.test(value.expected_index_fingerprint) ||
+    typeof value.document_manifest_hash !== "string" || !/^[0-9a-f]{64}$/.test(value.document_manifest_hash) ||
+    !Array.isArray(value.candidates) || value.candidates.length > limit ||
+    !(value.total_candidates === null || (count(value.total_candidates) && value.total_candidates <= 512)) ||
+    value.offset !== offset || value.limit !== limit || typeof value.complete !== "boolean" ||
+    typeof value.reason_code !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(value.reason_code) ||
+    value.check_level !== "report" || value.store_checked !== false ||
+    value.document_manifest_hash !== expectedManifestHash || value.expected_index_fingerprint !== expectedIndexFingerprint ||
+    !value.candidates.every((candidate: unknown) => isInventoryCandidate(candidate, expectedIndexFingerprint, expectedManifestHash))) return false;
+
+  if (value.complete) {
+    return value.total_candidates !== null &&
+      value.candidates.length === Math.min(limit, Math.max(0, value.total_candidates - offset));
+  }
+  return value.total_candidates === null && value.candidates.length === 0;
+}
+
 function isBootstrapJob(value: unknown): value is BootstrapJobRecord {
   if (!isRecord(value) || !hasStrings(value, ["job_id", "client_request_id", "status", "manifest_hash", "index_fingerprint", "created_at"])) return false;
   if (typeof value.job_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.job_id) ||
@@ -475,6 +551,37 @@ export class BootstrapApiClient {
   async preview(input: BootstrapPreviewRequest): Promise<BootstrapPreviewResponse> {
     const value = await this.request("/v1/bootstrap/preview", { method: "POST", body: input });
     if (!isBootstrapPreview(value)) malformed();
+    return value;
+  }
+
+  async inspectIndexInventory(
+    input: BootstrapInventoryRequest,
+    expectedIndexFingerprint: string,
+  ): Promise<BootstrapInventoryPage> {
+    const limit = input.limit ?? 50;
+    const offset = input.offset ?? 0;
+    if (!/^[0-9a-f]{64}$/.test(input.expected_manifest_hash) || !/^[0-9a-f]{64}$/.test(expectedIndexFingerprint) ||
+      !Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0 || offset > 512) {
+      throw new ApiError("malformed_response", "inventory_request_invalid");
+    }
+    const body: BootstrapInventoryRequest = {
+      resolved_config: input.resolved_config,
+      expected_manifest_hash: input.expected_manifest_hash,
+      limit,
+      offset,
+    };
+    const value = await this.request("/v1/bootstrap/index-inventory", { method: "POST", body });
+    if (isRecord(value) && typeof value.document_manifest_hash === "string" &&
+      /^[0-9a-f]{64}$/.test(value.document_manifest_hash) && value.document_manifest_hash !== input.expected_manifest_hash) {
+      throw new ApiError("malformed_response", "inventory_identity_changed");
+    }
+    if (isRecord(value) && typeof value.expected_index_fingerprint === "string" &&
+      /^[0-9a-f]{64}$/.test(value.expected_index_fingerprint) && value.expected_index_fingerprint !== expectedIndexFingerprint) {
+      throw new ApiError("malformed_response", "inventory_identity_changed");
+    }
+    if (!isInventoryPage(value, input.expected_manifest_hash, expectedIndexFingerprint, limit, offset)) {
+      throw new ApiError("malformed_response", "inventory_response_invalid");
+    }
     return value;
   }
 

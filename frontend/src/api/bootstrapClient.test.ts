@@ -10,6 +10,22 @@ const job = {
   manifest_hash: hash, index_fingerprint: fingerprint, created_at: "2026-10-30T00:00:00+00:00", started_at: null,
   finished_at: null, error_code: null, build_id: null, report_reference: null, text_records: null, image_records: null, partial_persistence: null,
 };
+const reportCandidate = {
+  candidate_id: "d".repeat(32), build_id: "d".repeat(32),
+  report_reference: `build-artifacts/${"d".repeat(32)}/build-report.json`,
+  compatibility: "report_match", reason_code: "report_matches",
+  expected_index_fingerprint: fingerprint, document_manifest_hash: hash,
+  reported_index_fingerprint: fingerprint, reported_document_manifest_hash: hash,
+  report_status: "completed", reported_text_records: 14, reported_image_records: 2,
+  check_level: "report", store_checked: false,
+};
+function inventoryPage(candidate: Record<string, unknown> = reportCandidate) {
+  return {
+    expected_index_fingerprint: fingerprint, document_manifest_hash: hash,
+    candidates: [candidate], total_candidates: 1, offset: 0, limit: 25,
+    complete: true, reason_code: "inventory_complete", check_level: "report", store_checked: false,
+  };
+}
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -55,6 +71,77 @@ describe("BootstrapApiClient", () => {
     ]);
     const invalid = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json({ jobs: [{ ...submitted, report_reference: "C:\\private\\report.json" }], limit: 1, offset: 0 })) });
     await expect(invalid.listJobs({ limit: 1 })).rejects.toMatchObject({ kind: "malformed_response" });
+  });
+
+  it("posts inventory through the bootstrap proxy with the preview manifest and bounded page", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(inventoryPage()));
+    const client = new BootstrapApiClient({ token: "bootstrap-token", fetcher });
+    const request = { resolved_config: { pdf_dir: "trusted" }, expected_manifest_hash: hash, limit: 25, offset: 0 };
+    await expect(client.inspectIndexInventory(request, fingerprint)).resolves.toEqual(inventoryPage());
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("/bootstrap-api/v1/bootstrap/index-inventory");
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer bootstrap-token");
+    expect(JSON.parse(String(init?.body))).toEqual(request);
+    expect(String(url)).not.toContain("bootstrap-token");
+  });
+
+  it("accepts valid classifications, an empty complete page, and an explicitly incomplete page", async () => {
+    const states = [
+      reportCandidate,
+      { ...reportCandidate, compatibility: "mismatch", reason_code: "index_fingerprint_mismatch", reported_index_fingerprint: "c".repeat(64), reported_text_records: null, reported_image_records: null },
+      { ...reportCandidate, compatibility: "failed", reason_code: "build_failed", report_status: "failed", reported_text_records: null, reported_image_records: null },
+      { ...reportCandidate, compatibility: "incomplete", reason_code: "partial_persistence", reported_text_records: null, reported_image_records: null },
+      { ...reportCandidate, candidate_id: "entry-0123456789abcdef", build_id: null, report_reference: null, compatibility: "invalid", reason_code: "build_id_invalid", reported_index_fingerprint: null, reported_document_manifest_hash: null, report_status: null, reported_text_records: null, reported_image_records: null },
+      { ...reportCandidate, candidate_id: "entry-fedcba9876543210", build_id: null, report_reference: null, compatibility: "unavailable", reason_code: "report_unavailable", reported_index_fingerprint: null, reported_document_manifest_hash: null, report_status: null, reported_text_records: null, reported_image_records: null },
+    ];
+    for (const candidate of states) {
+      const client = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json(inventoryPage(candidate))) });
+      await expect(client.inspectIndexInventory({ resolved_config: {}, expected_manifest_hash: hash, limit: 25, offset: 0 }, fingerprint)).resolves.toMatchObject({ candidates: [candidate] });
+    }
+    const empty = { ...inventoryPage(), candidates: [], total_candidates: 0, reason_code: "no_build_reports" };
+    const emptyClient = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json(empty)) });
+    await expect(emptyClient.inspectIndexInventory({ resolved_config: {}, expected_manifest_hash: hash, limit: 25, offset: 0 }, fingerprint)).resolves.toEqual(empty);
+    const incomplete = { ...empty, total_candidates: null, complete: false, reason_code: "inventory_limit_exceeded" };
+    const incompleteClient = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json(incomplete)) });
+    await expect(incompleteClient.inspectIndexInventory({ resolved_config: {}, expected_manifest_hash: hash, limit: 25, offset: 0 }, fingerprint)).resolves.toEqual(incomplete);
+  });
+
+  it.each([
+    ["malformed manifest", { ...inventoryPage(), document_manifest_hash: "bad" }],
+    ["unexpected manifest", { ...inventoryPage(), document_manifest_hash: "e".repeat(64) }],
+    ["unexpected fingerprint", { ...inventoryPage(), expected_index_fingerprint: "e".repeat(64) }],
+    ["unknown classification", inventoryPage({ ...reportCandidate, compatibility: "ready" })],
+    ["unsafe report reference", inventoryPage({ ...reportCandidate, report_reference: "../../secret.json" })],
+    ["negative count", inventoryPage({ ...reportCandidate, reported_text_records: -1 })],
+    ["count on mismatch", inventoryPage({ ...reportCandidate, compatibility: "mismatch" })],
+    ["store checked", { ...inventoryPage(), store_checked: true }],
+    ["unsupported check level", { ...inventoryPage(), check_level: "store" }],
+    ["overlarge page", { ...inventoryPage(), candidates: [reportCandidate, reportCandidate], limit: 1 }],
+    ["incomplete with omitted total", { ...inventoryPage(), complete: false, reason_code: "inventory_limit_exceeded" }],
+  ])("rejects unsafe inventory response: %s", async (_name, response) => {
+    const client = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json(response)) });
+    await expect(client.inspectIndexInventory({ resolved_config: {}, expected_manifest_hash: hash, limit: 25, offset: 0 }, fingerprint)).rejects.toMatchObject({ kind: "malformed_response" });
+  });
+
+  it("does not call the experiment API and handles inventory auth, non-JSON, and network failures", async () => {
+    const paths: string[] = [];
+    const client = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      paths.push(String(input));
+      return Response.json(inventoryPage());
+    }) });
+    await client.inspectIndexInventory({ resolved_config: {}, expected_manifest_hash: hash, limit: 25, offset: 0 }, fingerprint);
+    expect(paths).toEqual(["/bootstrap-api/v1/bootstrap/index-inventory"]);
+
+    const unauthorized = new BootstrapApiClient({ token: "bad", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json({ error: { code: "authentication_required" } }, { status: 401 })) });
+    await expect(unauthorized.inspectIndexInventory({ resolved_config: {}, expected_manifest_hash: hash }, fingerprint)).rejects.toMatchObject({ status: 401 });
+    const html = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response("not json", { headers: { "Content-Type": "text/html" } })) });
+    await expect(html.inspectIndexInventory({ resolved_config: {}, expected_manifest_hash: hash }, fingerprint)).rejects.toMatchObject({ kind: "non_json" });
+    const network = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline")) });
+    await expect(network.inspectIndexInventory({ resolved_config: {}, expected_manifest_hash: hash }, fingerprint)).rejects.toMatchObject({ kind: "network" });
+    const malformedJson = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response("{", { headers: { "Content-Type": "application/json" } })) });
+    await expect(malformedJson.inspectIndexInventory({ resolved_config: {}, expected_manifest_hash: hash }, fingerprint)).rejects.toMatchObject({ kind: "malformed_response" });
   });
 
   it("preserves safe API errors and distinguishes network and non-JSON proxy failures", async () => {

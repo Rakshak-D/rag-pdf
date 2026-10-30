@@ -114,6 +114,31 @@ filtering by request ID, job ID, or status. It shows only actual `queued`,
 `running`, `succeeded`, `failed`, and `interrupted` states; it invents no
 percentages or stage progress.
 
+### Read-only build report inventory
+
+On the Index Builds page, first connect to bootstrap mode, enter the complete
+resolved configuration, and select **Preview index build**. The **Build report
+inventory** section then uses the server-computed manifest and index
+fingerprint to request a read-only scan. It remains available when an existing
+fingerprint-owned index blocks a new build. Select **Inspect build reports**;
+use **Refresh inventory** or the bounded Previous/Next controls for explicit
+read-only requests. The browser never computes either identity or accepts a
+client-selected storage path.
+
+Candidates are displayed as `report_match`, `mismatch`, `failed`, `incomplete`,
+`invalid`, or `unavailable`. Ordering is lexical by build ID and does not imply
+recency. A complete empty scan says no reports were found in the inspected
+inventory. An incomplete scan, including `inventory_limit_exceeded`, is shown
+as incomplete and is never described as empty. Pages are point-in-time views,
+not a stable snapshot while builds may publish reports.
+
+Every classification is report-level evidence only: **Chroma collections
+were not checked**. The viewer offers no report selection, activation, repair,
+deletion, retry, or experiment action. A compatible report does not prove
+persisted vectors are readable or that retrieval or model execution will
+succeed. Source changes invalidate the inventory and preview; preview again
+before another scan.
+
 A succeeded job records a validated build report reference and actual record
 counts. It does not activate the index, prove future retrieval, establish
 production model readiness, or start an experiment. Manually configure the

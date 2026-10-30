@@ -125,6 +125,25 @@ possible. Invalid roots, changed source manifests, or a scan that cannot be
 bounded fail closed. See the [index inventory contract](index-inventory.md)
 for the complete classification and read-only boundary.
 
+The React Index Builds workspace exposes this operation in its **Build report
+inventory** section. Connect to the bootstrap service, enter a complete
+resolved configuration, and preview it first. The viewer submits the preview's
+server-computed manifest identity with the configuration; the server
+recomputes the manifest and RunPlan. Inventory does not require
+`fresh_build_eligible`, so operators can inspect reports when an index already
+exists. Configuration edits, connection changes, a new preview, or a changed
+manifest clear the displayed inventory. Each scan and page is explicitly
+requested; there is no automatic scan loop.
+
+Complete empty results are distinct from incomplete scans. In particular,
+`inventory_limit_exceeded` means the inspection cap was reached and does not
+mean the storage contains no reports. Pagination is bounded to 100 candidates
+and offset 512, uses lexical order, and does not create a stable snapshot across
+concurrent publication. Candidate references are rendered as relative text;
+the UI does not turn them into filesystem links or use them to configure the
+ordinary runtime. The inventory viewer has no selection, activation, repair,
+deletion, retry, or experiment controls.
+
 ## After a successful build
 
 A successful job exposes a relative reference such as

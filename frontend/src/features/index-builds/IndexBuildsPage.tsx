@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError, BootstrapApiClient } from "../../api/client";
-import type { BootstrapJobRecord, BootstrapPreviewResponse, BootstrapStatusResponse } from "../../api/types";
+import type { BootstrapInventoryCandidate, BootstrapInventoryPage, BootstrapJobRecord, BootstrapPreviewResponse, BootstrapStatusResponse } from "../../api/types";
 import { apiErrorText } from "../../components/apiErrorText";
 import { StatusBadge } from "../../components/StatusBadge";
 import { PageHeading } from "../shared";
@@ -19,6 +19,38 @@ interface Props {
 
 const emptyHistory: BootstrapJobRecord[] = [];
 const pageSize = 25;
+const inventoryPageSize = 25;
+
+const inventoryLabels: Record<BootstrapInventoryCandidate["compatibility"], string> = {
+  report_match: "Report matches current plan",
+  mismatch: "Report identity differs",
+  failed: "Build report records failure",
+  incomplete: "Build evidence is incomplete",
+  invalid: "Report evidence is invalid",
+  unavailable: "Report evidence is unavailable",
+};
+
+function InventoryCandidateCard({ candidate }: { candidate: BootstrapInventoryCandidate }) {
+  return <article className="inventory-candidate" aria-label={inventoryLabels[candidate.compatibility]}>
+    <div className="inventory-candidate__heading">
+      <div><span className="eyebrow">{inventoryLabels[candidate.compatibility]}</span>
+        <h3>{candidate.build_id ? <code>{candidate.build_id}</code> : <code>{candidate.candidate_id}</code>}</h3></div>
+      <span className="inventory-state">{candidate.compatibility.replace(/_/g, " ")}</span>
+    </div>
+    <dl className="inventory-details">
+      <div><dt>Reason</dt><dd><code>{candidate.reason_code}</code></dd></div>
+      {candidate.report_reference ? <div className="inventory-details__wide"><dt>Relative report reference</dt><dd><code>{candidate.report_reference}</code></dd></div> : null}
+      {candidate.report_status ? <div><dt>Reported build status</dt><dd>{candidate.report_status}</dd></div> : null}
+      {candidate.reported_index_fingerprint ? <div className="inventory-details__wide"><dt>Reported index fingerprint</dt><dd><code>{candidate.reported_index_fingerprint}</code></dd></div> : null}
+      {candidate.reported_document_manifest_hash ? <div className="inventory-details__wide"><dt>Reported document manifest</dt><dd><code>{candidate.reported_document_manifest_hash}</code></dd></div> : null}
+      {candidate.compatibility === "report_match" ? <>
+        <div><dt>Validated text records</dt><dd>{candidate.reported_text_records}</dd></div>
+        <div><dt>Validated image records</dt><dd>{candidate.reported_image_records}</dd></div>
+      </> : null}
+      <div><dt>Verification</dt><dd>Report only · Chroma not checked</dd></div>
+    </dl>
+  </article>;
+}
 
 function makeRequestId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -80,7 +112,12 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
   const [detail, setDetail] = useState<BootstrapJobRecord | null>(null);
   const [detailBusy, setDetailBusy] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [inventoryPage, setInventoryPage] = useState<BootstrapInventoryPage | null>(null);
+  const [inventoryOffset, setInventoryOffset] = useState(0);
+  const [inventoryBusy, setInventoryBusy] = useState(false);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
   const previewSerial = useRef(0);
+  const inventorySerial = useRef(0);
   const mounted = useRef(true);
   const currentToken = useRef(token);
   const currentConfig = useRef(configText);
@@ -90,7 +127,12 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
 
   useEffect(() => {
     previewSerial.current += 1;
+    inventorySerial.current += 1;
     setPreview(null);
+    setInventoryPage(null);
+    setInventoryOffset(0);
+    setInventoryError(null);
+    setInventoryBusy(false);
     setAcknowledged(false);
     setPreviewing(false);
     setActionError(null);
@@ -107,8 +149,17 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; previewSerial.current += 1; };
+    return () => { mounted.current = false; previewSerial.current += 1; inventorySerial.current += 1; };
   }, []);
+
+  useEffect(() => {
+    if (jobId) {
+      inventorySerial.current += 1;
+      setInventoryPage(null);
+      setInventoryError(null);
+      setInventoryBusy(false);
+    }
+  }, [jobId]);
 
   useEffect(() => {
     let active = true;
@@ -143,8 +194,13 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
   function editConfig(value: string) {
     currentConfig.current = value;
     previewSerial.current += 1;
+    inventorySerial.current += 1;
     setConfigText(value);
     setPreview(null);
+    setInventoryPage(null);
+    setInventoryOffset(0);
+    setInventoryError(null);
+    setInventoryBusy(false);
     setAcknowledged(false);
     setPreviewing(false);
     setActionError(null);
@@ -153,9 +209,10 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
   async function requestPreview() {
     if (!token || !validation.value) return;
     const serial = ++previewSerial.current;
+    inventorySerial.current += 1;
     const capturedToken = token;
     const capturedConfig = configText;
-    setPreview(null); setAcknowledged(false); setActionError(null); setPreviewing(true);
+    setPreview(null); setAcknowledged(false); setInventoryPage(null); setInventoryOffset(0); setInventoryError(null); setInventoryBusy(false); setActionError(null); setPreviewing(true);
     try {
       const result = await client.preview({ resolved_config: validation.value });
       if (previewSerial.current === serial && currentToken.current === capturedToken && currentConfig.current === capturedConfig) setPreview(result);
@@ -163,6 +220,52 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
       if (previewSerial.current === serial && currentToken.current === capturedToken && currentConfig.current === capturedConfig) setActionError(apiErrorText(error));
     } finally {
       if (previewSerial.current === serial && currentToken.current === capturedToken) setPreviewing(false);
+    }
+  }
+
+  async function inspectInventory(offset = 0) {
+    if (!token || !preview || !validation.value || offset < 0 || offset > 512 || inventoryBusy) return;
+    const serial = ++inventorySerial.current;
+    const previewGeneration = previewSerial.current;
+    const capturedToken = token;
+    const capturedConfig = configText;
+    const capturedManifest = preview.manifest_hash;
+    const capturedFingerprint = preview.index_fingerprint;
+    setInventoryOffset(offset);
+    setInventoryPage(null);
+    setInventoryError(null);
+    setInventoryBusy(true);
+    try {
+      const result = await client.inspectIndexInventory({
+        resolved_config: validation.value,
+        expected_manifest_hash: capturedManifest,
+        limit: inventoryPageSize,
+        offset,
+      }, capturedFingerprint);
+      if (inventorySerial.current === serial && previewSerial.current === previewGeneration &&
+        currentToken.current === capturedToken && currentConfig.current === capturedConfig) {
+        setInventoryPage(result);
+      }
+    } catch (error) {
+      if (inventorySerial.current !== serial || previewSerial.current !== previewGeneration ||
+        currentToken.current !== capturedToken || currentConfig.current !== capturedConfig) return;
+      if (error instanceof ApiError && error.code === "manifest_changed") {
+        previewSerial.current += 1;
+        inventorySerial.current += 1;
+        setPreview(null); setAcknowledged(false); setInventoryPage(null); setInventoryOffset(0);
+        setInventoryBusy(false);
+        setInventoryError("The PDF source changed during inspection. The previous inventory was cleared; preview the source again before inspecting reports.");
+      } else if (error instanceof ApiError && error.code === "inventory_identity_changed") {
+        previewSerial.current += 1;
+        inventorySerial.current += 1;
+        setPreview(null); setAcknowledged(false); setInventoryPage(null); setInventoryOffset(0);
+        setInventoryBusy(false);
+        setInventoryError("The server inventory identity did not match the active preview. Preview again before inspecting reports.");
+      } else {
+        setInventoryError(apiErrorText(error));
+      }
+    } finally {
+      if (inventorySerial.current === serial && currentToken.current === capturedToken) setInventoryBusy(false);
     }
   }
 
@@ -245,6 +348,7 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
     <PageHeading eyebrow="FRESH-ONLY OPERATIONS" title={jobId ? "Index build details" : "Index Builds"}
       description="Preview the trusted local PDF source, confirm its server-computed identity, and inspect fresh-only build jobs." />
     <BootstrapConnectionPanel connected={token !== null} checking={checking} busy={submitting} status={status} error={connectionError} onConnect={onConnect} onDisconnect={onDisconnect} />
+    {inventoryError && !preview ? <section className="panel bootstrap-warning" role="alert" aria-label="Inventory requires a new preview"><p>{inventoryError}</p></section> : null}
 
     {!jobId ? <>
       <section className="panel bootstrap-panel" aria-labelledby="bootstrap-preview-title">
@@ -284,6 +388,45 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
           <button className="button button--primary" type="button" onClick={() => void submitBuild()} disabled={!canSubmit}>{submitting ? "Submitting once…" : "Start fresh build"}</button>
           {status && !status.accepting_jobs ? <span role="status">The bootstrap service is not accepting new jobs.</span> : null}
         </div>
+      </section> : null}
+
+      {preview ? <section className="panel inventory-panel" aria-labelledby="inventory-title">
+        <div className="bootstrap-detail-heading">
+          <div><span className="eyebrow">READ-ONLY DISCOVERY</span><h2 id="inventory-title">Build report inventory</h2></div>
+          <div className="bootstrap-actions">
+            <button className="button button--quiet" type="button" onClick={() => void inspectInventory(inventoryOffset)} disabled={!token || !validation.value || inventoryBusy}>
+              {inventoryBusy ? "Inspecting reports…" : inventoryPage ? "Refresh inventory" : "Inspect build reports"}
+            </button>
+          </div>
+        </div>
+        <p className="muted">Inspect reports under the bootstrap service’s trusted index-storage root for this configuration and source preview. This does not require fresh-build eligibility.</p>
+        <div className="inventory-scope" aria-label="Current inspection scope">
+          <div><span>Current source manifest</span><code>{preview.manifest_hash}</code></div>
+          <div><span>Expected index fingerprint</span><code>{preview.index_fingerprint}</code></div>
+        </div>
+        <p className="inventory-limit-note"><strong>Report compatibility only.</strong> Chroma collections were not checked. Reports are ordered lexically by build ID, not by creation time; separate page requests are not a stable snapshot.</p>
+        {inventoryBusy ? <p role="status" aria-live="polite">Inspecting bounded report metadata…</p> : null}
+        {inventoryError ? <p className="result-error" role="alert">{inventoryError}</p> : null}
+        {inventoryPage ? <>
+          {!inventoryPage.complete ? <div className="inventory-incomplete" role="status">
+            <strong>Inventory could not be fully inspected.</strong>
+            <p>Reason: <code>{inventoryPage.reason_code}</code>. This page is incomplete; an empty candidate list does not mean no reports exist.</p>
+            {inventoryPage.reason_code === "inventory_limit_exceeded" ? <p>The bounded inspection limit was reached. No broader scan was started automatically.</p> : null}
+          </div> : <div className="inventory-page-summary" role="status" aria-live="polite">
+            <span>Complete scan · {inventoryPage.total_candidates} candidate{inventoryPage.total_candidates === 1 ? "" : "s"} in the inspected inventory</span>
+            <span>{inventoryPage.candidates.length ? `Page ${inventoryPage.offset + 1}–${Math.min(inventoryPage.offset + inventoryPage.candidates.length, inventoryPage.total_candidates ?? 0)}` : "Empty page"} · ordered lexically</span>
+          </div>}
+          {inventoryPage.complete && inventoryPage.total_candidates === 0 && inventoryPage.candidates.length === 0 ? <p className="inventory-empty">No build reports were found in the trusted inventory.</p> : null}
+          {inventoryPage.complete && inventoryPage.total_candidates !== 0 && inventoryPage.candidates.length === 0 ? <p className="muted">No candidates are on this page. The complete inventory contains {inventoryPage.total_candidates} candidate{inventoryPage.total_candidates === 1 ? "" : "s"}.</p> : null}
+          {inventoryPage.candidates.length ? <div className="inventory-candidates" aria-label="Build report candidates">
+            {inventoryPage.candidates.map((candidate) => <InventoryCandidateCard key={candidate.candidate_id} candidate={candidate} />)}
+          </div> : null}
+          {inventoryPage.complete && inventoryPage.total_candidates !== null ? <div className="bootstrap-pagination" role="group" aria-label="Inventory pagination">
+            <button className="button button--quiet" type="button" disabled={!token || inventoryBusy || inventoryOffset === 0} onClick={() => void inspectInventory(Math.max(0, inventoryOffset - inventoryPageSize))}>Previous</button>
+            <span>{inventoryPage.candidates.length ? `Candidates ${inventoryPage.offset + 1}–${inventoryPage.offset + inventoryPage.candidates.length} of ${inventoryPage.total_candidates}` : `No candidates on page · ${inventoryPage.total_candidates} total`}</span>
+            <button className="button button--quiet" type="button" disabled={!token || inventoryBusy || inventoryOffset + inventoryPageSize > 512 || inventoryOffset + inventoryPage.candidates.length >= inventoryPage.total_candidates} onClick={() => void inspectInventory(inventoryOffset + inventoryPageSize)}>Next</button>
+          </div> : null}
+        </> : null}
       </section> : null}
 
       {uncertainRequestId ? <section className="panel bootstrap-warning" aria-labelledby="uncertain-title">

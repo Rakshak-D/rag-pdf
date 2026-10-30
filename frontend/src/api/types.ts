@@ -42,6 +42,51 @@ export interface BootstrapPreviewResponse {
   reason_code: string;
 }
 
+export interface BootstrapInventoryRequest {
+  resolved_config: Record<string, unknown>;
+  expected_manifest_hash: string;
+  limit?: number;
+  offset?: number;
+}
+
+export type BootstrapInventoryCompatibility =
+  | "report_match"
+  | "mismatch"
+  | "failed"
+  | "incomplete"
+  | "invalid"
+  | "unavailable";
+
+export interface BootstrapInventoryCandidate {
+  candidate_id: string;
+  build_id: string | null;
+  report_reference: string | null;
+  compatibility: BootstrapInventoryCompatibility;
+  reason_code: string;
+  expected_index_fingerprint: string;
+  document_manifest_hash: string;
+  reported_index_fingerprint: string | null;
+  reported_document_manifest_hash: string | null;
+  report_status: "completed" | "completed_with_warnings" | "failed" | null;
+  reported_text_records: number | null;
+  reported_image_records: number | null;
+  check_level: "report";
+  store_checked: false;
+}
+
+export interface BootstrapInventoryPage {
+  expected_index_fingerprint: string;
+  document_manifest_hash: string;
+  candidates: BootstrapInventoryCandidate[];
+  total_candidates: number | null;
+  offset: number;
+  limit: number;
+  complete: boolean;
+  reason_code: string;
+  check_level: "report";
+  store_checked: false;
+}
+
 export interface BootstrapJobRequest {
   resolved_config: Record<string, unknown>;
   expected_manifest_hash: string;
