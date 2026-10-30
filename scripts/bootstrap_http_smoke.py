@@ -97,6 +97,29 @@ def _write_pdf(path: Path) -> None:
     doc.close()
 
 
+def _clone_report_candidate(storage: Path, source_report: Path, build_id: str) -> Path:
+    """Create a temporary schema-valid inventory fixture from a real report."""
+    artifact_dir = storage / "build-artifacts" / build_id
+    artifact_dir.mkdir(parents=True)
+    payload = json.loads(source_report.read_text(encoding="utf-8"))
+    payload["build_id"] = build_id
+    payload["artifact_root"] = str(artifact_dir)
+    payload["report_path"] = str(artifact_dir / "build-report.json")
+    report = artifact_dir / "build-report.json"
+    report.write_text(json.dumps(payload, allow_nan=False, separators=(",", ":")), encoding="utf-8")
+    return report
+
+
+def _storage_snapshot(storage: Path) -> dict[str, bytes | None]:
+    if not storage.exists():
+        return {}
+    snapshot: dict[str, bytes | None] = {}
+    for path in storage.rglob("*"):
+        relative = path.relative_to(storage).as_posix()
+        snapshot[relative] = None if path.is_dir() else path.read_bytes()
+    return snapshot
+
+
 def run_smoke() -> dict[str, object]:
     token = "smoke-only-token-0123456789-abcdef0123456789"
     with tempfile.TemporaryDirectory(prefix="rag-bootstrap-http-") as temp:
@@ -166,6 +189,23 @@ def run_smoke() -> dict[str, object]:
                 raise RuntimeError("bootstrap_status_contract_failed")
             results["authentication"] = "unauthorized rejected; bearer token accepted"
 
+            inventory_path = base + "/api/v1/bootstrap/index-inventory"
+            inventory_body = {
+                "resolved_config": config_json,
+                "expected_manifest_hash": manifest.content_hash,
+                "limit": 25,
+                "offset": 0,
+            }
+            status, _ = _request(inventory_path, None, method="POST", payload=inventory_body)
+            if status != 401:
+                raise RuntimeError("inventory_authentication_contract_failed")
+            status, empty_inventory = _request(inventory_path, token, method="POST", payload=inventory_body)
+            if (status != 200 or empty_inventory.get("candidates") != []
+                    or empty_inventory.get("complete") is not True
+                    or empty_inventory.get("reason_code") != "no_build_reports"):
+                raise RuntimeError("empty_inventory_contract_failed")
+            results["inventory_empty"] = "authenticated complete empty report inventory"
+
             status, preview = _request(base + "/api/v1/bootstrap/preview", token, method="POST", payload={"resolved_config": config_json})
             if status != 200 or preview.get("manifest_hash") != manifest.content_hash or preview.get("index_fingerprint") != plan.index_fingerprint:
                 raise RuntimeError("preview_identity_failed")
@@ -204,6 +244,71 @@ def run_smoke() -> dict[str, object]:
             report = storage / job["report_reference"]
             if not report.is_file() or job["text_records"] is None or job["text_records"] < 1:
                 raise RuntimeError("genuine_report_or_record_count_missing")
+
+            status, stale_inventory = _request(
+                inventory_path, token, method="POST",
+                payload={**inventory_body, "expected_manifest_hash": "0" * 64},
+            )
+            if status != 409 or stale_inventory.get("error", {}).get("code") != "manifest_changed":
+                raise RuntimeError("inventory_manifest_mismatch_contract_failed")
+
+            # These report aliases are temporary test fixtures cloned from the
+            # genuine report schema. They do not represent additional builds.
+            aliases = [
+                _clone_report_candidate(storage, report, "0" * 32),
+                _clone_report_candidate(storage, report, "f" * 32),
+            ]
+            malformed_dir = storage / "build-artifacts" / ("e" * 32)
+            malformed_dir.mkdir(parents=True)
+            malformed_report = malformed_dir / "build-report.json"
+            malformed_report.write_text("{malformed", encoding="utf-8")
+            status, jobs_before_inventory = _request(base + "/api/v1/bootstrap/jobs?limit=10&offset=0", token)
+            if status != 200:
+                raise RuntimeError("job_list_before_inventory_failed")
+            storage_snapshot = _storage_snapshot(storage)
+            report_snapshot = {
+                path.relative_to(storage).as_posix(): path.read_bytes()
+                for path in (report, *aliases, malformed_report)
+            }
+            page_rows = []
+            for offset in range(4):
+                status, inventory = _request(
+                    inventory_path, token, method="POST",
+                    payload={**inventory_body, "limit": 1, "offset": offset},
+                )
+                if (status != 200 or inventory.get("complete") is not True
+                        or inventory.get("total_candidates") != 4):
+                    raise RuntimeError("inventory_pagination_contract_failed")
+                page_rows.extend(inventory["candidates"])
+            candidate_ids = [candidate["build_id"] for candidate in page_rows]
+            if candidate_ids != sorted(candidate_ids) or len(set(candidate_ids)) != 4:
+                raise RuntimeError("inventory_ordering_contract_failed")
+            invalid = next(candidate for candidate in page_rows if candidate["build_id"] == "e" * 32)
+            if invalid["compatibility"] != "invalid" or invalid["reason_code"] != "report_invalid":
+                raise RuntimeError("inventory_malformed_candidate_contract_failed")
+            if any(candidate["store_checked"] is not False or candidate["check_level"] != "report" for candidate in page_rows):
+                raise RuntimeError("inventory_verification_level_contract_failed")
+            after_snapshot = {
+                path.relative_to(storage).as_posix(): path.read_bytes()
+                for path in (report, *aliases, malformed_report)
+            }
+            if report_snapshot != after_snapshot:
+                raise RuntimeError("inventory_modified_report_evidence")
+            if storage_snapshot != _storage_snapshot(storage):
+                raise RuntimeError("inventory_modified_storage")
+            status, jobs_after_inventory = _request(base + "/api/v1/bootstrap/jobs?limit=10&offset=0", token)
+            if (status != 200
+                    or [item["job_id"] for item in jobs_before_inventory["jobs"]]
+                    != [item["job_id"] for item in jobs_after_inventory["jobs"]]):
+                raise RuntimeError("inventory_changed_job_history")
+            results["inventory"] = {
+                "candidate_count": len(page_rows),
+                "pagination": "four one-item pages in lexical order",
+                "malformed_candidate": "classified invalid without failing the scan",
+                "store_checked": False,
+                "synthetic_aliases_are_builds": False,
+            }
+
             status, replay = _request(base + "/api/v1/bootstrap/jobs", token, method="POST", payload=job_request)
             if status != 202 or replay.get("job", {}).get("job_id") != job_id:
                 raise RuntimeError("completed_request_replay_failed")

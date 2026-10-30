@@ -181,6 +181,27 @@ def run_smoke() -> dict[str, object]:
                 raise RuntimeError("bootstrap_status_proxy_failed")
             result["authenticated_status"] = "200 bootstrap mode; bearer token accepted only on protected proxy request"
 
+            inventory_request = {
+                "resolved_config": config.model_dump(mode="json"),
+                "expected_manifest_hash": manifest.content_hash,
+                "limit": 10,
+                "offset": 0,
+            }
+            code, _ = _request(
+                base + "/bootstrap-api/v1/bootstrap/index-inventory",
+                method="POST", payload=inventory_request,
+            )
+            if code != 401:
+                raise RuntimeError("inventory_proxy_authentication_failed")
+            code, inventory = _request(
+                base + "/bootstrap-api/v1/bootstrap/index-inventory",
+                token, method="POST", payload=inventory_request,
+            )
+            if (code != 200 or inventory.get("candidates") != []
+                    or inventory.get("store_checked") is not False):
+                raise RuntimeError("inventory_proxy_contract_failed")
+            result["inventory_proxy"] = "authenticated empty read-only inventory reached bootstrap service"
+
             code, preview = _request(base + "/bootstrap-api/v1/bootstrap/preview", token, method="POST", payload={"resolved_config": config.model_dump(mode="json")})
             if code != 200 or preview.get("manifest_hash") != manifest.content_hash or preview.get("index_fingerprint") != plan.index_fingerprint:
                 raise RuntimeError("bootstrap_preview_proxy_identity_failed")

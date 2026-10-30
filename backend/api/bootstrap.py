@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.concurrency import run_in_threadpool
@@ -21,6 +22,7 @@ from backend.config.schema import ResolvedRunConfig, WorkbenchSafetyPolicy
 from backend.engine.manifest import ManifestSourceChangedError, ManifestValidationError, build_document_manifest
 from backend.experiments.run_plan import RunPlan, build_run_plan
 from backend.services.bootstrap_jobs import BootstrapJobError, BootstrapJobManager, BuildJob
+from backend.services.index_inventory import IndexInventoryInputError
 
 
 class _StrictModel(BaseModel):
@@ -84,6 +86,46 @@ class BootstrapJobsResponse(_StrictModel):
     jobs: list[BootstrapJobView] = Field(max_length=100)
     limit: int = Field(ge=1, le=100)
     offset: int = Field(ge=0, le=1_000_000)
+
+
+class BootstrapInventoryRequest(_StrictModel):
+    resolved_config: dict[str, Any]
+    expected_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    limit: int = Field(default=50, ge=1, le=100)
+    offset: int = Field(default=0, ge=0, le=512)
+
+
+class BootstrapInventoryCandidateView(_StrictModel):
+    candidate_id: str = Field(max_length=64, pattern=r"^(?:[0-9a-f]{32}|entry-[0-9a-f]{16})$")
+    build_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    report_reference: str | None = Field(
+        default=None, max_length=96,
+        pattern=r"^build-artifacts/[0-9a-f]{32}/build-report\.json$",
+    )
+    compatibility: Literal["report_match", "mismatch", "failed", "incomplete", "invalid", "unavailable"]
+    reason_code: str = Field(max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    expected_index_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    document_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reported_index_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    reported_document_manifest_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    report_status: Literal["completed", "completed_with_warnings", "failed"] | None = None
+    reported_text_records: int | None = Field(default=None, ge=0)
+    reported_image_records: int | None = Field(default=None, ge=0)
+    check_level: Literal["report"]
+    store_checked: Literal[False]
+
+
+class BootstrapInventoryResponse(_StrictModel):
+    expected_index_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    document_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidates: list[BootstrapInventoryCandidateView] = Field(max_length=100)
+    total_candidates: int | None = Field(default=None, ge=0, le=512)
+    offset: int = Field(ge=0, le=512)
+    limit: int = Field(ge=1, le=100)
+    complete: bool
+    reason_code: str = Field(max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    check_level: Literal["report"]
+    store_checked: Literal[False]
 
 
 def _safe_components(path: Path) -> None:
@@ -237,6 +279,8 @@ def _bounded_json(request: Request, payload: dict[str, Any], *, status_code: int
             payload = {"job": BootstrapJobView.model_validate(payload["job"]).model_dump(mode="json")}
         elif "jobs" in payload:
             payload = BootstrapJobsResponse.model_validate(payload).model_dump(mode="json")
+        elif "candidates" in payload:
+            payload = BootstrapInventoryResponse.model_validate(payload).model_dump(mode="json")
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > request.app.state.max_response_body_bytes:
             raise ApiRequestError("response_body_too_large", 413)
@@ -277,6 +321,33 @@ async def preview(request: Request) -> JSONResponse:
         config = _validated_config(model.resolved_config, source)
         result = await run_in_threadpool(_inspect, config, source, storage)
         return _bounded_json(request, result)
+    except Exception as exc:
+        return _map_bootstrap_error(exc)
+
+
+async def index_inventory(request: Request) -> JSONResponse:
+    """Return bounded report-level inventory without depending on job admission."""
+
+    try:
+        payload = await _read_json(request, request.app.state.max_request_body_bytes)
+        model = _request_model(BootstrapInventoryRequest, payload)
+        source, storage = _trusted_roots(request)
+        config = _validated_config(model.resolved_config, source)
+        service = getattr(request.app.state, "index_inventory_service", None)
+        limiter = getattr(request.app.state, "index_inventory_scan_semaphore", None)
+        if service is None or limiter is None:
+            raise ApiRequestError("index_inventory_unavailable", 503)
+        async with limiter:
+            result = await run_in_threadpool(
+                service.discover,
+                config,
+                model.expected_manifest_hash,
+                limit=model.limit,
+                offset=model.offset,
+            )
+        response_payload = asdict(result)
+        response_payload["candidates"] = list(response_payload["candidates"])
+        return _bounded_json(request, response_payload)
     except Exception as exc:
         return _map_bootstrap_error(exc)
 
@@ -356,6 +427,19 @@ async def get_job(request: Request) -> JSONResponse:
 def _map_bootstrap_error(exc: BaseException) -> JSONResponse:
     if isinstance(exc, ApiRequestError):
         return _response_error(exc.code, exc.status_code)
+    if isinstance(exc, IndexInventoryInputError):
+        code = exc.code
+        if code in {"manifest_changed", "manifest_source_changed", "manifest_empty", "manifest_invalid"}:
+            return _response_error(code, 409)
+        if code in {
+            "manifest_unavailable", "inventory_path_unavailable", "inventory_path_invalid",
+            "source_root_unavailable", "storage_root_invalid", "storage_root_unavailable",
+            "inventory_roots_overlap",
+        }:
+            return _response_error(code, 503)
+        if re.fullmatch(r"[a-z][a-z0-9_]{1,63}", code or ""):
+            return _response_error(code, 400)
+        return _response_error("index_inventory_invalid", 400)
     if isinstance(exc, BootstrapJobError):
         code = exc.code
         if code == "job_not_found":
@@ -380,10 +464,17 @@ def build_bootstrap_routes() -> list[Route]:
         Route("/health", health, methods=["GET"]),
         Route("/api/v1/bootstrap/status", status, methods=["GET"]),
         Route("/api/v1/bootstrap/preview", preview, methods=["POST"]),
+        Route("/api/v1/bootstrap/index-inventory", index_inventory, methods=["POST"]),
         Route("/api/v1/bootstrap/jobs", submit_job, methods=["POST"]),
         Route("/api/v1/bootstrap/jobs", list_jobs, methods=["GET"]),
         Route("/api/v1/bootstrap/jobs/{job_id}", get_job, methods=["GET"]),
     ]
 
 
-__all__ = ["BootstrapPreviewRequest", "BootstrapJobRequest", "build_bootstrap_routes"]
+__all__ = [
+    "BootstrapInventoryRequest",
+    "BootstrapInventoryResponse",
+    "BootstrapPreviewRequest",
+    "BootstrapJobRequest",
+    "build_bootstrap_routes",
+]

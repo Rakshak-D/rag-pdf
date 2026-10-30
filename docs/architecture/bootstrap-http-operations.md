@@ -94,6 +94,37 @@ automatic retry operation. A failure to persist final job metadata after an
 index was published is an ambiguous job outcome; the index/report evidence is
 preserved and no second build is launched automatically.
 
+## Read-only build-report inventory
+
+`POST /api/v1/bootstrap/index-inventory` accepts a complete
+`resolved_config`, the observed `expected_manifest_hash`, and optional
+`limit`/`offset` values. It uses the bootstrap service's trusted source and
+storage roots; clients cannot choose a report path or filesystem directory.
+The server validates the configuration and non-destructive policy, recomputes
+the current source manifest and canonical RunPlan, then delegates to the
+bounded inventory service.
+
+The default scan examines at most 512 direct entries under
+`<storage-root>/build-artifacts/`, reads reports up to 1 MiB, and returns at
+most 100 candidates per page. Requests may use `limit` 1–100 and `offset`
+0–512. Ordering is lexical by build-artifact directory name, not by creation
+time. If the entry cap is exceeded, the response sets `complete: false`,
+leaves `total_candidates` null, and returns no partial candidate list. Pages
+are point-in-time observations; builds created between page requests can
+change later pages.
+
+Candidate compatibility values are `report_match`, `mismatch`, `failed`,
+`incomplete`, `invalid`, and `unavailable`. Counts are returned only for a
+validated matching report. Every response identifies `check_level: "report"`
+and `store_checked: false`. A matching report establishes report identity and
+successful-build metadata only; it does not establish that Chroma collections
+currently exist, are readable, or will support retrieval. The endpoint does
+not open Chroma, acquire a WriterLease, submit a job, or activate a report.
+Malformed candidate reports are classified within the inventory when safely
+possible. Invalid roots, changed source manifests, or a scan that cannot be
+bounded fail closed. See the [index inventory contract](index-inventory.md)
+for the complete classification and read-only boundary.
+
 ## After a successful build
 
 A successful job exposes a relative reference such as

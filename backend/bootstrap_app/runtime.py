@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 import ipaddress
@@ -16,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.config.paths import PathContainmentError, resolve_disjoint_paths
 from backend.services.bootstrap_jobs import BootstrapJobManager
+from backend.services.index_inventory import IndexInventoryService
 from backend.api.experiments import ExperimentSecurityMiddleware
 from backend.api.bootstrap import build_bootstrap_routes
 
@@ -24,6 +26,7 @@ _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8010
 _DEFAULT_BODY_LIMIT = 2 * 1024 * 1024
 _MAX_BODY_LIMIT = 16 * 1024 * 1024
+_MAX_CONCURRENT_INVENTORY_SCANS = 2
 _ENV = {
     "api_token": "RAG_WORKBENCH_BOOTSTRAP_API_TOKEN",
     "source_root": "RAG_WORKBENCH_BOOTSTRAP_PDF_SOURCE_DIR",
@@ -175,9 +178,11 @@ def build_bootstrap_runtime(settings: BootstrapSettings | None = None, *, adapte
         capacity=selected.queue_capacity,
         adapter_factory=adapter_factory,
     )
+    inventory_service = IndexInventoryService(selected.source_root, selected.storage_root)
 
     @asynccontextmanager
     async def lifespan(_app):
+        app.state.index_inventory_scan_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_INVENTORY_SCANS)
         await run_in_threadpool(manager.start)
         try:
             yield
@@ -193,6 +198,8 @@ def build_bootstrap_runtime(settings: BootstrapSettings | None = None, *, adapte
     app.state.bootstrap_job_manager = manager
     app.state.bootstrap_source_root = selected.source_root
     app.state.bootstrap_storage_root = selected.storage_root
+    app.state.index_inventory_service = inventory_service
+    app.state.index_inventory_scan_semaphore = None
     app.state.max_request_body_bytes = selected.max_request_body_bytes
     app.state.max_response_body_bytes = min(selected.max_request_body_bytes, 1024 * 1024)
     app.add_middleware(ExperimentSecurityMiddleware, api_token=selected.api_token)
