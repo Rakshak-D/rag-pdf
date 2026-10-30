@@ -62,3 +62,5 @@ The model registry and `LocalGenerationAdapter` are constructed lazily. Runtime 
 This is a local development boundary, not an internet-facing deployment. There is no document upload or index-build API, no distributed job queue, no model lifecycle service, and no production identity provider. Keep the bearer token private and maintain operating-system/network controls even though the default bind is loopback.
 
 The React/TypeScript operational overview and frontend development workflow are documented in [`frontend/README.md`](../../frontend/README.md). The frontend uses the same-origin API paths and Vite's local development proxy; it does not add backend routes or runtime capabilities.
+
+For a separate first-run service that can build an index before a report exists, see [bootstrap HTTP operations](bootstrap-http-operations.md). It uses a distinct loopback-only launcher and state directory; it does not relax this runtime's required build-report startup contract.

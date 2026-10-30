@@ -308,7 +308,9 @@ def test_manager_executes_real_fresh_build_and_records_verified_result(tmp_path,
     manager.start()
     try:
         accepted = manager.submit("real-build-request-0001", config, manifest.content_hash, plan.index_fingerprint)
-        assert accepted.status == "queued"
+        # The worker may durably claim this row before submit() performs its
+        # final read; both are valid admission-time observations.
+        assert accepted.status in {"queued", "running"}
         assert manager._completion[accepted.job_id].wait(60)
         result = manager.get(accepted.job_id)
         assert result.status == "succeeded", (result, errors, manager._last_worker_stage, manager._last_worker_error)

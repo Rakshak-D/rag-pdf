@@ -84,6 +84,12 @@ class BootstrapJobManager:
         if not self.path.is_absolute() or not self.path.parent.is_dir() or self.path.parent.is_symlink():
             raise BootstrapJobError("job_store_path_invalid")
 
+    @property
+    def accepting(self) -> bool:
+        """Whether this manager currently accepts new build submissions."""
+        with self._lock:
+            return self._accepting and self._owner_token is not None
+
     def _initialize_owned(self):
         if self._initialized:
             return
@@ -171,17 +177,7 @@ class BootstrapJobManager:
         with self._lock:
             if not self._accepting or self._owner_token is None:
                 raise BootstrapJobError("manager_not_accepting")
-            if (not isinstance(request_id, str) or not 16 <= len(request_id) <= 80 or
-                any(not (char.isalnum() or char in "_-") for char in request_id) or
-                not isinstance(config, ResolvedRunConfig) or not isinstance(manifest_hash, str) or
-                len(manifest_hash) != 64 or not isinstance(fingerprint, str) or len(fingerprint) != 64):
-                raise BootstrapJobError("job_input_invalid")
-            config.validate_for_workbench()
-            manifest = build_document_manifest(self.source)
-            plan = build_run_plan(config, manifest.content_hash)
-            if manifest.content_hash != manifest_hash or plan.index_fingerprint != fingerprint:
-                raise BootstrapJobError("confirmation_changed")
-            request_hash = canonical_request_identity(config, manifest_hash, fingerprint, self.source, self.storage)
+            request_hash = self._request_hash(request_id, config, manifest_hash, fingerprint)
             with self._connect() as db:
                 prior = db.execute("SELECT * FROM bootstrap_jobs WHERE client_request_id=?", (request_id,)).fetchone()
                 if prior:
@@ -215,6 +211,41 @@ class BootstrapJobManager:
                     self._completion.pop(job_id, None)
                     raise BootstrapJobError("queue_capacity_exhausted") from exc
             return self.get(job_id)
+
+    def find_idempotent(self, request_id: str, config: ResolvedRunConfig, manifest_hash: str, fingerprint: str) -> BuildJob | None:
+        """Return an existing matching submission without admitting new work.
+
+        This is used when an HTTP retry follows a successful build: the target
+        index now exists, but the original idempotency key must still resolve
+        to its durable job rather than enqueueing or rejecting a second build.
+        """
+        with self._lock:
+            if not self._accepting or self._owner_token is None:
+                raise BootstrapJobError("manager_not_accepting")
+            request_hash = self._request_hash(request_id, config, manifest_hash, fingerprint)
+            with self._connect() as db:
+                prior = db.execute("SELECT * FROM bootstrap_jobs WHERE client_request_id=?", (request_id,)).fetchone()
+            if prior is None:
+                return None
+            if prior["request_hash"] != request_hash:
+                raise BootstrapJobError("request_id_conflict")
+            return self._record(prior)
+
+    def _request_hash(self, request_id: str, config: ResolvedRunConfig, manifest_hash: str, fingerprint: str) -> str:
+        if (not isinstance(request_id, str) or not 16 <= len(request_id) <= 80 or
+            any(not (char.isalnum() or char in "_-") for char in request_id) or
+            not isinstance(config, ResolvedRunConfig) or not isinstance(manifest_hash, str) or
+            len(manifest_hash) != 64 or not isinstance(fingerprint, str) or len(fingerprint) != 64):
+            raise BootstrapJobError("job_input_invalid")
+        try:
+            config.validate_for_workbench()
+            manifest = build_document_manifest(self.source)
+            plan = build_run_plan(config, manifest.content_hash)
+        except Exception as exc:
+            raise BootstrapJobError("job_input_invalid") from exc
+        if manifest.content_hash != manifest_hash or plan.index_fingerprint != fingerprint:
+            raise BootstrapJobError("confirmation_changed")
+        return canonical_request_identity(config, manifest_hash, fingerprint, self.source, self.storage)
 
     @staticmethod
     def _record(row) -> BuildJob:

@@ -77,3 +77,7 @@ check report compatibility, and submit experiments explicitly. The CLI does
 not select a report or launch the runtime. Report compatibility does not prove
 stored-index usability or future retrieval success; the retrieval boundary
 remains authoritative.
+
+For an authenticated operator workflow around the same fresh-only builder,
+see [bootstrap HTTP operations](bootstrap-http-operations.md). The bootstrap
+server is separate from the experiment runtime and does not activate a report.
