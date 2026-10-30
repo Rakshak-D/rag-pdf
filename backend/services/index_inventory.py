@@ -267,7 +267,7 @@ class IndexInventoryService:
             marker = self._fresh_marker_state(inspection.index_fingerprint)
             if marker == "unsafe":
                 return _candidate(name=name, build_id=build_id, expected_fingerprint=plan.index_fingerprint,
-                                  manifest_hash=manifest_hash, compatibility="invalid", reason_code="symlink_path",
+                                  manifest_hash=manifest_hash, compatibility="invalid", reason_code="index_path_unsafe",
                                   inspection=inspection)
             if marker == "invalid":
                 return _candidate(name=name, build_id=build_id, expected_fingerprint=plan.index_fingerprint,
@@ -311,6 +311,66 @@ class IndexInventoryService:
         return _candidate(name=name, build_id=build_id, expected_fingerprint=plan.index_fingerprint,
                           manifest_hash=manifest_hash, compatibility="invalid", reason_code="report_invalid",
                           inspection=inspection)
+
+    def _report_file_signature(self, build_id: str) -> tuple[int, int, int, int, int, int] | None:
+        """Return a bounded file identity without following a report symlink."""
+
+        report_path = self._storage_root / "build-artifacts" / build_id / "build-report.json"
+        try:
+            if not _no_symlink_components(report_path):
+                return (-1, -1, -1, -1, -1, -1)
+            info = report_path.lstat()
+        except IndexInventoryInputError:
+            return (-2, -2, -2, -2, -2, -2)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return (-2, -2, -2, -2, -2, -2)
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    def _recheck_manifest(self, expected_manifest_hash: str) -> None:
+        try:
+            final_manifest = build_document_manifest(self._source_root)
+        except (ManifestSourceChangedError, ManifestValidationError) as exc:
+            raise IndexInventoryInputError("manifest_source_changed") from exc
+        except OSError as exc:
+            raise IndexInventoryInputError("manifest_unavailable") from exc
+        if not final_manifest.entries:
+            raise IndexInventoryInputError("manifest_empty")
+        if final_manifest.content_hash != expected_manifest_hash:
+            raise IndexInventoryInputError("manifest_changed")
+
+    def inspect_build_id(
+        self,
+        config: ResolvedRunConfig,
+        expected_manifest_hash: str,
+        build_id: str,
+    ) -> IndexInventoryCandidate:
+        """Inspect exactly one explicitly selected report under the trusted root.
+
+        This does not enumerate, select, or rank other reports. It uses the
+        same bounded report validator and candidate classification as the
+        inventory view, then checks source identity again before returning.
+        """
+
+        if not isinstance(build_id, str) or _BUILD_ID.fullmatch(build_id) is None:
+            raise IndexInventoryInputError("build_id_invalid")
+        plan, manifest_hash = self._validate_plan(config, expected_manifest_hash)
+        before = self._report_file_signature(build_id)
+        candidate = self._inspect_candidate(build_id, plan, manifest_hash)
+        after = self._report_file_signature(build_id)
+        if before != after:
+            candidate = IndexInventoryCandidate(
+                candidate_id=build_id,
+                build_id=build_id,
+                report_reference=f"build-artifacts/{build_id}/build-report.json",
+                compatibility="invalid",
+                reason_code="report_changed_during_inspection",
+                expected_index_fingerprint=plan.index_fingerprint,
+                document_manifest_hash=manifest_hash,
+            )
+        self._recheck_manifest(manifest_hash)
+        return candidate
 
     def discover(
         self,
@@ -385,16 +445,7 @@ class IndexInventoryService:
                                       reason_code="build_artifacts_changed", **base)
         names.sort()
         candidates = tuple(self._inspect_candidate(name, plan, manifest_hash) for name in names)
-        try:
-            final_manifest = build_document_manifest(self._source_root)
-        except (ManifestSourceChangedError, ManifestValidationError) as exc:
-            raise IndexInventoryInputError("manifest_source_changed") from exc
-        except OSError as exc:
-            raise IndexInventoryInputError("manifest_unavailable") from exc
-        if not final_manifest.entries:
-            raise IndexInventoryInputError("manifest_empty")
-        if final_manifest.content_hash != manifest_hash:
-            raise IndexInventoryInputError("manifest_changed")
+        self._recheck_manifest(manifest_hash)
         return IndexInventoryPage(
             candidates=candidates[offset:offset + limit],
             total_candidates=len(candidates),

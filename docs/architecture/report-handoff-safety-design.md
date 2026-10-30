@@ -321,27 +321,32 @@ does not write environment variables, create a handoff file, start a runtime,
 open Chroma, or select an active report. The operator still manually applies
 `RAG_WORKBENCH_INDEX_STORAGE_ROOT` and the joined relative report reference.
 
-**Likely files:** a focused `scripts/report_handoff.py`, tests under
-`tests/unit/` and `tests/integration/`, and a short update to
-`docs/architecture/local-runtime.md`. Reuse `ResolvedRunConfig`, manifest and
-RunPlan builders, `IndexInventoryService`/the shared report validator, and
-existing path-containment helpers.
+**Likely files:** a focused `scripts/report_handoff_preflight.py`, a narrow
+explicit-build-ID inspection method on `IndexInventoryService`, tests under
+`tests/unit/` and `tests/integration/`, and a short operations guide. Reuse
+`ResolvedRunConfig`, manifest and RunPlan builders,
+`IndexInventoryService`/the shared report validator, and existing
+path-containment helpers. The implementation must not perform a broad or
+unbounded search to find the selected report.
 
 **Boundary and CLI contract:** require explicit trusted source/storage roots,
-a complete config file, and a 32-character build ID. Do not accept an
-arbitrary report path. Recompute source manifest and fingerprint; refuse
-nonmatching, failed, partial, incomplete, oversized, symlinked, or unavailable
-reports. Print only a relative reference and exact observed identities plus
-manual next steps. Do not claim store verification or pin bytes after the
-command exits.
+a complete config file, confirmed manifest and fingerprint hashes, and a
+32-character lowercase build ID. Do not accept an arbitrary report path or
+choose a build automatically. Recompute source manifest and fingerprint;
+refuse nonmatching, failed, partial, incomplete, oversized, symlinked, or
+unavailable reports. Inspect only fixed index-directory metadata and the
+fresh-build/writer-reservation markers; do not open Chroma or acquire a lease.
+Print only a relative report reference and bounded metadata. Any index
+directory observation remains distinct from store verification and does not
+pin bytes after the command exits.
 
 **Tests:** deterministic configuration/identity cases; missing, replaced,
 malformed, symlinked, and wrong-hierarchy reports; source changes; multiple
-matching candidates; no filesystem writes; no WriterLease, Chroma, model, or
-network construction; output contains no credentials. Integration should
-verify that the operator can use the printed relative reference to set the
-existing runtime variable and that ordinary readiness rejects a changed
-manifest.
+matching candidates with explicit selection; minimum index metadata; no
+filesystem writes; no WriterLease, Chroma client, model, or network
+construction; output contains no credentials. A subprocess integration test
+should verify the bounded CLI contract and that ordinary runtime settings are
+not written or changed.
 
 **Failure injection:** change the source or report between candidate
 enumeration and final validation; inject path-resolution and report-read
@@ -357,6 +362,9 @@ setting or persistent state changed.
 **Stop conditions:** no output that implies Chroma readiness; no automatic
 environment update; no arbitrary path input; no report digest claim unless a
 consumer enforces it; no index writes or runtime launch.
+
+The implemented command contract and its stable errors are described in
+[read-only report handoff preflight operations](report-handoff-preflight-operations.md).
 
 ### Phase 6.12C — Store-verification contract gate
 
