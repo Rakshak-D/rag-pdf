@@ -20,6 +20,64 @@ export interface RuntimeModelsResponse {
   components: ModelComponentStatus[];
 }
 
+export interface BootstrapStatusResponse {
+  mode: "bootstrap";
+  status: "running";
+  accepting_jobs: boolean;
+  worker_count: 1;
+  queue_capacity: number;
+}
+
+export interface BootstrapPreviewRequest {
+  resolved_config: Record<string, unknown>;
+}
+
+export interface BootstrapPreviewResponse {
+  document_count: number;
+  manifest_hash: string;
+  index_fingerprint: string;
+  run_fingerprint: string;
+  existing_index: boolean;
+  fresh_build_eligible: boolean;
+  reason_code: string;
+}
+
+export interface BootstrapJobRequest {
+  resolved_config: Record<string, unknown>;
+  expected_manifest_hash: string;
+  expected_index_fingerprint: string;
+  client_request_id: string;
+}
+
+export type BootstrapJobStatus = "queued" | "running" | "succeeded" | "failed" | "interrupted";
+
+export interface BootstrapJobRecord {
+  job_id: string;
+  client_request_id: string;
+  status: BootstrapJobStatus;
+  manifest_hash: string;
+  index_fingerprint: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error_code: string | null;
+  build_id: string | null;
+  report_reference: string | null;
+  text_records: number | null;
+  image_records: number | null;
+  partial_persistence: boolean | null;
+}
+
+export interface BootstrapJobEnvelope {
+  job: BootstrapJobRecord;
+}
+
+export interface BootstrapJobsResponse {
+  jobs: BootstrapJobRecord[];
+  limit: number;
+  offset: number;
+}
+
 export type JobType = "evaluation" | "ablation";
 export type JobStatus =
   | "queued"

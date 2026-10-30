@@ -1,6 +1,6 @@
 # RAG Evaluation Workbench frontend
 
-This is the local React/TypeScript interface for the existing Starlette API. It presents backend liveness, authenticated model-adapter state, and a navigable overview, jobs explorer, and artifact explorer. Job and artifact catalogs have server-backed filters and paging; detail pages show the stored metadata, metric aggregates, ablation comparison states, and an explicitly requested result JSON view.
+This is the local React/TypeScript interface for the separate experiment and bootstrap Starlette services. It presents backend liveness, authenticated model-adapter state, an overview, jobs and artifacts, experiment workflows, and a fresh-only Index Builds workspace. Job and artifact catalogs have server-backed filters and paging; detail pages show stored metadata, metric aggregates, ablation comparison states, and explicitly requested result JSON.
 
 ## Requirements and local run
 
@@ -28,7 +28,7 @@ repository root with `.\rag-env\Scripts\python.exe scripts/local_runtime_smoke.p
 See [the smoke-test guide](../docs/architecture/local-integration-smoke.md).
 It checks HTTP proxying without driving a browser or loading models.
 
-For a static production build, configure the chosen static host to serve `index.html` for the client routes (`/jobs`, `/jobs/*`, `/artifacts`, `/artifacts/*`, and `/experiments/*`). The Python runtime does not serve or mount the frontend assets.
+For a static production build, configure the chosen static host to serve `index.html` for the client routes (`/jobs`, `/jobs/*`, `/artifacts`, `/artifacts/*`, `/experiments/*`, and `/index-builds/*`). The Python runtime does not serve or mount the frontend assets.
 
 ## Experiments
 
@@ -36,7 +36,7 @@ The Experiments area submits through the existing authenticated job endpoints. A
 
 Connect, then select **Inspect documents** to read the configured PDF source manifest. Supply a complete resolved configuration JSON object from the trusted project configuration workflow. For an evaluation, select **Prepare RunPlan** and inspect the returned fingerprints before explicitly submitting the benchmark job. The backend validates the configuration, current manifest, safety policy, and fingerprints; the browser does not create them. Changing the configuration invalidates the prepared plan. If source documents change, inspect them again and prepare another plan.
 
-For an ablation, the inspected manifest identity and supplied base configuration are passed to the existing job endpoint, which creates the canonical six variants. Manifest inspection and plan preparation do not build an index or prove that a compatible index exists. Index discovery and building remain unavailable through the UI.
+For an ablation, the inspected manifest identity and supplied base configuration are passed to the existing job endpoint, which creates the canonical six variants. Manifest inspection and plan preparation do not build an index or prove that a compatible index exists. Index discovery remains unavailable. First-run building is available only through the separate Index Builds workspace described below.
 
 Use **Check configured index** to compare the configured build report against
 the inspected manifest and configuration. A `report_match` confirms report
@@ -63,4 +63,65 @@ The test suite mocks HTTP responses and does not require the Python backend, mod
 
 ## Current boundary
 
-The API's `/health` route is liveness only. Runtime model state reports registered adapter state and does not prove index or Ollama readiness. Ablation result loading requires the original compatible base configuration; the UI does not invent or rewrite it. Artifact records have no creation timestamp, so the catalog view does not claim to identify the newest result. The UI does not provide document upload, index building, or a query playground, and it does not display fabricated jobs or artifacts.
+The API's `/health` route is liveness only. Runtime model state reports registered adapter state and does not prove index or Ollama readiness. Ablation result loading requires the original compatible base configuration; the UI does not invent or rewrite it. Artifact records have no creation timestamp, so the catalog view does not claim to identify the newest result. The UI does not provide document upload or a query playground, and it does not display fabricated jobs or artifacts.
+
+## First-run Index Builds workspace
+
+Index Builds uses the separate bootstrap-only backend started with
+`python -m backend.bootstrap_app`. It does not depend on the ordinary
+experiment runtime or its required build report. Configure the bootstrap
+service independently with trusted source, index-storage, state-directory,
+and bearer-token settings; see the
+[bootstrap operations guide](../docs/architecture/bootstrap-http-operations.md).
+
+For local development, configure both Vite targets before starting Vite:
+
+```powershell
+$env:RAG_WORKBENCH_DEV_PROXY_TARGET = 'http://127.0.0.1:8000'
+$env:RAG_WORKBENCH_BOOTSTRAP_DEV_PROXY_TARGET = 'http://127.0.0.1:8010'
+npm run dev
+```
+
+The existing `/health` and `/api/*` routes continue to reach the experiment
+runtime. Bootstrap requests use the separate `/bootstrap-api/*` prefix, which
+Vite rewrites to the bootstrap service's `/api/*` routes. The target accepts
+only a loopback HTTP origin and cannot be selected by browser input. If it is
+unset, Vite returns `bootstrap_proxy_unconfigured`; bootstrap traffic never
+falls back to the experiment service. A real HTTP proxy check is available
+from the repository root with
+`.\rag-env\Scripts\python.exe scripts\bootstrap_vite_smoke.py`.
+
+Enter the bootstrap token in the dedicated connection panel on Index Builds.
+This token is independent from the experiment token; neither is reused
+automatically. Both remain in memory only. Paste a complete resolved
+configuration object. The editor checks JSON, duplicate keys, required fields,
+and destructive settings, but inserts no defaults and calculates no
+fingerprints. The backend remains authoritative for configuration validation.
+
+**Preview index build** displays the server's current document count, manifest
+hash, and index/run fingerprints. Preview is a point-in-time observation and
+does not reserve an index. Review the exact identities and check the explicit
+acknowledgment before **Start fresh build** becomes available. Existing
+fingerprint-owned directories block submission; this interface cannot repair
+or overwrite them.
+
+Each explicit submission uses one cryptographically random client request ID
+and one POST. The UI does not retry. If the response is uncertain, it retains
+the request ID in memory and offers read-only job-history search. After a
+reload, reconnect and inspect the paged server history. No token or
+configuration draft is persisted. Job history supports manual refresh and
+filtering by request ID, job ID, or status. It shows only actual `queued`,
+`running`, `succeeded`, `failed`, and `interrupted` states; it invents no
+percentages or stage progress.
+
+A succeeded job records a validated build report reference and actual record
+counts. It does not activate the index, prove future retrieval, establish
+production model readiness, or start an experiment. Manually configure the
+ordinary runtime's existing report and storage settings and perform its normal
+checks. Failed or partial index evidence remains preserved.
+
+Vitest covers mocked API and React behavior. The bootstrap Vite smoke exercises
+real loopback HTTP through Vite but does not drive a browser. The existing
+`local_runtime_smoke.py --vite` separately checks the experiment-runtime
+proxy. The intermittent Chroma HNSW reader and concurrent artifact-publisher
+issues remain unresolved.

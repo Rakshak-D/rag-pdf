@@ -11,6 +11,7 @@ export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
   const section = location.pathname.startsWith("/jobs") ? "Jobs"
     : location.pathname.startsWith("/artifacts") ? "Artifacts"
+      : location.pathname.startsWith("/index-builds") ? "Index Builds"
       : location.pathname.startsWith("/experiments") ? "Experiments"
       : location.pathname === "/" ? "Overview" : "Not found";
 
@@ -26,6 +27,7 @@ export function AppShell({ children }: AppShellProps) {
           <NavLink end to="/" title="Overview" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">⌂</span>Overview</NavLink>
           <NavLink to="/jobs" title="Jobs" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">≡</span>Jobs</NavLink>
           <NavLink to="/artifacts" title="Artifacts" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">▧</span>Artifacts</NavLink>
+          <NavLink to="/index-builds" title="Index Builds" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">⌁</span>Index Builds</NavLink>
           <NavLink to="/experiments/evaluation" title="Experiments" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">＋</span>Experiments</NavLink>
           {comingSoon.map((item, index) => (
             <div className="nav-item nav-item--disabled" key={item} aria-disabled="true" title={`${item} is not available yet`}>
@@ -34,7 +36,7 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           ))}
         </nav>
-        <div className="sidebar__footer"><span className="local-mark" />Local runtime <span className="sidebar__footer-version">API v1</span></div>
+        <div className="sidebar__footer"><span className="local-mark" />Local services <span className="sidebar__footer-version">API v1</span></div>
       </aside>
       <div className="app-content">
         <header className="topbar">

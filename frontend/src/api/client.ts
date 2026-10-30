@@ -4,6 +4,13 @@ import type {
   AblationSubmissionResponse,
   ApiErrorEnvelope,
   ArtifactListFilters,
+  BootstrapJobEnvelope,
+  BootstrapJobRecord,
+  BootstrapJobRequest,
+  BootstrapJobsResponse,
+  BootstrapPreviewRequest,
+  BootstrapPreviewResponse,
+  BootstrapStatusResponse,
   CatalogArtifactRecord,
   CatalogComparisonRecord,
   CatalogMetricRecord,
@@ -369,3 +376,138 @@ export class WorkbenchApiClient {
 }
 
 export type { ApiErrorEnvelope, ModelState, ResultStatus };
+
+const bootstrapStatuses = ["queued", "running", "succeeded", "failed", "interrupted"] as const;
+
+function isBootstrapStatus(value: unknown): value is BootstrapStatusResponse {
+  return isRecord(value) && value.mode === "bootstrap" && value.status === "running" &&
+    typeof value.accepting_jobs === "boolean" && value.worker_count === 1 &&
+    Number.isInteger(value.queue_capacity) && Number(value.queue_capacity) >= 1 && Number(value.queue_capacity) <= 32;
+}
+
+function isBootstrapPreview(value: unknown): value is BootstrapPreviewResponse {
+  return isRecord(value) && Number.isInteger(value.document_count) && Number(value.document_count) >= 1 &&
+    Number(value.document_count) <= 1_000_000 && sha256(value.manifest_hash) &&
+    sha256(value.index_fingerprint) && sha256(value.run_fingerprint) &&
+    typeof value.existing_index === "boolean" && typeof value.fresh_build_eligible === "boolean" &&
+    value.fresh_build_eligible === !value.existing_index &&
+    typeof value.reason_code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(value.reason_code) &&
+    ((value.existing_index && value.reason_code === "index_already_exists") ||
+      (!value.existing_index && value.reason_code === "fresh_build_available"));
+}
+
+function isBootstrapJob(value: unknown): value is BootstrapJobRecord {
+  if (!isRecord(value) || !hasStrings(value, ["job_id", "client_request_id", "status", "manifest_hash", "index_fingerprint", "created_at"])) return false;
+  if (typeof value.job_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.job_id) ||
+    typeof value.client_request_id !== "string" || !/^[A-Za-z0-9_-]{16,80}$/.test(value.client_request_id) ||
+    !bootstrapStatuses.includes(value.status as typeof bootstrapStatuses[number]) ||
+    !sha256(value.manifest_hash) || !sha256(value.index_fingerprint) ||
+    !isNullableString(value.started_at) || !isNullableString(value.finished_at) ||
+    !isNullableString(value.error_code) || (value.error_code !== null && !/^[a-z][a-z0-9_]{0,63}$/.test(value.error_code)) ||
+    !isNullableString(value.build_id) || (value.build_id !== null && !/^[0-9a-f]{32}$/.test(value.build_id)) ||
+    !isNullableString(value.report_reference) ||
+    (value.report_reference !== null && !/^build-artifacts\/[0-9a-f]{32}\/build-report\.json$/.test(value.report_reference)) ||
+    !(value.text_records === null || count(value.text_records)) ||
+    !(value.image_records === null || count(value.image_records)) ||
+    !(value.partial_persistence === null || typeof value.partial_persistence === "boolean")) return false;
+  return value.status === "succeeded"
+    ? value.build_id !== null && value.report_reference !== null && value.text_records !== null && value.image_records !== null && value.partial_persistence === false
+    : value.report_reference === null;
+}
+
+/** Client for the separate bootstrap-only service. Its fixed prefix is routed
+ * by Vite to the trusted bootstrap target; it never falls back to `/api`. */
+export class BootstrapApiClient {
+  private readonly token: string | null;
+  private readonly fetcher: FetchLike;
+  private readonly prefix: string;
+
+  constructor(options: { token?: string | null; fetcher?: FetchLike; prefix?: string } = {}) {
+    this.token = options.token ?? null;
+    this.fetcher = options.fetcher ?? fetch;
+    this.prefix = options.prefix ?? "/bootstrap-api";
+  }
+
+  private async request(path: string, options: { method?: string; body?: unknown; protected?: boolean } = {}): Promise<unknown> {
+    const headers = new Headers();
+    if (options.protected !== false) {
+      if (!this.token) throw new ApiError("http", "authentication_required", 401);
+      headers.set("Authorization", `Bearer ${this.token}`);
+    }
+    const init: RequestInit = { method: options.method ?? "GET", headers };
+    if (options.body !== undefined) {
+      headers.set("Content-Type", "application/json");
+      init.body = JSON.stringify(options.body);
+    }
+    let response: Response;
+    try {
+      response = await this.fetcher(`${this.prefix}${path}`, init);
+    } catch {
+      throw new ApiError("network", "bootstrap_proxy_unavailable");
+    }
+    let payload: unknown;
+    try {
+      payload = await parseJson(response);
+    } catch (error) {
+      if (error instanceof ApiError && error.kind === "non_json") {
+        throw new ApiError("non_json", "bootstrap_proxy_unavailable", response.status);
+      }
+      throw error;
+    }
+    if (!response.ok) {
+      throw new ApiError("http", errorCode(payload) ?? "http_error", response.status);
+    }
+    return payload;
+  }
+
+  async getHealth(): Promise<HealthResponse> {
+    const value = await this.request("/health", { protected: false });
+    if (!isRecord(value) || value.status !== "ok" || value.api_version !== "v1") malformed();
+    return { status: "ok", api_version: "v1" };
+  }
+
+  async getStatus(): Promise<BootstrapStatusResponse> {
+    const value = await this.request("/v1/bootstrap/status");
+    if (!isBootstrapStatus(value)) malformed();
+    return value;
+  }
+
+  async preview(input: BootstrapPreviewRequest): Promise<BootstrapPreviewResponse> {
+    const value = await this.request("/v1/bootstrap/preview", { method: "POST", body: input });
+    if (!isBootstrapPreview(value)) malformed();
+    return value;
+  }
+
+  async submitJob(input: BootstrapJobRequest): Promise<BootstrapJobEnvelope> {
+    if (!/^[A-Za-z0-9_-]{16,80}$/.test(input.client_request_id)) {
+      throw new ApiError("malformed_response", "request_id_invalid");
+    }
+    const value = await this.request("/v1/bootstrap/jobs", { method: "POST", body: input });
+    if (!isRecord(value) || !isBootstrapJob(value.job)) malformed();
+    if (value.job.client_request_id !== input.client_request_id ||
+      value.job.manifest_hash !== input.expected_manifest_hash.toLowerCase() ||
+      value.job.index_fingerprint !== input.expected_index_fingerprint.toLowerCase()) malformed();
+    return { job: value.job };
+  }
+
+  async listJobs(options: { limit?: number; offset?: number } = {}): Promise<BootstrapJobsResponse> {
+    const limit = options.limit ?? 50;
+    const offset = options.offset ?? 0;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0 || offset > 1_000_000) {
+      throw new ApiError("malformed_response", "pagination_invalid");
+    }
+    const value = await this.request(`/v1/bootstrap/jobs?limit=${limit}&offset=${offset}`);
+    if (!isRecord(value) || !Array.isArray(value.jobs) || !value.jobs.every(isBootstrapJob) ||
+      value.limit !== limit || value.offset !== offset || value.jobs.length > limit) malformed();
+    return value as unknown as BootstrapJobsResponse;
+  }
+
+  async getJob(jobId: string): Promise<BootstrapJobRecord> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(jobId)) {
+      throw new ApiError("http", "job_not_found", 404);
+    }
+    const value = await this.request(`/v1/bootstrap/jobs/${encodeURIComponent(jobId)}`);
+    if (!isRecord(value) || !isBootstrapJob(value.job) || value.job.job_id !== jobId) malformed();
+    return value.job;
+  }
+}

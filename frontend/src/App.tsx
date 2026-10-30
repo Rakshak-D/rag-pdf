@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Route, Routes, useLocation } from "react-router-dom";
-import { WorkbenchApiClient } from "./api/client";
-import type { CatalogArtifactRecord, ExperimentJobRecord, HealthResponse, RuntimeModelsResponse } from "./api/types";
+import { BootstrapApiClient, WorkbenchApiClient } from "./api/client";
+import type { BootstrapStatusResponse, CatalogArtifactRecord, ExperimentJobRecord, HealthResponse, RuntimeModelsResponse } from "./api/types";
 import { AppShell } from "./components/AppShell";
 import { apiErrorText } from "./components/apiErrorText";
 import { ConnectionPanel } from "./components/ConnectionPanel";
@@ -11,11 +11,17 @@ import { JobsPage } from "./features/jobs/JobsPage";
 import { ArtifactDetailPage } from "./features/artifacts/ArtifactDetailPage";
 import { ArtifactsPage } from "./features/artifacts/ArtifactsPage";
 import { ExperimentWorkflowPage } from "./features/experiments/ExperimentWorkflowPage";
+import { IndexBuildsPage } from "./features/index-builds/IndexBuildsPage";
 
 type DataState = "disconnected" | "loading" | "ready" | "error";
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
+  const [bootstrapToken, setBootstrapToken] = useState<string | null>(null);
+  const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatusResponse | null>(null);
+  const [bootstrapChecking, setBootstrapChecking] = useState(false);
+  const [bootstrapConnectionError, setBootstrapConnectionError] = useState<string | null>(null);
+  const bootstrapConnectSerial = useRef(0);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [runtimeModels, setRuntimeModels] = useState<RuntimeModelsResponse | null>(null);
@@ -47,6 +53,27 @@ export default function App() {
   const disconnect = useCallback(() => {
     setToken(null); setRuntimeModels(null); setConnectionError(null);
     setJobs([]); setEvaluationArtifacts([]); setAblationArtifacts([]); setDataError(null); setDataState("disconnected");
+  }, []);
+
+  const connectBootstrap = useCallback(async (candidate: string): Promise<boolean> => {
+    const serial = ++bootstrapConnectSerial.current;
+    setBootstrapChecking(true); setBootstrapConnectionError(null);
+    try {
+      const verified = await new BootstrapApiClient({ token: candidate }).getStatus();
+      if (serial !== bootstrapConnectSerial.current) return false;
+      setBootstrapStatus(verified); setBootstrapToken(candidate);
+      return true;
+    } catch (error) {
+      if (serial === bootstrapConnectSerial.current) setBootstrapConnectionError(apiErrorText(error));
+      return false;
+    } finally {
+      if (serial === bootstrapConnectSerial.current) setBootstrapChecking(false);
+    }
+  }, []);
+
+  const disconnectBootstrap = useCallback(() => {
+    bootstrapConnectSerial.current += 1;
+    setBootstrapToken(null); setBootstrapStatus(null); setBootstrapConnectionError(null); setBootstrapChecking(false);
   }, []);
 
   const refresh = useCallback(() => setRefreshVersion((version) => version + 1), []);
@@ -87,7 +114,7 @@ export default function App() {
   }, [client, connected, location.pathname, refreshVersion]);
 
   return <AppShell>
-    <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} />
+    {!location.pathname.startsWith("/index-builds") ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
     <Routes>
       <Route path="/" element={<OverviewPage connected={connected} health={health} healthError={healthError} dataState={dataState} jobs={jobs} evaluationArtifacts={evaluationArtifacts} ablationArtifacts={ablationArtifacts} dataError={dataError} refreshing={refreshing} onRefresh={refresh} />} />
       <Route path="/jobs" element={<JobsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
@@ -95,6 +122,8 @@ export default function App() {
       <Route path="/artifacts" element={<ArtifactsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/artifacts/:artifactId" element={<ArtifactDetailPage key={location.pathname} client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/experiments/:workflow" element={<ExperimentWorkflowPage key={location.pathname} client={client} connected={connected} onAccepted={refresh} />} />
+      <Route path="/index-builds" element={<IndexBuildsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} />} />
+      <Route path="/index-builds/:jobId" element={<IndexBuildsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} />} />
       <Route path="*" element={<section className="panel not-found"><span className="eyebrow">ROUTE NOT FOUND</span><h1>This page is unavailable</h1><p>Use the workbench navigation to return to a supported view.</p><Link className="button button--primary" to="/">Open overview</Link></section>} />
     </Routes>
   </AppShell>;

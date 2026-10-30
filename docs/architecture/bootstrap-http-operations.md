@@ -110,7 +110,16 @@ Actual builds run the existing indexing engine and may load/download configured
 embedding models and consume substantial CPU, GPU, memory, and disk. Automated
 HTTP smoke uses temporary synthetic PDFs, a trusted injected test adapter, and
 real isolated Chroma persistence; it does not validate production model
-downloads, Ollama, or browser interaction.
+downloads or Ollama. The React Index Builds workspace uses a separate
+`/bootstrap-api/*` Vite proxy configured with
+`RAG_WORKBENCH_BOOTSTRAP_DEV_PROXY_TARGET`; it does not route bootstrap bearer
+tokens through the experiment proxy. See the [frontend operations guide](../../frontend/README.md).
+
+The bootstrap Vite smoke exercises loopback HTTP through the real Vite proxy
+and bootstrap application for health, authentication, preview, identity
+rejection, and read-only job history. It does not submit a build or automate a
+browser. The separate bootstrap HTTP smoke exercises the manager-driven real
+Chroma build with a trusted synthetic adapter.
 
 The ownership protocol coordinates cooperating repository writers only. It
 cannot stop arbitrary external Chroma processes from ignoring the WriterLease.

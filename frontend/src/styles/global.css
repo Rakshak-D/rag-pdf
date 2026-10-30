@@ -143,3 +143,59 @@ button:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-vis
 
 @media (max-width: 820px) { .case-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .suite-identity-grid, .case-grid, .case-grid--secondary { grid-template-columns: 1fr; }.benchmark-case { padding: 12px !important; }.submission-success { align-items: flex-start; flex-direction: column; }.workflow-tab { flex: 1; justify-content: center; padding: 0 8px; } }
+
+.index-builds-page { display: grid; gap: 16px; }
+.bootstrap-connection { border-color: #d9e5dc; }
+.bootstrap-panel { display: grid; gap: 13px; }
+.bootstrap-step { display: flex; align-items: flex-start; gap: 12px; }
+.bootstrap-step > span { display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center; border-radius: 50%; background: #eaf2eb; color: #326144; font-family: var(--mono); font-size: 11px; font-weight: 700; }
+.bootstrap-step h2, .bootstrap-detail-heading h2 { margin: 4px 0 0; color: #263b30; font-size: 15px; }
+.bootstrap-panel > p { margin: 0; }
+.bootstrap-config { min-height: 230px !important; font-family: var(--mono) !important; font-size: 10px !important; line-height: 1.55 !important; resize: vertical; }
+.bootstrap-preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.bootstrap-preview-grid > div { display: grid; min-width: 0; gap: 7px; padding: 13px; border: 1px solid #e3eae4; border-radius: 8px; background: #fbfdfb; }
+.bootstrap-preview-grid span, .bootstrap-metadata dt { color: #738078; font-size: 10px; }
+.bootstrap-preview-grid strong { color: #30483a; font-size: 12px; }
+.bootstrap-preview-grid code, .bootstrap-metadata dd.mono-value, .bootstrap-metadata .mono-value, .bootstrap-ack code { overflow-wrap: anywhere; color: #315b42; font-family: var(--mono); font-size: 10px; }
+.bootstrap-identity-wide { grid-column: 1 / -1; }
+.identity-positive { color: #2c7446 !important; }.identity-negative { color: #9a453c !important; }
+.bootstrap-note { padding: 10px 12px; border-left: 3px solid #8eaa93; background: #f5f8f5; color: #65736a; font-size: 11px; line-height: 1.55; }
+.bootstrap-ack { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border: 1px solid #e4dcc8; border-radius: 8px; background: #fffdf7; color: #554b38; font-size: 11px; line-height: 1.5; }
+.bootstrap-ack input { width: 16px; height: 16px; flex: 0 0 16px; margin-top: 1px; accent-color: #4c8a63; }
+.bootstrap-ack--compact { flex-basis: 100%; }
+.bootstrap-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.bootstrap-actions > [role="status"] { color: #68766e; font-size: 11px; }
+.bootstrap-warning { border-color: #ecd9b5; background: #fffaf0; }
+.bootstrap-warning h2 { margin: 5px 0 8px; color: #624c27; font-size: 15px; }
+.bootstrap-warning p { color: #6c5b3a; font-size: 11px; line-height: 1.55; }
+.bootstrap-accepted { display: flex; align-items: center; gap: 14px; }
+.bootstrap-accepted > div { min-width: 0; flex: 1; }
+.bootstrap-accepted h2 { margin: 4px 0; overflow-wrap: anywhere; color: #315b42; font-family: var(--mono); font-size: 13px; }
+.bootstrap-accepted p { margin: 0; color: #68766e; font-size: 10px; }
+.bootstrap-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.bootstrap-job-status { display: flex; align-items: center; gap: 11px; padding: 12px; border: 1px solid #e3eae4; border-radius: 8px; background: #fafcfa; color: #56675c; font-size: 11px; }
+.bootstrap-metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 0; }
+.bootstrap-metadata > div { min-width: 0; padding: 11px; border: 1px solid #e5ebe6; border-radius: 7px; }
+.bootstrap-metadata dt { margin-bottom: 6px; }
+.bootstrap-metadata dd { margin: 0; color: #31463a; font-size: 11px; overflow-wrap: anywhere; }
+.bootstrap-metadata__wide { grid-column: 1 / -1; }
+.bootstrap-success-note { padding: 14px; border: 1px solid #d0e3d4; border-radius: 8px; background: #f3f8f3; color: #425e49; font-size: 11px; line-height: 1.55; }
+.bootstrap-success-note p { margin: 7px 0; }
+.bootstrap-success-note code { display: inline-block; overflow-wrap: anywhere; color: #315b42; font-family: var(--mono); font-size: 10px; }
+.bootstrap-search { max-width: 460px; }
+.bootstrap-search input { min-height: 36px; padding: 7px 9px; border: 1px solid #d4ddd6; border-radius: 7px; background: #fbfcfb; color: #283a32; font-family: inherit; font-size: 11px; }
+.bootstrap-job-list { display: grid; border-top: 1px solid #e5ebe6; }
+.bootstrap-job-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 2px; border-bottom: 1px solid #e5ebe6; color: inherit; text-decoration: none; }
+.bootstrap-job-row:hover { background: #f8faf8; }
+.bootstrap-job-row > div { display: grid; min-width: 0; gap: 4px; }
+.bootstrap-job-row strong { overflow-wrap: anywhere; color: #315b42; font-family: var(--mono); font-size: 10px; }
+.bootstrap-job-row small { color: #748078; font-size: 10px; }
+.bootstrap-pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.bootstrap-pagination span { color: #748078; font-size: 10px; }
+
+@media (max-width: 700px) {
+  .bootstrap-preview-grid, .bootstrap-metadata { grid-template-columns: 1fr; }
+  .bootstrap-identity-wide, .bootstrap-metadata__wide { grid-column: auto; }
+  .bootstrap-detail-heading { align-items: flex-start; flex-direction: column; }
+  .bootstrap-accepted { align-items: flex-start; flex-direction: column; }
+}
