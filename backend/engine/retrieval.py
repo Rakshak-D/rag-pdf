@@ -6,8 +6,10 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
+import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+import stat
 from time import perf_counter
 from typing import Any, Literal
 
@@ -165,6 +167,22 @@ class _SuccessfulBuildReport:
     image_embedding_seconds: object | None = None
 
 
+@dataclass(frozen=True)
+class _BuildReportInspection:
+    """Bounded, schema-checked report evidence used by retrieval and inventory."""
+
+    status: Literal["compatible", "mismatch", "failed", "partial", "invalid", "unavailable", "incomplete"]
+    reason_code: str
+    build_id: str | None = None
+    index_fingerprint: str | None = None
+    document_manifest_hash: str | None = None
+    text_records_persisted: int | None = None
+    image_records_persisted: int | None = None
+    report_status: str | None = None
+    text_embedding_seconds: object | None = None
+    image_embedding_seconds: object | None = None
+
+
 def _sha256_hash(value: Any, *, label: str) -> str:
     if not isinstance(value, str) or len(value) != _SHA256_LENGTH:
         raise RetrievalReportError(f"report {label} must be a 64-character SHA-256 hash")
@@ -181,76 +199,223 @@ def _nonnegative_count(payload: Mapping[str, Any], key: str) -> int:
     return value
 
 
-def _validate_build_report(storage_root: str | Path, report_path: str | Path, plan: RunPlan) -> _SuccessfulBuildReport:
+def _path_has_symlink_component(path: Path) -> bool:
+    """Check an absolute path without resolving away its link components."""
+
+    candidate = path if path.is_absolute() else Path.cwd() / path
+    current = Path(candidate.anchor)
+    for part in candidate.parts[1:]:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            return False
+        if stat.S_ISLNK(mode):
+            return True
+    return False
+
+
+def _strict_report_json(data: bytes) -> Any:
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate report key")
+            result[key] = value
+        return result
+
+    def finite_float(value: str) -> float:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError("non-finite report number")
+        return parsed
+
+    def reject_constant(_value: str) -> None:
+        raise ValueError("non-finite report number")
+
+    return json.loads(
+        data.decode("utf-8"),
+        object_pairs_hook=unique_object,
+        parse_float=finite_float,
+        parse_constant=reject_constant,
+    )
+
+
+def _inspect_build_report(
+    storage_root: str | Path,
+    report_path: str | Path,
+    plan: RunPlan,
+    *,
+    max_bytes: int | None = None,
+    reject_symlinks: bool = False,
+    strict_json: bool = False,
+) -> _BuildReportInspection:
+    """Inspect one report with the same identity contract used by retrieval.
+
+    Inventory opts into bounded reads, duplicate-key rejection, and explicit
+    symlink rejection. Retrieval retains its established call semantics.
+    """
+
     owned_root = Path(storage_root).expanduser().resolve(strict=False)
+    original_report = Path(report_path).expanduser()
+    if not original_report.is_absolute():
+        original_report = owned_root / original_report
+    if reject_symlinks and _path_has_symlink_component(original_report):
+        return _BuildReportInspection("invalid", "symlink_path")
     try:
         resolved_report = resolve_owned_path(owned_root, report_path)
     except PathContainmentError as exc:
-        raise RetrievalReportError("build report must remain inside storage root") from exc
+        return _BuildReportInspection("invalid", "report_outside_storage")
     if resolved_report.name != "build-report.json":
-        raise RetrievalReportError("build report must be named build-report.json")
+        return _BuildReportInspection("invalid", "report_location_invalid")
     try:
         relative = resolved_report.relative_to(owned_root)
-    except ValueError as exc:
-        raise RetrievalReportError("build report is outside storage root") from exc
+    except ValueError:
+        return _BuildReportInspection("invalid", "report_outside_storage")
     parts = relative.parts
     if len(parts) != 3 or parts[0] != "build-artifacts" or parts[2] != "build-report.json":
-        raise RetrievalReportError(
-            "build report must be directly under storage_root/build-artifacts/<build-id>"
-        )
+        return _BuildReportInspection("invalid", "report_location_invalid")
     build_id = parts[1]
-    if not build_id or not resolved_report.is_file():
-        raise RetrievalReportUnavailable("build report does not exist")
     try:
-        payload = json.loads(resolved_report.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise RetrievalReportUnavailable("build report is not valid UTF-8 JSON") from exc
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise RetrievalReportError("build report is not valid UTF-8 JSON") from exc
+        descriptor = os.open(
+            os.fspath(resolved_report),
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | (getattr(os, "O_NOFOLLOW", 0) if reject_symlinks else 0),
+        )
+    except FileNotFoundError:
+        return _BuildReportInspection("unavailable", "report_unavailable")
+    except OSError:
+        return _BuildReportInspection("unavailable", "report_unavailable")
+    try:
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            return _BuildReportInspection("unavailable", "report_unavailable")
+        if reject_symlinks:
+            if _path_has_symlink_component(original_report):
+                return _BuildReportInspection("invalid", "symlink_path")
+            try:
+                path_stat = resolved_report.lstat()
+            except OSError:
+                return _BuildReportInspection("unavailable", "report_unavailable")
+            if (stat.S_ISLNK(path_stat.st_mode) or file_stat.st_dev != path_stat.st_dev
+                    or file_stat.st_ino != path_stat.st_ino):
+                return _BuildReportInspection("invalid", "symlink_path")
+        with os.fdopen(descriptor, "rb") as report_file:
+            descriptor = -1
+            raw = report_file.read() if max_bytes is None else report_file.read(max_bytes + 1)
+    except OSError:
+        return _BuildReportInspection("unavailable", "report_unavailable")
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if max_bytes is not None and len(raw) > max_bytes:
+        return _BuildReportInspection("incomplete", "report_too_large", build_id=build_id)
+    try:
+        payload = _strict_report_json(raw) if strict_json else json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError):
+        return _BuildReportInspection("invalid", "report_invalid", build_id=build_id)
     if not isinstance(payload, dict):
-        raise RetrievalReportError("build report must contain a JSON object")
+        return _BuildReportInspection("invalid", "report_invalid", build_id=build_id)
     if payload.get("report_schema_version") != REPORT_SCHEMA_VERSION:
-        raise RetrievalReportError("unsupported build report schema version")
+        return _BuildReportInspection("invalid", "report_schema_unsupported", build_id=build_id)
     if payload.get("build_id") != build_id:
-        raise RetrievalReportError("build report build_id does not match its artifact directory")
+        return _BuildReportInspection("invalid", "build_id_mismatch", build_id=build_id)
     for key in ("artifact_root", "report_path"):
         value = payload.get(key)
         if not isinstance(value, str):
-            raise RetrievalReportError(f"build report {key} must be a path string")
+            return _BuildReportInspection("invalid", "report_location_invalid", build_id=build_id)
+        raw_value_path = Path(value).expanduser()
+        if reject_symlinks and ".." in raw_value_path.parts:
+            return _BuildReportInspection("invalid", "report_location_invalid", build_id=build_id)
+        if not raw_value_path.is_absolute():
+            raw_value_path = owned_root / raw_value_path
+        if reject_symlinks and _path_has_symlink_component(raw_value_path):
+            return _BuildReportInspection("invalid", "symlink_path", build_id=build_id)
         try:
             resolved_value = resolve_owned_path(owned_root, value)
-        except PathContainmentError as exc:
-            raise RetrievalReportError(f"build report {key} escapes storage root") from exc
+        except PathContainmentError:
+            return _BuildReportInspection("invalid", "report_outside_storage", build_id=build_id)
         expected = resolved_report.parent if key == "artifact_root" else resolved_report
         if resolved_value != expected:
-            raise RetrievalReportError(f"build report {key} does not match its artifact location")
+            return _BuildReportInspection("invalid", "report_location_invalid", build_id=build_id)
     if not isinstance(payload.get("status"), str) or payload.get("status") not in {"completed", "completed_with_warnings"}:
-        error = RetrievalReportFailed if payload.get("status") == "failed" else RetrievalReportError
-        raise error("build report is not a successful build")
+        if payload.get("status") == "failed":
+            try:
+                failed_index = _sha256_hash(payload.get("index_fingerprint"), label="index_fingerprint")
+                failed_manifest = _sha256_hash(payload.get("document_manifest_hash"), label="document_manifest_hash")
+            except RetrievalReportError:
+                failed_index = failed_manifest = None
+            return _BuildReportInspection("failed", "build_failed", build_id=build_id,
+                                          index_fingerprint=failed_index, document_manifest_hash=failed_manifest,
+                                          report_status="failed")
+        return _BuildReportInspection("invalid", "report_status_invalid", build_id=build_id)
     if payload.get("partial_persistence") is not False:
-        error = RetrievalReportPartial if payload.get("partial_persistence") is True else RetrievalReportError
-        raise error("build report indicates possible partial vector persistence")
-    index_fingerprint = _sha256_hash(payload.get("index_fingerprint"), label="index_fingerprint")
-    document_manifest_hash = _sha256_hash(
-        payload.get("document_manifest_hash"), label="document_manifest_hash"
-    )
+        if payload.get("partial_persistence") is True:
+            try:
+                partial_index = _sha256_hash(payload.get("index_fingerprint"), label="index_fingerprint")
+                partial_manifest = _sha256_hash(payload.get("document_manifest_hash"), label="document_manifest_hash")
+            except RetrievalReportError:
+                partial_index = partial_manifest = None
+            return _BuildReportInspection("partial", "partial_persistence", build_id=build_id,
+                                          index_fingerprint=partial_index, document_manifest_hash=partial_manifest,
+                                          report_status=payload["status"])
+        return _BuildReportInspection("invalid", "partial_state_invalid", build_id=build_id, report_status=payload["status"])
+    try:
+        index_fingerprint = _sha256_hash(payload.get("index_fingerprint"), label="index_fingerprint")
+        document_manifest_hash = _sha256_hash(payload.get("document_manifest_hash"), label="document_manifest_hash")
+    except RetrievalReportError:
+        return _BuildReportInspection("invalid", "report_identity_invalid", build_id=build_id, report_status=payload["status"])
     if index_fingerprint != plan.index_fingerprint:
-        raise RetrievalReportMismatch("build report index fingerprint does not match the RunPlan")
+        return _BuildReportInspection("mismatch", "index_fingerprint_mismatch", build_id=build_id,
+                                      index_fingerprint=index_fingerprint, document_manifest_hash=document_manifest_hash,
+                                      report_status=payload["status"])
     if document_manifest_hash != plan.document_manifest_hash:
-        raise RetrievalReportMismatch("build report document manifest does not match the RunPlan")
+        return _BuildReportInspection("mismatch", "manifest_hash_mismatch", build_id=build_id,
+                                      index_fingerprint=index_fingerprint, document_manifest_hash=document_manifest_hash,
+                                      report_status=payload["status"])
+    try:
+        text_count = _nonnegative_count(payload, "text_records_persisted")
+        image_count = _nonnegative_count(payload, "image_records_persisted")
+    except RetrievalReportError:
+        return _BuildReportInspection("invalid", "report_counts_invalid", build_id=build_id,
+                                      index_fingerprint=index_fingerprint, document_manifest_hash=document_manifest_hash,
+                                      report_status=payload["status"])
+    return _BuildReportInspection("compatible", "report_matches", build_id=build_id,
+                                  index_fingerprint=index_fingerprint, document_manifest_hash=document_manifest_hash,
+                                  text_records_persisted=text_count, image_records_persisted=image_count,
+                                  report_status=payload["status"],
+                                  text_embedding_seconds=payload.get("text_embedding_seconds"),
+                                  image_embedding_seconds=payload.get("image_embedding_seconds"))
+
+
+def _validate_build_report(storage_root: str | Path, report_path: str | Path, plan: RunPlan) -> _SuccessfulBuildReport:
+    """Preserve retrieval's exception contract over the shared report reader."""
+
+    inspection = _inspect_build_report(storage_root, report_path, plan)
+    if inspection.status == "unavailable":
+        raise RetrievalReportUnavailable("build report does not exist or cannot be read")
+    if inspection.status == "failed":
+        raise RetrievalReportFailed("build report is not a successful build")
+    if inspection.status == "partial":
+        raise RetrievalReportPartial("build report indicates possible partial vector persistence")
+    if inspection.status == "mismatch":
+        raise RetrievalReportMismatch("build report identity does not match the RunPlan")
+    if inspection.status != "compatible":
+        raise RetrievalReportError("build report is malformed or invalid")
+    assert inspection.build_id is not None
+    assert inspection.index_fingerprint is not None
+    assert inspection.document_manifest_hash is not None
+    assert inspection.text_records_persisted is not None
+    assert inspection.image_records_persisted is not None
+    assert inspection.report_status is not None
     return _SuccessfulBuildReport(
-        build_id=build_id,
-        index_fingerprint=index_fingerprint,
-        document_manifest_hash=document_manifest_hash,
-        text_records_persisted=_nonnegative_count(
-            payload, "text_records_persisted"
-        ),
-        image_records_persisted=_nonnegative_count(
-            payload, "image_records_persisted"
-        ),
-        status=payload["status"],
-        text_embedding_seconds=payload.get("text_embedding_seconds"),
-        image_embedding_seconds=payload.get("image_embedding_seconds"),
+        build_id=inspection.build_id,
+        index_fingerprint=inspection.index_fingerprint,
+        document_manifest_hash=inspection.document_manifest_hash,
+        text_records_persisted=inspection.text_records_persisted,
+        image_records_persisted=inspection.image_records_persisted,
+        status=inspection.report_status,
+        text_embedding_seconds=inspection.text_embedding_seconds,
+        image_embedding_seconds=inspection.image_embedding_seconds,
     )
 
 
