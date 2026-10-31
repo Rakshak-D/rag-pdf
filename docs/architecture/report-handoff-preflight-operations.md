@@ -149,3 +149,49 @@ collection can be read successfully.
 See [report handoff and activation safety design](report-handoff-safety-design.md),
 [read-only index inventory](index-inventory.md), and
 [local runtime operations](local-runtime.md) for the surrounding contracts.
+
+## Isolated manual-handoff smoke
+
+Run the end-to-end synthetic check from the repository root:
+
+```powershell
+.\rag-env\Scripts\python.exe scripts/manual_report_handoff_smoke.py
+```
+
+The harness creates a valid synthetic PDF, complete resolved configuration,
+and separate temporary source, index, runtime database, and artifact roots. A
+disposable child process runs the established `build_index()` path with
+deterministic injected text and image adapters and `creation_policy="fresh_only"`.
+It preserves the builder's actual report and identities. The harness then
+runs this preflight CLI against the explicit build ID and compares the full
+temporary index-storage snapshot before and after preflight. Test-only guards
+fail if preflight attempts a Chroma client, store open, writer lease, model,
+builder, retrieval, or experiment operation.
+
+Finally, the harness starts the actual `python -m backend.app` composition on
+loopback with the selected report path supplied in that child process's
+temporary environment. It checks authentication, the current document
+manifest, RunPlan construction, and evaluation report readiness. A second
+schema-shaped report fixture checks post-preflight replacement, failed, and
+partial outcomes. The test-only runtime guard prohibits Chroma, writer-lease,
+embedding, retrieval, generation, build, and experiment-job operations during
+these requests. Runtime readiness must return `check_level: report`,
+`store_checked: false`, and null observed collection counts.
+
+This verifies the mechanics of manually supplying a selected report to the
+ordinary runtime. It does not verify Chroma readability, retrieval success,
+model readiness, or a durable pin over report contents. In particular, a
+same-identity and same-count report replacement can remain report-compatible
+because the current runtime contract does not pin a report-content digest.
+The ordinary readiness operation does not inspect incomplete markers or
+writer reservations; those observations belong to the separate preflight and
+can become stale after it exits. The harness demonstrates those layer
+boundaries without removing its synthetic marker or claiming store readiness.
+
+All environment overrides, databases, reports, PDFs, Chroma files, and
+failure logs are confined to the harness's temporary directory. The smoke
+uses no production model, Ollama, external API, browser, persistent runtime
+configuration, report activation, or experiment execution. Its successful
+readiness result remains report-level evidence only. The observed Chroma
+side effects and unresolved HNSW and artifact-publisher incidents remain as
+documented in the verification contract and audit records.
