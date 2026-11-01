@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
+import os
 import threading
 import traceback
 from time import monotonic
@@ -24,6 +26,23 @@ import backend.experiments.artifact_store as artifact_store_module
 from backend.experiments.serialization import serialize_ablation_result, serialize_evaluation_result
 from notebooks.config import Config
 from tests.unit.test_experiment_serialization import _evaluation
+from tests.diagnostics.artifact_publisher import ArtifactPublishTrace, HarnessGateTimeout, exception_provenance
+
+
+def _publisher_diagnostics(tmp_path, store, artifact_type, artifact_id, expected_bytes):
+    if os.environ.get("RAG_ARTIFACT_PUBLISH_DIAGNOSTICS") != "1":
+        return None
+    attempt_id = os.environ.get("RAG_ARTIFACT_PUBLISH_ATTEMPT", "")
+    if not attempt_id:
+        raise AssertionError("diagnostic mode requires an explicit attempt ID")
+    return ArtifactPublishTrace(
+        attempt_id=attempt_id,
+        artifact_type=artifact_type,
+        artifact_id=artifact_id,
+        expected_bytes=expected_bytes,
+        store_root=store._root,
+        test_root=tmp_path,
+    )
 
 
 def _failed_ablation(plan) -> AblationRunResult:
@@ -82,21 +101,24 @@ def test_size_limit_is_validated_before_publication(tmp_path):
     assert not (tmp_path / "artifacts").exists()
 
 
-def _publish_concurrently(monkeypatch, publish, count=4):
+def _publish_concurrently(monkeypatch, publish, count=4, diagnostic_trace=None, gate_timeout=10):
     original_os = artifact_store_module.os
     original_link = original_os.link
     start = threading.Barrier(count)
     gate_release = threading.Event()
+    gate_release_reason = [None]
     peer_failed = threading.Event()
     lock = threading.Lock()
     arrivals = 0
     results = [None] * count
     errors = [None] * count
     original_errors = [None] * count
+    direct_link_errors = [None] * count
     first_failure = [None]
     checkpoints = ["created"] * count
     staged_names = []
     started = monotonic()
+    exception_observation_count = 0
 
     def coordinated_link(source, destination, *args, **kwargs):
         nonlocal arrivals
@@ -105,11 +127,30 @@ def _publish_concurrently(monkeypatch, publish, count=4):
             arrivals += 1
             staged_names.append(Path(source))
             checkpoints[index] = "final_link"
+            if diagnostic_trace is not None:
+                diagnostic_trace._record_safely("hard_link_attempted", source_name=Path(source).name)
             if arrivals == count:
+                if gate_release_reason[0] is None:
+                    gate_release_reason[0] = "all_arrived"
                 gate_release.set()
-        if not gate_release.wait(10):
-            raise TimeoutError("all publishers did not reach the final link boundary")
-        return original_link(source, destination, *args, **kwargs)
+        if not gate_release.wait(gate_timeout):
+            if diagnostic_trace is not None:
+                diagnostic_trace._record_safely("hard_link_gate_timed_out")
+            raise HarnessGateTimeout("all publishers did not reach the final link boundary")
+        try:
+            result = original_link(source, destination, *args, **kwargs)
+        except FileExistsError:
+            if diagnostic_trace is not None:
+                diagnostic_trace._record_safely("destination_already_exists")
+            raise
+        except OSError as exc:
+            if diagnostic_trace is not None and inspect.isbuiltin(original_link):
+                direct_link_errors[index] = exc
+                diagnostic_trace._record_safely("builtin_link_raised", exception_type=type(exc).__name__)
+            raise
+        if diagnostic_trace is not None:
+            diagnostic_trace._record_safely("hard_link_created")
+        return result
 
     class OsProxy:
         """Redirect only this module's link call; leave process-wide os untouched."""
@@ -118,37 +159,107 @@ def _publish_concurrently(monkeypatch, publish, count=4):
         def __getattr__(self, name):
             return getattr(original_os, name)
 
+        @staticmethod
+        def fsync(fd):
+            if diagnostic_trace is not None:
+                diagnostic_trace._record_safely("temporary_file_fsync_started")
+            result = original_os.fsync(fd)
+            if diagnostic_trace is not None:
+                diagnostic_trace._record_safely("temporary_file_fsynced")
+            return result
+
     monkeypatch.setattr(artifact_store_module, "os", OsProxy())
 
     def run(index):
+        nonlocal exception_observation_count
+        if diagnostic_trace is not None:
+            diagnostic_trace.bind_worker(index)
+            diagnostic_trace._record_safely("worker_started")
         try:
             checkpoints[index] = "started"
             start.wait(timeout=5)
             checkpoints[index] = "start_barrier_passed"
             checkpoints[index] = "publication_entered"
+            if diagnostic_trace is not None:
+                diagnostic_trace._record_safely("concurrency_barrier_passed")
             results[index] = publish()
             checkpoints[index] = "completed"
+            if diagnostic_trace is not None:
+                diagnostic_trace._record_safely("worker_returned")
         except BaseException as exc:
+            with lock:
+                observed_order = exception_observation_count
+                exception_observation_count += 1
+                if first_failure[0] is None:
+                    first_failure[0] = index
+                original_errors[index] = exc
+                checkpoint_at_exception = checkpoints[index]
+                checkpoints[index] = f"raised_after_{checkpoints[index]}"
+                failure_arrivals = arrivals
+            operation_stage = None
+            if diagnostic_trace is not None:
+                try:
+                    operation_stage = diagnostic_trace.current_stage(index)
+                except BaseException as diagnostic_error:
+                    operation_stage = "diagnostic_stage_unavailable"
+                    diagnostic_trace._record_errors.append(type(diagnostic_error).__name__)
+            if diagnostic_trace is not None:
+                diagnostic_trace._record_safely(
+                    "worker_exception_observed",
+                    exception_type=type(exc).__name__,
+                    observed_order=observed_order,
+                    stage_at_failure=operation_stage,
+                )
+            try:
+                formatted_traceback = traceback.format_exc()
+            except BaseException as diagnostic_error:
+                if diagnostic_trace is not None:
+                    diagnostic_trace._record_errors.append(type(diagnostic_error).__name__)
+                try:
+                    formatted_traceback = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+                except BaseException as fallback_error:
+                    if diagnostic_trace is not None:
+                        diagnostic_trace._record_errors.append(type(fallback_error).__name__)
+                    formatted_traceback = "traceback unavailable"
+            origin = exception_provenance(exc)
+            provenance_basis = "explicit_marker" if origin in {"harness_gate_timeout", "injected_fault"} else "unknown"
+            if (origin == "indeterminate_failure" and type(exc) is ArtifactStoreError
+                    and direct_link_errors[index] is not None
+                    and exc.__cause__ is direct_link_errors[index]):
+                origin = "natural_publisher_exception_evidence"
+                provenance_basis = "builtin_link_explicit_cause"
+            def diagnostic_text(value, formatter):
+                try:
+                    return formatter(value)
+                except BaseException as diagnostic_error:
+                    if diagnostic_trace is not None:
+                        diagnostic_trace._record_errors.append(type(diagnostic_error).__name__)
+                    return "diagnostic text unavailable"
             failure = {
                 "index": index,
                 "thread": threading.current_thread().name,
+                "process_id": os.getpid(),
+                "thread_id": threading.get_ident(),
                 "type": type(exc).__name__,
-                "message": str(exc),
-                "traceback": traceback.format_exc(),
-                "cause": repr(exc.__cause__) if exc.__cause__ is not None else None,
-                "context": repr(exc.__context__) if exc.__context__ is not None else None,
-                "checkpoint": checkpoints[index],
+                "provenance": origin,
+                "provenance_basis": provenance_basis,
+                "message": diagnostic_text(exc, str),
+                "traceback": formatted_traceback,
+                "cause": diagnostic_text(exc.__cause__, repr) if exc.__cause__ is not None else None,
+                "context": diagnostic_text(exc.__context__, repr) if exc.__context__ is not None else None,
+                "checkpoint": checkpoint_at_exception,
+                "operation_stage": operation_stage,
+                "observed_order": observed_order,
                 "elapsed": monotonic() - started,
+                "link_arrivals_at_exception_observation": failure_arrivals,
             }
             with lock:
                 errors[index] = failure
-                original_errors[index] = exc
-                if first_failure[0] is None:
-                    first_failure[0] = index
-                checkpoints[index] = f"raised_after_{checkpoints[index]}"
                 failure["link_arrivals"] = arrivals
-            peer_failed.set()
-            gate_release.set()
+                if not gate_release.is_set():
+                    gate_release_reason[0] = "peer_failure"
+                peer_failed.set()
+                gate_release.set()
 
     threads = [threading.Thread(target=run, args=(index,), name=f"artifact-publisher-{index}") for index in range(count)]
     timed_out = False
@@ -157,31 +268,54 @@ def _publish_concurrently(monkeypatch, publish, count=4):
             thread.start()
         timed_out = not gate_release.wait(10) and not peer_failed.is_set()
     finally:
-        gate_release.set()
+        with lock:
+            if not gate_release.is_set():
+                gate_release_reason[0] = "cleanup"
+            gate_release.set()
         for thread in threads:
             if thread.ident is not None:
                 thread.join(timeout=10)
         monkeypatch.setattr(artifact_store_module, "os", original_os)
+    worker_alive = [thread.is_alive() for thread in threads]
+    if diagnostic_trace is not None and (any(errors) or timed_out or any(worker_alive)):
+        try:
+            evidence_reference, evidence_error = diagnostic_trace.write_failure_evidence(
+            errors=errors,
+            first_failure_index=first_failure[0],
+            checkpoints=checkpoints,
+            results=results,
+            link_arrivals=arrivals,
+            link_gate_released=gate_release.is_set(),
+            peer_failed=peer_failed.is_set(),
+            worker_alive=worker_alive,
+            gate_release_reason=gate_release_reason[0],
+            )
+        except BaseException as diagnostic_error:
+            evidence_reference, evidence_error = None, type(diagnostic_error).__name__
+        evidence_text = f"evidence={evidence_reference or 'unavailable'}; evidence_error={evidence_error}"
+    else:
+        evidence_text = ""
     if first_failure[0] is not None:
         first_index = first_failure[0]
         first_error = errors[first_index]
         raise AssertionError(
-            f"publisher failure: {first_error}; arrivals={arrivals}/{count}; "
-            f"checkpoints={checkpoints}; alive={[thread.is_alive() for thread in threads]}; "
+            f"publisher failure: {errors}; first_observed_worker={first_index}; {evidence_text}; "
+            f"arrivals={arrivals}/{count}; checkpoints={checkpoints}; alive={worker_alive}; "
             f"temporary_files={[path.name for path in staged_names if path.exists()]}; "
             f"elapsed={monotonic() - started:.3f}s"
         ) from original_errors[first_index]
     if timed_out:
         raise AssertionError(
             f"publishers at final link={arrivals}/{count}; checkpoints={checkpoints}; "
-            f"alive={[thread.is_alive() for thread in threads]}; "
-            f"errors={errors}; "
+            f"alive={worker_alive}; errors={errors}; {evidence_text}; "
             f"staged_files={[path.name for path in staged_names if path.exists()]}; "
             f"elapsed={monotonic() - started:.1f}s"
         )
     assert all(not thread.is_alive() for thread in threads), "artifact publication thread did not terminate"
     assert errors == [None] * count
     assert all(item == results[0] for item in results)
+    if diagnostic_trace is not None:
+        diagnostic_trace.completed_references = list(results)
     return results[0]
 
 
@@ -219,14 +353,21 @@ def test_concurrent_evaluation_saves_publish_one_complete_canonical_artifact(tmp
     result = _evaluation(tmp_path)
     store = ExperimentArtifactStore(tmp_path / "artifacts")
     expected_bytes = serialize_evaluation_result(result).encode("utf-8")
+    trace = _publisher_diagnostics(
+        tmp_path, store, "evaluation_result", hashlib.sha256(expected_bytes).hexdigest(), expected_bytes
+    )
+    if trace is not None:
+        trace.instrument_store_module(monkeypatch, artifact_store_module)
 
-    reference = _publish_concurrently(monkeypatch, lambda: store.save_evaluation_result(result))
+    reference = _publish_concurrently(monkeypatch, lambda: store.save_evaluation_result(result), diagnostic_trace=trace)
 
     path = tmp_path / "artifacts" / Path(reference.relative_path)
     assert path.read_bytes() == expected_bytes
     assert len(store.list_artifacts("evaluation_result")) == 1
     assert store.load_evaluation_result(reference.artifact_id).report.evaluation_fingerprint == result.report.evaluation_fingerprint
     assert not list((tmp_path / "artifacts").rglob(".artifact-*.tmp"))
+    if trace is not None:
+        trace.write_success_evidence("evaluation", trace.completed_references)
 
 
 def test_concurrent_ablation_saves_are_idempotent_and_plan_bound(tmp_path, monkeypatch):
@@ -235,10 +376,16 @@ def test_concurrent_ablation_saves_are_idempotent_and_plan_bound(tmp_path, monke
     result = _failed_ablation(plan)
     store = ExperimentArtifactStore(tmp_path / "artifacts")
     expected_bytes = serialize_ablation_result(result).encode("utf-8")
+    trace = _publisher_diagnostics(
+        tmp_path, store, "ablation_result", hashlib.sha256(expected_bytes).hexdigest(), expected_bytes
+    )
+    if trace is not None:
+        trace.instrument_store_module(monkeypatch, artifact_store_module)
 
     reference = _publish_concurrently(
         monkeypatch,
         lambda: store.save_ablation_result(result, ablation_plan=plan),
+        diagnostic_trace=trace,
     )
 
     path = tmp_path / "artifacts" / Path(reference.relative_path)
@@ -248,6 +395,8 @@ def test_concurrent_ablation_saves_are_idempotent_and_plan_bound(tmp_path, monke
     assert tuple(item.variant_id for item in restored.variants) == tuple(item.variant_id for item in plan.variants)
     assert serialize_ablation_result(restored).encode("utf-8") == expected_bytes
     assert not list((tmp_path / "artifacts").rglob(".artifact-*.tmp"))
+    if trace is not None:
+        trace.write_success_evidence("ablation", trace.completed_references)
 
 
 def test_listing_ignores_temporary_file_before_atomic_publication(tmp_path, monkeypatch):
