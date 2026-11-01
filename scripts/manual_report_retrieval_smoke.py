@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import threading
 import traceback
 from typing import Any
@@ -186,6 +187,11 @@ def _retrieval_child(
     lease_events: list[dict[str, Any]] = []
     count_events: list[tuple[str, int]] = []
     query_calls: dict[str, list[str]] = {"text": [], "image": []}
+    query_observations: list[dict[str, Any]] = []
+    query_ordinal = 0
+    cache_before_open: list[dict[str, Any]] = []
+    attempt_id = os.environ.get("HNSW_DIAGNOSTIC_ATTEMPT_ID", "attempt-id-unprovided")
+    diagnostic_scenario = os.environ.get("HNSW_DIAGNOSTIC_SCENARIO", "cold_process_retrieval")
     active_stage = [stage]
 
     def checkpoint(value: str) -> None:
@@ -212,6 +218,7 @@ def _retrieval_child(
         from backend.experiments.run_plan import build_run_plan
         from backend.vectorstore.chroma_store import ChromaVectorStore
         import backend.engine.retrieval as retrieval_module
+        from chromadb.api.shared_system_client import SharedSystemClient
 
         config = ResolvedRunConfig.model_validate_json(config_path.read_text(encoding="utf-8"))
         config.validate_for_workbench()
@@ -261,6 +268,152 @@ def _retrieval_child(
         original_query_image = ChromaVectorStore.query_image
         original_close = ChromaVectorStore.close
 
+        def light_store_observation(store: Any, modality: str) -> dict[str, Any]:
+            marker = Path(store.storage_root) / ".writer-leases" / store.manifest.index_fingerprint
+            lease = getattr(store, "_writer_lease", None)
+            if lease is None:
+                lease_state = {
+                    "state": "owner_unobserved_active_vs_stale_unknown" if marker.is_dir() else "no_marker_observed",
+                    "marker_present": marker.is_dir(),
+                }
+            else:
+                owner_pid = getattr(lease, "_pid", None)
+                owner_thread = getattr(lease, "_thread", None)
+                active = bool(getattr(lease, "_active", False))
+                lease_state = {
+                    "state": "active_current_process_thread" if (
+                        active and owner_pid == os.getpid() and owner_thread == threading.get_ident()
+                    ) else "lease_object_owner_mismatch_or_inactive",
+                    "marker_present": marker.is_dir(),
+                    "lease_active": active,
+                    "owner_process_id": owner_pid,
+                    "owner_thread_id": owner_thread,
+                }
+            collection = getattr(store, "_collections", {}).get(modality)
+            system = getattr(getattr(store, "_client", None), "_system", None)
+            cached_systems = list(SharedSystemClient._identifier_to_system.values())
+            chroma_root = Path(store.index_root) / "chroma"
+            allowed_names = {
+                "chroma.sqlite3", "chroma.sqlite3-wal", "chroma.sqlite3-shm",
+                "data_level0.bin", "header.bin", "length.bin", "link_lists.bin",
+                "index_metadata.pickle",
+            }
+            files: list[dict[str, Any]] = []
+            segment_directories: list[str] = []
+            visited = 0
+            truncated = False
+            if chroma_root.is_dir():
+                for base, directories, names in os.walk(chroma_root, followlinks=False):
+                    visited += 1
+                    if visited > 24:
+                        truncated = True
+                        break
+                    base_path = Path(base)
+                    directories[:] = [
+                        name for name in directories
+                        if not (base_path / name).is_symlink()
+                    ]
+                    for name in directories:
+                        directory = base_path / name
+                        if len(directory.relative_to(chroma_root).parts) == 1:
+                            segment_directories.append(directory.name)
+                    for name in names:
+                        if name not in allowed_names:
+                            continue
+                        candidate = base_path / name
+                        try:
+                            info = candidate.stat(follow_symlinks=False)
+                            files.append({
+                                "relative_path": candidate.relative_to(chroma_root).as_posix(),
+                                "size_bytes": info.st_size,
+                                "mtime_ns": info.st_mtime_ns,
+                                "is_symlink": candidate.is_symlink(),
+                            })
+                        except OSError as exc:
+                            files.append({
+                                "relative_path": candidate.relative_to(chroma_root).as_posix(),
+                                "stat_error_type": type(exc).__name__,
+                            })
+                        if len(files) >= 64:
+                            truncated = True
+                            break
+                    if truncated:
+                        break
+            return {
+                "collection_name": getattr(collection, "name", None),
+                "collection_id": str(getattr(collection, "id", "")) or None,
+                "index_fingerprint": store.manifest.index_fingerprint,
+                "process_id": os.getpid(),
+                "thread_id": threading.get_ident(),
+                "cache_snapshot": {
+                    "same_system_present": system is not None and any(system is item for item in cached_systems),
+                    "cached_system_count": len(cached_systems),
+                    "eviction_observed": "unknown_between_checkpoints",
+                },
+                "writer_reservation": lease_state,
+                "hnsw_files": {
+                    "root_present": chroma_root.is_dir(),
+                    "segment_directory_count": len(segment_directories),
+                    "files": files,
+                    "truncated": truncated,
+                    "metadata_pickle_deserialized": False,
+                },
+            }
+
+        def tracked_query(modality: str, original: Any, store: Any, vector: Any, n_results: int):
+            nonlocal query_ordinal
+            query_ordinal += 1
+            query_started_ns = time.monotonic_ns()
+            try:
+                pre_query = light_store_observation(store, modality)
+            except BaseException as observer_error:
+                pre_query = {"diagnostic_observation_error_type": type(observer_error).__name__}
+            observation = {
+                "attempt_id": attempt_id,
+                "scenario": diagnostic_scenario,
+                "query_ordinal": query_ordinal,
+                "modality": modality,
+                "stage": "query_started",
+                "started_monotonic_ns": query_started_ns,
+                "pre_query": pre_query,
+            }
+            checkpoint(f"query_{modality}_{query_ordinal}_started")
+            try:
+                result = original(store, vector, n_results)
+            except BaseException as exc:
+                try:
+                    post_failure = light_store_observation(store, modality)
+                except BaseException as observer_error:
+                    post_failure = {"diagnostic_observation_error_type": type(observer_error).__name__}
+                observation.update({
+                    "stage": "query_raised",
+                    "duration_ns": time.monotonic_ns() - query_started_ns,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc)[:512],
+                    "traceback": traceback.format_exc(),
+                    "post_failure": post_failure,
+                })
+                query_observations.append(observation)
+                checkpoint(f"query_{modality}_{query_ordinal}_raised")
+                raise
+            try:
+                count = len(result.get("ids", [[]])[0])
+            except (AttributeError, IndexError, TypeError):
+                count = None
+            try:
+                post_query = light_store_observation(store, modality)
+            except BaseException as observer_error:
+                post_query = {"diagnostic_observation_error_type": type(observer_error).__name__}
+            observation.update({
+                "stage": "query_completed",
+                "duration_ns": time.monotonic_ns() - query_started_ns,
+                "returned_count": count,
+                "post_query": post_query,
+            })
+            query_observations.append(observation)
+            checkpoint(f"query_{modality}_{query_ordinal}_completed")
+            return result
+
         def tracked_acquire(cls, storage_root, fingerprint):
             lease = original_acquire(cls, storage_root, fingerprint)
             lease_events.append({"event": "acquired", "pid": os.getpid(), "thread": threading.get_ident()})
@@ -280,22 +433,22 @@ def _retrieval_child(
             return count
 
         def tracked_open_existing(cls, storage_root, selected_plan):
+            cache_before_open.append({
+                "process_id": os.getpid(),
+                "thread_id": threading.get_ident(),
+                "cached_system_count": len(SharedSystemClient._identifier_to_system),
+                "observation": "point_in_time_snapshot_not_cache_history",
+            })
             checkpoint("open_existing")
             store = original_open_existing(cls, storage_root, selected_plan)
             checkpoint("open_existing_complete")
             return store
 
         def tracked_query_text(store, vector, n_results=10):
-            checkpoint("query_text")
-            result = original_query_text(store, vector, n_results)
-            checkpoint("query_text_complete")
-            return result
+            return tracked_query("text", original_query_text, store, vector, n_results)
 
         def tracked_query_image(store, vector, n_results=10):
-            checkpoint("query_image")
-            result = original_query_image(store, vector, n_results)
-            checkpoint("query_image_complete")
-            return result
+            return tracked_query("image", original_query_image, store, vector, n_results)
 
         def tracked_close(store):
             checkpoint("store_close")
@@ -373,6 +526,11 @@ def _retrieval_child(
         checkpoint("positive_retrieval_complete")
         operation_snapshot = handoff._tree_snapshot(storage)
         operation_payload = {
+            "attempt_id": attempt_id,
+            "scenario": diagnostic_scenario,
+            "process_id": os.getpid(),
+            "cache_before_open": cache_before_open,
+            "query_observations": query_observations,
             "build_id": report.build_id,
             "document_manifest_hash": manifest.content_hash,
             "index_fingerprint": plan.index_fingerprint,
@@ -588,6 +746,9 @@ def _retrieval_child(
                 lease_state = (Path(storage_value) / ".writer-leases" / fingerprint_value).exists()
             _write_json(failure_path, {
                 "stage": active_stage[0],
+                "attempt_id": attempt_id,
+                "scenario": diagnostic_scenario,
+                "query_observations": query_observations,
                 "exception_type": type(exc).__name__,
                 "message": str(exc),
                 "traceback": traceback.format_exc(),
@@ -623,6 +784,12 @@ def _run_child(
         "TRANSFORMERS_OFFLINE": "1",
         "HF_DATASETS_OFFLINE": "1",
     })
+    for key in (
+        "HNSW_DIAGNOSTIC_ATTEMPT_ID", "HNSW_DIAGNOSTIC_SCENARIO",
+        "HNSW_DIAGNOSTIC_KEEP_SUCCESS", "HNSW_DIAGNOSTIC_ROOT_PARENT",
+    ):
+        if key in os.environ:
+            environment[key] = os.environ[key]
     with log_path.open("wb") as log:
         child = subprocess.Popen(
             command,
@@ -1000,13 +1167,28 @@ def _run_smoke(root: Path, timeout: float) -> dict[str, Any]:
         "lease_released_on_retrieval_thread": result.get("positive_lease_events"),
         "python_version": result.get("python_version"),
         "chroma_version": result.get("chroma_version"),
+        "attempt_id": result.get("attempt_id"),
+        "scenario": result.get("scenario"),
+        "retrieval_process_id": result.get("process_id"),
+        "query_observations": result.get("query_observations", []),
     }
 
 
 def run_smoke(*, timeout: float = 45) -> dict[str, Any]:
     if not 5 <= timeout <= 120:
         raise RetrievalSmokeError("timeout_invalid")
-    root = Path(tempfile.mkdtemp(prefix="rag-manual-retrieval-"))
+    root_parent = os.environ.get("HNSW_DIAGNOSTIC_ROOT_PARENT")
+    if root_parent:
+        supplied_parent = Path(root_parent)
+        if supplied_parent.is_symlink():
+            raise RetrievalSmokeError("diagnostic_root_parent_unsafe")
+        parent = supplied_parent.resolve(strict=True)
+        temp_root = Path(tempfile.gettempdir()).resolve(strict=True)
+        if parent == temp_root or not parent.is_relative_to(temp_root):
+            raise RetrievalSmokeError("diagnostic_root_parent_unsafe")
+        root = Path(tempfile.mkdtemp(prefix="rag-manual-retrieval-", dir=parent))
+    else:
+        root = Path(tempfile.mkdtemp(prefix="rag-manual-retrieval-"))
     try:
         result = _run_smoke(root, timeout)
     except BaseException as exc:
@@ -1016,12 +1198,18 @@ def run_smoke(*, timeout: float = 45) -> dict[str, Any]:
                 "exception_type": type(exc).__name__,
                 "message": str(exc),
                 "traceback": traceback.format_exc(),
+                "attempt_id": os.environ.get("HNSW_DIAGNOSTIC_ATTEMPT_ID", "attempt-id-unprovided"),
+                "scenario": os.environ.get("HNSW_DIAGNOSTIC_SCENARIO", "cold_process_retrieval"),
             })
         if isinstance(exc, RetrievalSmokeError):
             exc.diagnostics_path = root
             raise
         raise RetrievalSmokeError("unexpected_" + type(exc).__name__, root) from exc
-    shutil.rmtree(root)
+    if os.environ.get("HNSW_DIAGNOSTIC_KEEP_SUCCESS") == "1":
+        result["diagnostic_root_retained"] = str(root)
+        result["diagnostic_attempt_id"] = os.environ.get("HNSW_DIAGNOSTIC_ATTEMPT_ID", "attempt-id-unprovided")
+    else:
+        shutil.rmtree(root)
     return result
 
 

@@ -295,6 +295,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         metavar="PATH",
         help="explicit output directory required when the diagnostic plugin is enabled",
     )
+    group.addoption("--hnsw-attempt-id", action="store", default=None, help="safe identifier for this isolated attempt")
+    group.addoption("--hnsw-scenario", action="store", default=None, help="controlled experiment scenario label")
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -312,6 +314,16 @@ def pytest_configure(config: pytest.Config) -> None:
     except OSError as exc:
         raise pytest.UsageError(f"HNSW diagnostic output directory is unavailable ({type(exc).__name__})") from exc
     config._hnsw_diagnostic_output_root = output_root
+    config._hnsw_attempt_id = (
+        config.getoption("--hnsw-attempt-id")
+        or os.environ.get("HNSW_DIAGNOSTIC_ATTEMPT_ID")
+        or "attempt-id-unprovided"
+    )
+    config._hnsw_scenario = (
+        config.getoption("--hnsw-scenario")
+        or os.environ.get("HNSW_DIAGNOSTIC_SCENARIO")
+        or "scenario-unprovided"
+    )
 
 
 def _wrap_query(
@@ -323,19 +335,43 @@ def _wrap_query(
     failure_context: Any = None,
 ):
     def diagnostic_query(store: Any, modality: str, query_embedding: Any, n_results: int):
+        diagnostic_errors: list[str] = []
+
+        def observe(stage: str, details: dict[str, Any] | None = None) -> None:
+            if checkpoint is None:
+                return
+            try:
+                checkpoint(stage, store, details)
+            except Exception as diagnostic_error:
+                diagnostic_errors.append(f"{stage}:{type(diagnostic_error).__name__}")
+
         if checkpoint is not None:
-            checkpoint(f"query_{modality}_started", store, {"requested_results": n_results})
+            observe(f"query_{modality}_started", {"requested_results": n_results})
         try:
             result = original_query(store, modality, query_embedding, n_results)
             if checkpoint is not None:
-                checkpoint(f"query_{modality}_completed", store)
+                try:
+                    returned_count = len(result.get("ids", [[]])[0])
+                except (AttributeError, IndexError, TypeError):
+                    returned_count = None
+                observe(f"query_{modality}_completed", {"returned_count": returned_count})
             return result
         except Exception as error:
             if is_known_hnsw_error(error):
                 original_traceback = traceback.format_exc()
                 if checkpoint is not None:
-                    checkpoint(f"query_{modality}_raised", store, {"exception_type": type(error).__name__})
-                context = failure_context(store, modality, error, original_traceback) if failure_context is not None else {}
+                    observe(f"query_{modality}_raised", {
+                        "exception_type": type(error).__name__,
+                        "exception_message": str(error)[:512],
+                    })
+                context = {}
+                if failure_context is not None:
+                    try:
+                        context = failure_context(store, modality, error, original_traceback)
+                    except Exception as diagnostic_error:
+                        diagnostic_errors.append(f"failure_context:{type(diagnostic_error).__name__}")
+                if diagnostic_errors:
+                    context = {**context, "diagnostic_callback_errors": diagnostic_errors}
                 try:
                     evidence_dir, _errors = collect_test_store_evidence(
                         store,
@@ -375,14 +411,39 @@ def pytest_runtest_call(item: pytest.Item):
     started_ns = time.monotonic_ns()
     events: list[dict[str, Any]] = []
     event_lock = threading.Lock()
+    events_truncated = False
+    query_state: dict[str, Any] = {
+        "ordinal": 0,
+        "modality": None,
+        "collection_name": None,
+        "collection_id": None,
+    }
 
     def append_event(stage: str, store: Any = None, details: dict[str, Any] | None = None) -> dict[str, Any]:
+        nonlocal events_truncated
         event: dict[str, Any] = {
             "stage": stage,
             "elapsed_ns": time.monotonic_ns() - started_ns,
             "process_id": os.getpid(),
             "thread_id": threading.get_ident(),
+            "attempt_id": getattr(item.config, "_hnsw_attempt_id", "attempt-id-unprovided"),
+            "scenario": getattr(item.config, "_hnsw_scenario", "scenario-unprovided"),
         }
+        if stage.startswith("query_") and stage.endswith("_started"):
+            query_state["ordinal"] += 1
+            query_state["modality"] = stage[len("query_"):-len("_started")]
+            if store is not None:
+                collection = getattr(store, "_collections", {}).get(query_state["modality"])
+                query_state["collection_name"] = getattr(collection, "name", None)
+                collection_id = getattr(collection, "id", None)
+                query_state["collection_id"] = str(collection_id) if collection_id is not None else None
+        if query_state["ordinal"]:
+            event.update({
+                "query_ordinal": query_state["ordinal"],
+                "query_modality": query_state["modality"],
+                "collection_name": query_state["collection_name"],
+                "collection_id": query_state["collection_id"],
+            })
         if store is not None:
             try:
                 event["fingerprint_prefix"] = store.manifest.index_fingerprint[:12]
@@ -402,6 +463,8 @@ def pytest_runtest_call(item: pytest.Item):
                     if safe_store
                     else {"inspection": "not_performed_test_temporary_index_provenance_unavailable"}
                 )
+                if safe_store:
+                    event["index_fingerprint"] = store.manifest.index_fingerprint
             except Exception as exc:
                 event["observation_error_type"] = type(exc).__name__
         if details:
@@ -409,6 +472,8 @@ def pytest_runtest_call(item: pytest.Item):
         with event_lock:
             if len(events) < _MAX_TRACE_EVENTS:
                 events.append(event)
+            else:
+                events_truncated = True
         return event
 
     def checkpoint(stage: str, store: Any = None, details: dict[str, Any] | None = None) -> None:
@@ -421,6 +486,9 @@ def pytest_runtest_call(item: pytest.Item):
             "process_id": os.getpid(),
             "thread_id": threading.get_ident(),
             "modality": modality,
+            "query_ordinal": query_state["ordinal"],
+            "collection_name": query_state["collection_name"],
+            "collection_id": query_state["collection_id"],
             "exception_type": type(error).__name__,
             "exception_message": str(error)[:512],
             "traceback": original_traceback,
@@ -525,15 +593,19 @@ def pytest_runtest_call(item: pytest.Item):
         try:
             trace_path.write_text(json.dumps({
                 "test_nodeid": item.nodeid,
+                "attempt_id": getattr(item.config, "_hnsw_attempt_id", "attempt-id-unprovided"),
+                "scenario": getattr(item.config, "_hnsw_scenario", "scenario-unprovided"),
                 "target_match": "exact" if normalized_nodeid in _TARGETS else "test_name_fallback",
                 "events": events,
-                "events_truncated": len(events) >= _MAX_TRACE_EVENTS,
+                "events_truncated": events_truncated,
             }, sort_keys=True, allow_nan=False), encoding="utf-8")
         except Exception as exc:
             print(f"CHROMA_LIFECYCLE_TRACE_WRITE_FAILED={type(exc).__name__}", file=sys.stderr)
         print("CHROMA_LIFECYCLE_TRACE=" + json.dumps({
             "test_nodeid": item.nodeid,
+            "attempt_id": getattr(item.config, "_hnsw_attempt_id", "attempt-id-unprovided"),
+            "scenario": getattr(item.config, "_hnsw_scenario", "scenario-unprovided"),
             "target_match": "exact" if normalized_nodeid in _TARGETS else "test_name_fallback",
             "events": events,
-            "events_truncated": len(events) >= _MAX_TRACE_EVENTS,
+            "events_truncated": events_truncated,
         }, sort_keys=True, allow_nan=False))

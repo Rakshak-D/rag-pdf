@@ -1,5 +1,7 @@
 # Chroma HNSW reader incident
 
+**Latest status as of 2026-11-01:** one controlled uninstrumented reproduction was captured; its cause remains unknown. See “Phase 6.12F-R controlled failure characterization” below. The earlier status paragraphs remain historical records of evidence available at those checkpoints.
+
 **Status as of 2026-10-28: unresolved.** The error has occurred in this repository, but no failure-time snapshot has connected it to one specific on-disk state or cache lifecycle. No runtime or dependency change is justified by the evidence so far.
 
 ## Incident summary
@@ -51,7 +53,7 @@ No project code or dependency change is warranted now. Revisit if a failing run 
 
 ## Phase 6.12F recurrence and bounded lifecycle diagnosis (2026-11-01)
 
-**Current classification: Intermittent incident confirmed; controlled reproduction not established; root cause unresolved. Phase 6.12F remains blocked.** The original standalone and full-suite failures are preserved. Follow-up diagnostic runs passed without reproducing the error; they do not establish resolution. The previously reported full-suite result remains **792 passed, 17 skipped, 1 failed**, so its gate is unmet.
+**Status at that earlier checkpoint: Intermittent incident confirmed; controlled reproduction not established; root cause unresolved. Phase 6.12F remained blocked.** The original standalone and full-suite failures are preserved. Follow-up diagnostic runs passed without reproducing the error; they did not establish resolution. The then-reported full-suite result was **792 passed, 17 skipped, 1 failed**, so its gate was unmet.
 
 ### Original failure evidence preserved
 
@@ -95,15 +97,15 @@ The first Scenario A command completed with the existing test passing, but its e
 
 ### Root-cause assessment and next gate
 
-**Classification: Intermittent incident confirmed; controlled reproduction not established; root cause unresolved. Phase 6.12F remains blocked.** The original full-suite integration failure and the original Phase 6.12F standalone failure are preserved. The bounded diagnostic trials did not reproduce the error; that does not supersede the original failures. The Phase 6.12F recurrence demonstrates that same-process wrapper close/reopen is not a necessary condition for the error: its builder child exited before the first retrieval in the evaluation child. The full-suite test contains a same-process close/reopen and repeated-query sequence, but its retained output does not say which invocation failed. The common confirmed operation is a text collection query; that shared boundary does not establish a shared underlying cause.
+**Classification at that earlier checkpoint: Intermittent incident confirmed; controlled reproduction not established; root cause unresolved. Phase 6.12F remained blocked.** The original full-suite integration failure and the original Phase 6.12F standalone failure are preserved. The bounded diagnostic trials then available did not reproduce the error; that did not supersede the original failures. The Phase 6.12F recurrence demonstrates that same-process wrapper close/reopen is not a necessary condition for the error: its builder child exited before the first retrieval in the evaluation child. The full-suite test contains a same-process close/reopen and repeated-query sequence, but its retained output did not say which invocation failed. The common confirmed operation was a text collection query; that shared boundary did not establish a shared underlying cause.
 
 The post-failure HNSW files being present does not exclude a transient segment-initialization state. No cache eviction, concurrent same-path open, missing active segment directory, SQLite sequence mismatch, or HNSW metadata-map state was observed at the instant either original exception was thrown. The successful same-process run shows that cached-system reuse can work under one trial; it does not prove cache reuse is always safe. The cold-process and evaluation-sequence successes likewise do not establish that a process boundary prevents the failure. Upstream issue #7946 remains a related lead under a different Chroma version, OS, architecture, and cache setting; matching text is not proof of matching cause. The pinned 1.5.0 Rust-backed path is the relevant local implementation, and no dependency or cache setting was changed.
 
-No workaround or production correction is proposed. Root cause remains unknown and no deterministic reproducer was established in this bounded matrix. A later investigation should be separately scoped to capture a failure-time segment identity and correlate it with Chroma's SQLite segment metadata and the installed 1.5.0 Rust reader's initialization conditions, using only a disposable synthetic store and preserving evidence before cleanup. Do not clear Chroma caches, repair files, retry queries, or remove reservations as part of diagnosis. No release acceptance policy was approved; Phase 6.12F remains a release blocker under the current gate.
+No workaround or production correction was proposed at that checkpoint. Root cause remained unknown and no deterministic reproducer had been established in that one-attempt matrix. A later investigation should be separately scoped to capture a failure-time segment identity and correlate it with Chroma's SQLite segment metadata and the installed 1.5.0 Rust reader's initialization conditions, using only a disposable synthetic store and preserving evidence before cleanup. Do not clear Chroma caches, repair files, retry queries, or remove reservations as part of diagnosis. No release acceptance policy was approved; Phase 6.12F remained a release blocker under the then-current gate.
 
 ### Bounded matrix results (2026-11-01)
 
-The fixed diagnostic budget completed without another HNSW error:
+That earlier one-attempt lifecycle follow-up completed without another HNSW error:
 
 | Scenario | Attempts | Successful | Failed | Observed result |
 |---|---:|---:|---:|---|
@@ -127,7 +129,7 @@ For the next bounded experiment, the per-scenario maximum is four fresh Python-p
 | Phase 6.12F evaluation/recovery smoke with diagnostics | 4 | New smoke process and unique diagnostic output capture per attempt; the smoke owns fresh temporary storage. |
 | Cold-process retrieval smoke | 4 | New smoke process; each invocation builds and retrieves in its own disposable subprocess fixture. |
 
-The total budget is 16 attempts. Every attempt receives a unique ID and a separate temporary workspace. Stop a scenario after its first captured HNSW failure; stop the entire matrix if evidence ownership or child cleanup becomes unsafe. Other failures are recorded distinctly and are not converted to passes. The required pre-commit diagnostic-enabled targeted test is Stage A validation and is tracked separately from these 16 Stage B experiment attempts. Do not extend this budget because the runs pass.
+The total budget was 16 attempts. Every attempt receives a unique ID and a separate temporary workspace. Stop a scenario after its first captured HNSW failure; stop the entire matrix if evidence ownership or child cleanup becomes unsafe. Other failures are recorded distinctly and are not converted to passes. The required pre-commit diagnostic-enabled targeted test is Stage A validation and is tracked separately from these Stage B experiment attempts.
 
 #### Snapshot and ownership observations
 
@@ -136,3 +138,58 @@ Scenario A observed nine files and two segment directories after both modality u
 Scenario B's before/after retrieval snapshots showed no file additions, removals, or size changes. The SQLite digest changed, as did the digests of both segments' `data_level0.bin` and `length.bin`; `header.bin` and `link_lists.bin` had timestamp changes. The selected report and application index manifest were unchanged, and the cooperating writer reservation was released. These are observed Chroma-owned persistence changes. They do not establish corruption or identify which Chroma call caused them. The Phase 6.12C side-effect finding remains in force.
 
 Scenario D's successful output confirmed report-compatible preflight, a real retrieval/generation evaluation, canonical artifact reload, catalog aggregates, and lease release. It does not invalidate the earlier failure: that failure occurred on the first text query in its evaluation child, before generation ran. Because the successful run's detailed lifecycle trace was not retained, it cannot establish cache or per-file state at each query boundary.
+
+## Phase 6.12F-R controlled failure characterization (2026-11-01)
+
+**Latest classification: Failure captured, cause unknown. Phase 6.12F remains blocked.** This matrix produced one new controlled HNSW occurrence. It did not establish a deterministic reproducer or explain the native reader error. The original Phase 6.12F and full-suite failure records remain preserved. The historical full-suite gate remains **792 passed, 17 skipped, 1 failed**; it was not rerun for this diagnostic checkpoint.
+
+### Fixed matrix and outcomes
+
+The matrix ran sequentially with unique attempt IDs and isolated temporary storage. The predeclared maximum was 16 attempts. Scenario A stopped after its first HNSW occurrence, so 14 attempts ran:
+
+| Scenario | Attempts | Passed | Failed | Outcome |
+|---|---:|---:|---:|---|
+| Original retrieval test, diagnostics disabled | 2 of max 4 | 1 | 1 | Attempt 2 reproduced the HNSW error; scenario stopped as required. |
+| Original retrieval test, diagnostics enabled | 4 of max 4 | 4 | 0 | No HNSW recurrence; each trace recorded text query 1, image query 2, and text queries 3 and 4. |
+| Phase 6.12F evaluation/recovery smoke with diagnostics | 4 of max 4 | 4 | 0 | In each child, generation-failure case query 1 returned; the distinct explicit-recovery query 2 returned. |
+| Cold-process retrieval smoke | 4 of max 4 | 4 | 0 | Each fresh retrieval child began with no cached Chroma system for its first open; text query 1 and image query 2 returned. |
+
+All 14 launched commands returned within their bounds and were reaped. No timeout, missing enabled trace, or matrix evidence/cleanup stop condition occurred. Scenario A attempt IDs were `original_retrieval_diagnostics_disabled-01-35cc23808d76` and `original_retrieval_diagnostics_disabled-02-d2268ed96dae`. The stopped scenario did not run attempts 3 or 4. The four enabled attempts were `original_retrieval_diagnostics_enabled-01-a1473426cacb`, `-02-351de49a14cb`, `-03-17baf1dee6a8`, and `-04-0c7e288a8428`. Evaluation/recovery attempts were `phase_612f_recovery-01-3e47270d0091`, `-02-1435627567b4`, `-03-2439332f1899`, and `-04-eb9ddf41205c`. Cold retrieval attempts were `cold_process_retrieval-01-9a93b3bb51d9`, `-02-35c8142ec0e2`, `-03-7ca7abaa7f9f`, and `-04-0de6f9f9a731`.
+
+### First captured failure
+
+The failure occurred in diagnostics-disabled attempt `original_retrieval_diagnostics_disabled-02-d2268ed96dae`. The original full pytest traceback is preserved in that attempt's temporary `process.log`. The controlled test ran the same-process sequence from `test_combined_retrieval_validates_report_and_keeps_modalities_separate`: create the Chroma store, upsert text and image records, close the wrapper, reopen via `retrieve_semantic()`, validate the report, read both persisted counts, then query. It failed on **query ordinal 1: the initial retrieval's `text_vectors` query**. The image query and both later text retrievals were never reached. The failure did not depend on the Phase 6.12F recovery sequence.
+
+The native error was `chromadb.errors.InternalError: Error executing plan: Internal error: Error creating hnsw segment reader: Nothing found on disk`, thrown from installed `chromadb/api/rust.py` `_query` at line 550 and surfaced at `ChromaVectorStore._query()` (`backend/vectorstore/chroma_store.py:558` in the captured trace), then wrapped as `ChromaStoreInputError` and `RetrievalQueryError` (`backend/engine/retrieval.py:618`). The failing modality and collection name were text / `text_vectors`. Because this attempt deliberately had diagnostics disabled, it has no in-process Python PID, thread ID, collection UUID, cache sample, or lease snapshot at the exception. The harness recorded the launched command PID as 7324; that is not claimed as the inner interpreter PID. A two-process calibration showed Windows' `Popen.pid` can differ from the interpreter's `os.getpid()`, and the runner retained those as separate observations.
+
+The index was confined to this attempt's unique pytest temporary root; no other matrix attempt ran concurrently. The test itself did not spawn a Chroma child. The reservation state at the exception was not captured; the reservation directory was absent after process exit. The report and index manifest existed in the post-exit fixture, but this attempt did not hash them before the query, so byte-for-byte unchanged status across failure is unknown.
+
+### Post-exit persistence evidence
+
+Only after the pytest owner process exited, the runner captured bounded file metadata and opened SQLite read-only within this attempt's test-owned temporary root. It found two collection rows (`text_vectors`, `image_vectors`, dimension 2), four segment rows (one vector and one metadata segment per collection), two max-sequence rows, and the expected vector-segment UUID directories. The application index manifest was present. Both vector segment directories contained `data_level0.bin` (14,800 bytes), `header.bin` (100 bytes), `length.bin` (400 bytes), and `link_lists.bin` (0 bytes); `chroma.sqlite3` was 188,416 bytes. No `index_metadata.pickle` was present. These are **post-exit** observations, not failure-time state. The same zero-byte `link_lists.bin` and absent pickle also appeared in the successful diagnostics-disabled attempt and in successful enabled controls. They therefore do not distinguish this failure from those successes. No pickle was deserialized. The Rust-backed reader's transient mapping state cannot be inferred from these SQLite rows or native-file presence.
+
+### Query, cache, lease, and process observations
+
+The four diagnostics-enabled original-test attempts all succeeded. Their query order was text #1, image #2, repeated text #3, and repeated text #4. The diagnostic snapshots showed one current Chroma system cached at each checkpoint and the same text fingerprint prefix (`c7bcbc467e3a`); no eviction was observed between checkpoints. The reservation and lease object belonged to the query's current process and thread while open and were absent after wrapper close. The four in-process Python PID/thread pairs were `22548/29544`, `9464/27292`, `21680/13088`, and `29480/13036`. Cache observations remain point-in-time snapshots and cannot rule out transitions between checkpoints.
+
+The four instrumented Phase 6.12F runs each executed two text queries in the same evaluation child: ordinal 1 for `generation-failure` and ordinal 2 for the explicit `explicit-recovery` call. Both returned. Per query, the Chroma system was cached for the same path, and the writer reservation was owned by the current process/thread during store use. The child PID/thread pairs were `2904/13680`, `30104/31096`, `16920/4952`, and `25636/25752`. This confirms that the recovery path reopens the same fingerprint after the first wrapper closes within that child; it does not show that this lifecycle caused or prevents the original failure.
+
+The four cold retrieval runs used a builder process that exited before the retrieval child started. Each retrieval child observed zero cached Chroma systems before its first open, then successfully queried text ordinal 1 and image ordinal 2 with one system cached and an active same-thread lease. The query-child PID/thread pairs were `28748/2964`, `764/27036`, `20580/13088`, and `22648/28340`. This shows successful cold-process behavior in four attempts, not that process separation is a correction.
+
+For the instrumented pytest attempts, the Windows command-launch PID differed from the in-test `os.getpid()` and lease owner PID. The test-only traces and lease observations agree with each other on the in-process owner. The launch PID and in-process PID are retained separately; their launcher relationship was not further investigated. Child scripts' own completion records and the orchestrator's bounded waits all showed process exit. This instrumentation/process-launch distinction limits use of the external PID as an identity for the Python test process.
+
+### Hypothesis assessment
+
+- **Chroma cached-system lifecycle:** The controlled failure followed a same-process wrapper close/reopen, and all enabled controls observed a cached system. The original Phase 6.12F failure occurred in a fresh evaluation child on its first retrieval, so same-process wrapper close/reopen is not necessary for the incident. No cache eviction was observed; point samples cannot exclude an unobserved transition. The data does not establish cache behavior as cause, necessary condition, or sufficient condition.
+- **Persisted segment initialization:** The failure-time segment metadata and native files were not captured because the occurrence was in the diagnostics-disabled scenario. Post-exit SQLite and file evidence showed expected collection/segment rows and native files, with the same absent pickle and zero-byte link-list files seen in passing controls. This does not establish that the state was complete at the instant of failure and does not select among Chroma 1.5.0's error branches.
+- **Timing or cross-test interaction:** The original test failed in a fresh isolated pytest process, so prior full-suite test order is not necessary to reproduce it. The matrix was sequential and used a unique temporary root per attempt; no concurrent same-index matrix process was present. Full-suite scheduling could still change the intermittent rate, but this experiment did not demonstrate such an effect.
+- **Instrumentation correlation:** The uninstrumented scenario had one pass followed by one failure; the instrumented scenario had four passes. This small split is not causal evidence. The observer adds checkpoints and filesystem stats and may alter timing. It neither suppressed the exception nor retried queries.
+- **Phase 6.12F recovery sequence and process lifetime:** Four recovery smokes passed, with the initial generation-failure evaluation and explicit recovery both querying successfully. Four cold-process retrieval smokes also passed. These results do not reproduce the original Phase 6.12F failure and do not establish a process-boundary fix.
+
+### Decision and retained evidence
+
+**Decision: Failure captured, cause unknown. Phase 6.12F remains blocked.** The controlled occurrence confirms the intermittent error can happen in a fresh standalone run of the original retrieval test without diagnostic instrumentation. It does not establish why. Absence of another occurrence in the enabled/recovery/cold runs does not establish resolution. No deterministic reproducer, cache eviction, missing segment directory at failure, empty mapping, or native-file load failure was observed directly.
+
+No production code, Chroma version, cache setting, retrieval behavior, or evaluation behavior changed. The only local code changes add opt-in test diagnostics and query checkpoints to the diagnostic plugin and Phase 6.12E retrieval smoke; the Phase 6.12F smoke records its query observations in temporary per-attempt output. The original Phase 6.12F untracked files and earlier failed-run directory remain preserved. The controlled matrix evidence is under a unique `%TEMP%` directory; each attempt has its process log, summary, traces/results, and test-owned post-exit snapshots. These temporary paths are deliberately not embedded in this committed incident history.
+
+The historical upstream issue #7946 remains only a related lead under a different Chroma release and environment. The artifact-publisher pre-publication `ArtifactIntegrityError` remains separately unresolved. The full-suite failure count above has not been replaced by these bounded diagnostic passes. No workaround, retry, repair, cache adjustment, dependency change, or risk-acceptance decision is proposed here. Further work requires either a captured failure with failure-time segment identity evidence or a separately approved residual-risk policy; until then, Phase 6.12F remains a release blocker.

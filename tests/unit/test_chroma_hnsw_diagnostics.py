@@ -82,6 +82,40 @@ def test_diagnostic_failure_does_not_replace_original_query_exception(tmp_path, 
     assert raised.value is original
 
 
+@pytest.mark.parametrize("failing_callback", ["checkpoint", "failure_context"])
+def test_diagnostic_callback_failure_preserves_original_query_exception(
+    tmp_path, monkeypatch, failing_callback
+):
+    import traceback
+
+    import scripts.diagnose_chroma_hnsw_pytest_plugin as plugin
+
+    original = RuntimeError("Error creating hnsw segment reader: Nothing found on disk")
+
+    def query(*_args):
+        raise original
+
+    def fail_callback(*_args, **_kwargs):
+        raise OSError("diagnostic callback failed")
+
+    monkeypatch.setattr(plugin, "collect_test_store_evidence", lambda *_args, **_kwargs: (None, []))
+    wrapped = _wrap_query(
+        query,
+        output_root=tmp_path,
+        temporary_test_root=tmp_path,
+        checkpoint=fail_callback if failing_callback == "checkpoint" else None,
+        failure_context=fail_callback if failing_callback == "failure_context" else None,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        wrapped(object(), "text", (), 1)
+
+    assert raised.value is original
+    formatted = "".join(traceback.format_exception(raised.type, raised.value, raised.tb))
+    assert "Error creating hnsw segment reader: Nothing found on disk" in formatted
+    assert "in query" in formatted
+
+
 def test_non_hnsw_query_exception_does_not_trigger_diagnostics(tmp_path, monkeypatch):
     original = RuntimeError("unrelated query error")
 
@@ -193,7 +227,7 @@ def test_live_query_failure_snapshot_defers_sqlite_and_pickle_contents(tmp_path,
     assert snapshot["inventory"]["files"] == []
 
 
-def test_target_hook_writes_bounded_trace_and_restores_store_methods(tmp_path):
+def test_target_hook_writes_bounded_trace_and_restores_store_methods(tmp_path, monkeypatch):
     import backend.app.runtime  # noqa: F401 - establishes the normal import order around the package cycle
     from backend.vectorstore.chroma_store import ChromaVectorStore
 
@@ -201,25 +235,56 @@ def test_target_hook_writes_bounded_trace_and_restores_store_methods(tmp_path):
         name: ChromaVectorStore.__dict__[name]
         for name in ("open", "open_existing", "count", "upsert_text", "upsert_image", "close", "_query")
     }
+    original_query = lambda _store, _modality, _vector, _n: {"ids": [["fixture-record"]]}
+    monkeypatch.setattr(ChromaVectorStore, "_query", original_query)
     item = SimpleNamespace(
         nodeid=next(iter(_TARGETS)),
-        config=SimpleNamespace(_hnsw_diagnostic_output_root=tmp_path),
+        config=SimpleNamespace(
+            _hnsw_diagnostic_output_root=tmp_path,
+            _hnsw_attempt_id="unit-attempt",
+            _hnsw_scenario="unit-scenario",
+        ),
         funcargs={"tmp_path": tmp_path / "test-owned"},
     )
     (tmp_path / "test-owned").mkdir()
 
     hook = pytest_runtest_call(item)
     next(hook)
+    fingerprint = "a" * 64
+    store = SimpleNamespace(
+        manifest=SimpleNamespace(index_fingerprint=fingerprint),
+        storage_root=tmp_path / "test-owned",
+        index_root=tmp_path / "test-owned" / "indexes" / fingerprint,
+        _collections={
+            "text": SimpleNamespace(name="synthetic_text", id="text-id"),
+            "image": SimpleNamespace(name="synthetic_image", id="image-id"),
+        },
+        _client=SimpleNamespace(_system=object()),
+        _writer_lease=None,
+    )
+    assert ChromaVectorStore._query(store, "text", [], 1) == {"ids": [["fixture-record"]]}
+    assert ChromaVectorStore._query(store, "image", [], 1) == {"ids": [["fixture-record"]]}
     with pytest.raises(StopIteration):
         next(hook)
 
     traces = list(tmp_path.glob("target-run-*.json"))
     assert len(traces) == 1
     trace = json.loads(traces[0].read_text(encoding="utf-8"))
-    assert trace == {
-        "test_nodeid": item.nodeid,
-        "target_match": "exact",
-        "events": [],
-        "events_truncated": False,
-    }
-    assert all(ChromaVectorStore.__dict__[name] is value for name, value in original.items())
+    assert trace["test_nodeid"] == item.nodeid
+    assert trace["attempt_id"] == "unit-attempt"
+    assert trace["scenario"] == "unit-scenario"
+    assert trace["target_match"] == "exact"
+    assert trace["events_truncated"] is False
+    query_events = [event for event in trace["events"] if event["stage"].startswith("query_")]
+    assert [(event["stage"], event["query_ordinal"], event["query_modality"])
+            for event in query_events] == [
+        ("query_text_started", 1, "text"),
+        ("query_text_completed", 1, "text"),
+        ("query_image_started", 2, "image"),
+        ("query_image_completed", 2, "image"),
+    ]
+    assert all(event["collection_name"] for event in query_events)
+    assert ChromaVectorStore.__dict__["_query"] is original_query
+    for name, value in original.items():
+        if name != "_query":
+            assert ChromaVectorStore.__dict__[name] is value
