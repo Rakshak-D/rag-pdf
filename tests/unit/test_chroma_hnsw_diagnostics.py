@@ -8,9 +8,11 @@ import pytest
 
 import scripts.diagnose_chroma_hnsw as diagnostic
 from scripts.diagnose_chroma_hnsw_pytest_plugin import (
+    _MINIMAL_EVENT_CAPACITY,
     _TARGETS,
     _lease_observation,
     _wrap_query,
+    _wrap_query_minimal,
     collect_test_store_evidence,
     is_known_hnsw_error,
     pytest_runtest_call,
@@ -288,3 +290,190 @@ def test_target_hook_writes_bounded_trace_and_restores_store_methods(tmp_path, m
     for name, value in original.items():
         if name != "_query":
             assert ChromaVectorStore.__dict__[name] is value
+
+
+def _minimal_test_store(tmp_path):
+    fingerprint = "a" * 64
+    storage = tmp_path / "storage"
+    storage.mkdir(exist_ok=True)
+    return SimpleNamespace(
+        manifest=SimpleNamespace(
+            index_fingerprint=fingerprint,
+            document_manifest_hash="b" * 64,
+        ),
+        storage_root=storage,
+        index_root=storage / "indexes" / fingerprint,
+        _collections={"text": SimpleNamespace(name="text_vectors", id="collection-uuid")},
+    )
+
+
+def test_minimal_query_wrapper_preserves_arguments_result_and_bounded_events(tmp_path):
+    output_root = tmp_path / "diagnostics"
+    output_root.mkdir()
+    store = _minimal_test_store(tmp_path)
+    query_embedding = object()
+    result = {"ids": [["fixture-record"]]}
+    calls = []
+
+    def original_query(received_store, modality, received_embedding, n_results):
+        calls.append((received_store, modality, received_embedding, n_results))
+        return result
+
+    wrapped, events = _wrap_query_minimal(
+        original_query,
+        output_root=output_root,
+        temporary_test_root=tmp_path,
+    )
+    for _ in range(_MINIMAL_EVENT_CAPACITY + 4):
+        assert wrapped(store, "text", query_embedding, 7) is result
+
+    assert len(calls) == _MINIMAL_EVENT_CAPACITY + 4
+    assert all(call == (store, "text", query_embedding, 7) for call in calls)
+    assert len(events) == _MINIMAL_EVENT_CAPACITY
+    assert [event["query_ordinal"] for event in events] == list(range(5, 5 + _MINIMAL_EVENT_CAPACITY))
+    assert all(event["result"] == "returned" for event in events)
+    assert all(event["operation"] == "ChromaVectorStore._query" for event in events)
+    assert all(event["collection_id"] == "collection-uuid" for event in events)
+    assert all(event["thread_id"] is not None and event["process_id"] is not None for event in events)
+    assert list(output_root.iterdir()) == []
+
+
+def test_minimal_success_path_does_not_collect_failure_evidence(tmp_path, monkeypatch):
+    import scripts.diagnose_chroma_hnsw_pytest_plugin as plugin
+
+    store = _minimal_test_store(tmp_path)
+    output_root = tmp_path / "diagnostics"
+    output_root.mkdir()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("failure-only observation ran on a successful query")
+
+    monkeypatch.setattr(plugin, "_minimal_failure_context", forbidden)
+    monkeypatch.setattr(plugin, "collect_test_store_evidence", forbidden)
+    wrapped, _events = _wrap_query_minimal(
+        lambda *_args: {"ids": [["ok"]]},
+        output_root=output_root,
+        temporary_test_root=tmp_path,
+    )
+
+    assert wrapped(store, "text", object(), 1) == {"ids": [["ok"]]}
+    assert list(output_root.iterdir()) == []
+
+
+def test_minimal_query_failure_keeps_exception_and_writes_only_failure_evidence(tmp_path, monkeypatch):
+    import traceback
+
+    import scripts.diagnose_chroma_hnsw_pytest_plugin as plugin
+
+    output_root = tmp_path / "diagnostics"
+    output_root.mkdir()
+    store = _minimal_test_store(tmp_path)
+    original = RuntimeError("Error creating hnsw segment reader: Nothing found on disk")
+    captured = {}
+
+    def query(*_args):
+        raise original
+
+    def capture_evidence(_store, _modality, **kwargs):
+        captured.update(kwargs)
+        return None, []
+
+    monkeypatch.setattr(plugin, "collect_test_store_evidence", capture_evidence)
+    wrapped, events = _wrap_query_minimal(
+        query,
+        output_root=output_root,
+        temporary_test_root=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        wrapped(store, "text", object(), 1)
+
+    assert raised.value is original
+    assert "Error creating hnsw segment reader: Nothing found on disk" in captured["full_traceback"]
+    context = captured["operation_context"]
+    assert context["diagnostic_mode"] == "minimal"
+    assert context["failure_observation_timing"] == "after_chroma_query_exception"
+    assert context["test_temporary_index_provenance_verified"] is True
+    assert context["query_event_buffer_capacity"] == _MINIMAL_EVENT_CAPACITY
+    assert context["collection_name"] == "text_vectors"
+    assert context["query_event"]["query_ordinal"] == 1
+    assert context["query_event"]["collection_id"] == "collection-uuid"
+    assert context["query_event"]["result"] == "raised"
+    assert list(events) == context["recent_query_events"]
+    formatted = "".join(traceback.format_exception(raised.type, raised.value, raised.tb))
+    assert "in query" in formatted
+
+
+def test_minimal_evidence_failure_does_not_replace_original_exception(tmp_path, monkeypatch):
+    import scripts.diagnose_chroma_hnsw_pytest_plugin as plugin
+
+    original = RuntimeError("Error creating hnsw segment reader: Nothing found on disk")
+    store = _minimal_test_store(tmp_path)
+    output_root = tmp_path / "diagnostics"
+    output_root.mkdir()
+
+    def query(*_args):
+        raise original
+
+    def fail_evidence(*_args, **_kwargs):
+        raise OSError("evidence storage unavailable")
+
+    monkeypatch.setattr(plugin, "collect_test_store_evidence", fail_evidence)
+    wrapped, _events = _wrap_query_minimal(
+        query,
+        output_root=output_root,
+        temporary_test_root=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        wrapped(store, "text", object(), 1)
+
+    assert raised.value is original
+
+
+def test_off_hook_does_not_patch_query_method(tmp_path):
+    import backend.app.runtime  # noqa: F401 - establishes ordinary package import order
+    from backend.vectorstore.chroma_store import ChromaVectorStore
+
+    original_query = ChromaVectorStore.__dict__["_query"]
+    item = SimpleNamespace(
+        nodeid=next(iter(_TARGETS)),
+        name=next(iter(_TARGETS)).rsplit("::", 1)[-1],
+        config=SimpleNamespace(_hnsw_diagnostic_mode="off"),
+        funcargs={"tmp_path": tmp_path},
+    )
+    hook = pytest_runtest_call(item)
+    next(hook)
+    assert ChromaVectorStore.__dict__["_query"] is original_query
+    with pytest.raises(StopIteration):
+        next(hook)
+    assert ChromaVectorStore.__dict__["_query"] is original_query
+
+
+def test_minimal_hook_restores_query_method_without_success_trace(tmp_path, monkeypatch):
+    import backend.app.runtime  # noqa: F401 - establishes ordinary package import order
+    from backend.vectorstore.chroma_store import ChromaVectorStore
+
+    result = {"ids": [["record"]]}
+    monkeypatch.setattr(ChromaVectorStore, "_query", lambda *_args: result)
+    original_query = ChromaVectorStore.__dict__["_query"]
+    output_root = tmp_path / "diagnostics"
+    output_root.mkdir()
+    item = SimpleNamespace(
+        nodeid=next(iter(_TARGETS)),
+        name=next(iter(_TARGETS)).rsplit("::", 1)[-1],
+        config=SimpleNamespace(
+            _hnsw_diagnostic_mode="minimal",
+            _hnsw_diagnostic_output_root=output_root,
+        ),
+        funcargs={"tmp_path": tmp_path},
+    )
+    hook = pytest_runtest_call(item)
+    next(hook)
+    assert ChromaVectorStore.__dict__["_query"] is not original_query
+    store = _minimal_test_store(tmp_path)
+    assert ChromaVectorStore._query(store, "text", object(), 1) is result
+    with pytest.raises(StopIteration):
+        next(hook)
+    assert ChromaVectorStore.__dict__["_query"] is original_query
+    assert list(output_root.iterdir()) == []

@@ -14,6 +14,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ _TARGETS = {
 }
 _HNSW_ERROR_TEXT = "Error creating hnsw segment reader: Nothing found on disk"
 _MAX_TRACE_EVENTS = 128
+_MINIMAL_EVENT_CAPACITY = 16
 
 
 def is_known_hnsw_error(error: BaseException) -> bool:
@@ -289,6 +291,13 @@ def _relative_store_index_path(store: Any) -> str | None:
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("opt-in Chroma HNSW diagnostics")
     group.addoption(
+        "--hnsw-diagnostic-mode",
+        action="store",
+        choices=("off", "minimal", "detailed"),
+        default="detailed",
+        help="off leaves Chroma untouched; minimal buffers query events; detailed records lifecycle snapshots",
+    )
+    group.addoption(
         "--hnsw-diagnostic-dir",
         action="store",
         default=None,
@@ -300,6 +309,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    mode = config.getoption("--hnsw-diagnostic-mode")
+    config._hnsw_diagnostic_mode = mode
+    if mode == "off":
+        return
     raw = config.getoption("--hnsw-diagnostic-dir")
     if not raw:
         raise pytest.UsageError("--hnsw-diagnostic-dir is required when the HNSW diagnostic plugin is enabled")
@@ -307,7 +320,11 @@ def pytest_configure(config: pytest.Config) -> None:
     if output_root.exists() and output_root.is_symlink():
         raise pytest.UsageError("HNSW diagnostic output directory cannot be a symlink")
     try:
-        output_root.mkdir(parents=True, exist_ok=True)
+        if mode == "minimal":
+            if not output_root.is_dir():
+                raise OSError("minimal mode requires a pre-created directory")
+        else:
+            output_root.mkdir(parents=True, exist_ok=True)
         if not output_root.is_dir():
             raise OSError("not a directory")
         output_root = output_root.resolve()
@@ -394,9 +411,155 @@ def _wrap_query(
     return diagnostic_query
 
 
+def _minimal_failure_context(
+    store: Any,
+    modality: str,
+    event: dict[str, Any],
+    events: list[dict[str, Any]],
+    temporary_test_root: Path | None,
+) -> dict[str, Any]:
+    """Collect failure-only ownership observations for a verified temp store."""
+    context: dict[str, Any] = {
+        "diagnostic_mode": "minimal",
+        "failure_observation_timing": "after_chroma_query_exception",
+        "query_event": event,
+        "recent_query_events": events,
+        "query_event_buffer_capacity": _MINIMAL_EVENT_CAPACITY,
+        "modality": modality,
+    }
+    try:
+        fingerprint = str(store.manifest.index_fingerprint)
+        context["index_fingerprint_prefix"] = fingerprint[:12]
+        context["document_manifest_hash_prefix"] = str(store.manifest.document_manifest_hash)[:12]
+        collection = store._collections.get(modality)
+        context["collection_name"] = getattr(collection, "name", None)
+        collection_id = getattr(collection, "id", None)
+        context["collection_id"] = str(collection_id)[:64] if collection_id is not None else None
+    except Exception as exc:
+        context["identity_observation"] = {"status": "unknown", "error_type": type(exc).__name__}
+
+    try:
+        safe_store = (
+            temporary_test_root is not None
+            and _within(Path(store.storage_root), temporary_test_root)
+            and _within(Path(store.index_root), temporary_test_root)
+            and _within(Path(store.index_root) / "chroma", temporary_test_root)
+        )
+    except Exception as exc:
+        safe_store = False
+        context["test_store_provenance_observation"] = {
+            "status": "unknown",
+            "error_type": type(exc).__name__,
+        }
+    context["test_temporary_index_provenance_verified"] = bool(safe_store)
+    if safe_store:
+        try:
+            marker = Path(store.storage_root) / ".writer-leases" / store.manifest.index_fingerprint
+            context["writer_lease_observation"] = _lease_observation(store, marker.is_dir())
+        except Exception as exc:
+            context["writer_lease_observation"] = {
+                "state": "unknown",
+                "error_type": type(exc).__name__,
+            }
+        context["cache_observation"] = _cache_observation(store)
+    else:
+        context["writer_lease_observation"] = {"state": "not_inspected_unverified_temp_store"}
+        context["cache_observation"] = {"status": "not_inspected_unverified_temp_store"}
+    return context
+
+
+def _wrap_query_minimal(
+    original_query: Any,
+    *,
+    output_root: Path,
+    temporary_test_root: Path | None,
+):
+    """Wrap queries with bounded in-memory events and failure-only evidence I/O."""
+    events: deque[dict[str, Any]] = deque(maxlen=_MINIMAL_EVENT_CAPACITY)
+    query_ordinal = 0
+
+    def diagnostic_query(store: Any, modality: str, query_embedding: Any, n_results: int):
+        nonlocal query_ordinal
+        query_ordinal += 1
+        event: dict[str, Any] = {
+            "query_ordinal": query_ordinal,
+            "modality": modality,
+            "operation": "ChromaVectorStore._query",
+            "process_id": os.getpid(),
+            "thread_id": threading.get_ident(),
+            "monotonic_ns": time.monotonic_ns(),
+            "result": "pending",
+        }
+        try:
+            fingerprint = str(store.manifest.index_fingerprint)
+            event["index_fingerprint_prefix"] = fingerprint[:12]
+        except Exception:
+            event["index_fingerprint_prefix"] = None
+        try:
+            collection = store._collections.get(modality)
+            event["collection_name"] = getattr(collection, "name", None)
+            collection_id = getattr(collection, "id", None)
+            event["collection_id"] = str(collection_id)[:64] if collection_id is not None else None
+        except Exception:
+            event["collection_name"] = None
+            event["collection_id"] = None
+        events.append(event)
+
+        try:
+            result = original_query(store, modality, query_embedding, n_results)
+        except BaseException as error:
+            event["result"] = "raised"
+            if is_known_hnsw_error(error):
+                original_traceback = traceback.format_exc()
+                event["exception_type"] = type(error).__name__
+                event["exception_message"] = str(error)[:512]
+                event["failure_observed_monotonic_ns"] = time.monotonic_ns()
+                try:
+                    operation_context = _minimal_failure_context(
+                        store,
+                        modality,
+                        event,
+                        list(events),
+                        temporary_test_root,
+                    )
+                    _evidence_dir, errors = collect_test_store_evidence(
+                        store,
+                        modality,
+                        temporary_test_root=temporary_test_root,
+                        output_root=output_root,
+                        full_traceback=original_traceback,
+                        operation_context=operation_context,
+                    )
+                    if errors:
+                        print(
+                            "Minimal HNSW evidence collection errors (exception types only): "
+                            + ", ".join(errors),
+                            file=sys.stderr,
+                        )
+                except Exception as diagnostic_error:
+                    try:
+                        print(
+                            "Minimal HNSW evidence failed without replacing query exception "
+                            f"({type(diagnostic_error).__name__})",
+                            file=sys.stderr,
+                        )
+                    except Exception:
+                        pass
+            raise
+        else:
+            event["result"] = "returned"
+            return result
+
+    return diagnostic_query, events
+
+
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_call(item: pytest.Item):
     normalized_nodeid = item.nodeid.replace("\\", "/")
+    mode = getattr(item.config, "_hnsw_diagnostic_mode", "detailed")
+    if mode == "off":
+        yield
+        return
     target_names = {target.rsplit("::", 1)[-1] for target in _TARGETS}
     if normalized_nodeid not in _TARGETS and item.name not in target_names:
         yield
@@ -408,6 +571,19 @@ def pytest_runtest_call(item: pytest.Item):
     output_root: Path = item.config._hnsw_diagnostic_output_root
     temporary_test_root = item.funcargs.get("tmp_path")
     safe_temp_root = Path(temporary_test_root) if temporary_test_root is not None else None
+    if mode == "minimal":
+        wrapped_query, _events = _wrap_query_minimal(
+            original_query,
+            output_root=output_root,
+            temporary_test_root=safe_temp_root,
+        )
+        ChromaVectorStore._query = wrapped_query
+        try:
+            yield
+        finally:
+            ChromaVectorStore._query = original_query
+        return
+
     started_ns = time.monotonic_ns()
     events: list[dict[str, Any]] = []
     event_lock = threading.Lock()

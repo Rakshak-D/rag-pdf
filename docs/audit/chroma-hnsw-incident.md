@@ -1,6 +1,6 @@
 # Chroma HNSW reader incident
 
-**Latest status as of 2026-11-01:** one controlled uninstrumented reproduction was captured; its cause remains unknown. See “Phase 6.12F-R controlled failure characterization” below. The earlier status paragraphs remain historical records of evidence available at those checkpoints.
+**Latest status as of 2026-11-01:** one controlled uninstrumented reproduction is preserved; the subsequent eight-attempt minimal-observer matrix did not reproduce it. Root cause remains unknown and Phase 6.12F remains blocked. The earlier status paragraphs remain historical records of evidence available at those checkpoints.
 
 **Status as of 2026-10-28: unresolved.** The error has occurred in this repository, but no failure-time snapshot has connected it to one specific on-disk state or cache lifecycle. No runtime or dependency change is justified by the evidence so far.
 
@@ -193,3 +193,56 @@ For the instrumented pytest attempts, the Windows command-launch PID differed fr
 No production code, Chroma version, cache setting, retrieval behavior, or evaluation behavior changed. The only local code changes add opt-in test diagnostics and query checkpoints to the diagnostic plugin and Phase 6.12E retrieval smoke; the Phase 6.12F smoke records its query observations in temporary per-attempt output. The original Phase 6.12F untracked files and earlier failed-run directory remain preserved. The controlled matrix evidence is under a unique `%TEMP%` directory; each attempt has its process log, summary, traces/results, and test-owned post-exit snapshots. These temporary paths are deliberately not embedded in this committed incident history.
 
 The historical upstream issue #7946 remains only a related lead under a different Chroma release and environment. The artifact-publisher pre-publication `ArtifactIntegrityError` remains separately unresolved. The full-suite failure count above has not been replaced by these bounded diagnostic passes. No workaround, retry, repair, cache adjustment, dependency change, or risk-acceptance decision is proposed here. Further work requires either a captured failure with failure-time segment identity evidence or a separately approved residual-risk policy; until then, Phase 6.12F remains a release blocker.
+
+## Phase 6.12 minimal-observer experiment plan (2026-11-01)
+
+The next controlled comparison is capped at **eight fresh Python processes**: at most four runs of the original retrieval test with diagnostics off, then at most four runs with the plugin's `minimal` mode. Runs are sequential, each gets a unique attempt ID, a unique pytest `--basetemp`, and isolated Chroma storage. Stop each scenario at its first HNSW failure after evidence capture. Do not extend the budget to seek a failure or a pass. The prior 14-attempt detailed matrix remains separate evidence and is not combined with these counts.
+
+`off` means the pytest diagnostic plugin is not loaded, so it does not replace `ChromaVectorStore._query`. The plugin also accepts an explicit `off` mode for a hook-level no-patch check. `minimal` replaces only `_query` during the named target test. Before each query it appends one bounded event to a 16-entry in-memory ring: ordinal, modality, process/thread IDs, collection name/ID, fingerprint prefix, operation, and monotonic timestamp. Successful queries cause no filesystem walk, cache or lease inspection, JSON serialization, or diagnostic file write; their event buffer is discarded when the test ends. The controlled parent separately records the child's actual `os.getpid()` from a PID file written before `pytest.main()`, its exit status, and the attempt directory.
+
+Only a matching HNSW exception triggers failure-time callback work. The hook retains the original traceback, marks the current ring event as failed, then validates that the storage and index roots resolve beneath the target test's `tmp_path`. For a verified temporary store it captures the collection identity, a point-in-time cache and lease observation, and bounded stat-only Chroma file metadata after the exception. It writes this evidence before the normal retrieval `finally` closes the store, then re-raises the original exception. This is an observation after Chroma raised; it is not an atomic view of Rust state at the instant of failure. SQLite mapping is deferred until the owner process exits; pickle files are never deserialized.
+
+The failure-time event supplies the collection UUID where minimal instrumentation captures a failure. A separate post-exit read-only SQLite inspection may map that collection to its vector-segment UUID and compare the UUID with the segment directory. Such a mapping identifies persisted relationships after process exit only; it cannot establish which Rust reader or mapping existed during the failed query. If no failure occurs in the new matrix, it will provide no new failure-adjacent segment evidence and will be reported as inconclusive.
+
+The two scenarios and their maximum four attempts each were fixed before execution. The first attempt will start only after diagnostic unit tests and compilation pass. Stop the entire experiment if an attempt's evidence ownership or process cleanup cannot be established. No full-suite run is planned: the retained **792 passed, 17 skipped, 1 failed** gate remains failed and relevant.
+
+### Executed minimal-observer matrix (2026-11-01)
+
+The eight-attempt maximum completed without timeouts, unrelated failures, or cleanup/evidence-ownership problems:
+
+| Scenario | Attempt | Actual child Python PID | Exit | Outcome |
+|---|---|---:|---:|---|
+| Off | `original_retrieval_off-01-80d7d864042c` | 11220 | 0 | passed |
+| Off | `original_retrieval_off-02-676067c77c51` | 6836 | 0 | passed |
+| Off | `original_retrieval_off-03-d7b9612a118b` | 27036 | 0 | passed |
+| Off | `original_retrieval_off-04-a7b9efe4937d` | 15440 | 0 | passed |
+| Minimal | `original_retrieval_minimal-01-89abb11722f6` | 18556 | 0 | passed |
+| Minimal | `original_retrieval_minimal-02-e07745c76433` | 23640 | 0 | passed |
+| Minimal | `original_retrieval_minimal-03-552e12ea51c9` | 31620 | 0 | passed |
+| Minimal | `original_retrieval_minimal-04-fcf49cc0be2b` | 22252 | 0 | passed |
+
+**Result: 8 attempted, 8 passed, 0 HNSW failures, 0 other failures, 0 timeouts.** No failure was captured by the new matrix. The older 14-attempt detailed matrix and its one failure remain separate; denominators are not combined.
+
+The off attempts did not load the plugin and have no per-query instrumentation. Minimal mode retained events only in its bounded in-memory ring and discarded them after successful tests, so no successful query ordinal or thread ID was persisted for either scenario. The target test source exercises the initial text and image retrievals and two later text retrievals; the successful assertions passed in all eight attempts. Each child wrote its own `os.getpid()` to a parent-readable file before `pytest.main()`, avoiding the Windows launcher-PID ambiguity from the previous matrix.
+
+Each minimal-mode `diagnostics` directory remained empty after a successful test. This confirms no success-path evidence file was written. Pytest-reported test durations were 3.00–4.65 seconds in off mode and 2.99–3.32 seconds in minimal mode. These are small, unpaired samples with no baseline control for process warm-up; they show no obvious added delay, but do not quantify or rule out observer effects.
+
+The parent inspected each isolated store only after its Python owner exited. In all eight post-exit SQLite mappings, the `text_vectors` collection mapped to one vector/HNSW segment whose UUID directory was present. Each store's post-exit build report and application index manifest agreed on index fingerprint and document-manifest identity, and the cooperating reservation marker was absent after exit. These are post-exit consistency checks; no pre-query digest was taken, so they do not prove the report or manifest remained byte-identical during the query.
+
+### Additional post-exit mapping for the previously captured failure
+
+After confirming the original failed pytest process had exited, a read-only SQLite connection to that attempt's disposable Chroma database mapped text collection UUID `80c4f741-1270-4a4c-9655-2be859aa1def` (`text_vectors`) to vector segment UUID `7baedbbc-788b-42aa-b908-0767bb71f867`. The corresponding segment directory was present in the post-exit filesystem inventory. The same post-exit inspection found a completed `build-1` report and an application index manifest whose fingerprint and document-manifest identities agreed. The observed post-exit report SHA-256 was `3c7f905227310074f1302c321528fcb3eca9f73cae2cc994cd5aa62d6ecda9be`; the manifest SHA-256 was `e3492bf213990c7304c11e7c780df5da1ba627a214cfacd386bb580b16351c0a`.
+
+This mapping was not available at query time. The prior failure had no Python PID, thread ID, collection UUID, or failure-adjacent filesystem inventory. The post-exit segment relationship and files cannot establish whether the Rust query had a live reader, an empty label map, a cache transition, or another transient condition when it threw. The eight passing minimal attempts provide no new failure-adjacent data.
+
+### Updated diagnosis and release risk
+
+**Classification for this experiment: No failure captured; the new minimal-observer matrix is inconclusive. The previously captured intermittent failure remains confirmed and unexplained.** The post-exit collection-to-segment mapping narrows the persisted identity evidence for the old failed fixture, but does not distinguish the Chroma 1.5.0 `UninitializedSegment` branches or establish missing/invalid state at failure time. No cache eviction, native initialization race, or instrumentation effect is demonstrated.
+
+The diagnostic-only unit selection passed **17 tests**; the eight fresh-process attempts all passed. Changed Python files compile, and baseline verification reports **9 research files unchanged**. The complete Python suite was not rerun; its retained result is still **792 passed, 17 skipped, 1 failed**.
+
+**Research and local demonstration:** isolated synthetic retrieval/evaluation demonstrations may be run with the known limitations disclosed; this is not evidence of production-model quality or general index reliability. No formal residual-risk acceptance was made here.
+
+**General-purpose unattended operation:** keep the HNSW incident as a reliability blocker. There is no accepted failure policy or approved recovery behavior. Do not add automatic retries, rebuilds, cache changes, or file cleanup to turn this result into success.
+
+Recommended next decision: continue blocking unattended release. A further investigation should be a separately reviewed, narrowly scoped native/upstream diagnostic plan aimed at capturing the actual Rust initialization branch; another broad test matrix would add little unless it enables that failure-time observation. Any limited local-use risk acceptance requires a separate explicit decision.
