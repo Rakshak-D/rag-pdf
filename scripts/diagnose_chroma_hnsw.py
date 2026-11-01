@@ -180,22 +180,21 @@ def _sqlite_summary(chroma_root: Path) -> dict[str, Any]:
 
 
 def _safe_snapshot(chroma_root: Path) -> tuple[dict[str, Any], list[str]]:
-    """Collect each diagnostic independently so one failure cannot hide another."""
+    """Collect bounded stat metadata without querying files owned by a live client."""
     snapshot: dict[str, Any] = {"captured_utc": _timestamp(), "timing": "post_exception_sequential"}
     errors: list[str] = []
-    collectors = (
-        ("inventory", lambda: _inventory(chroma_root)),
-        ("index_metadata_pickle", lambda: _metadata_pickle_summary(chroma_root)),
-        ("sqlite", lambda: _sqlite_summary(chroma_root)),
+    try:
+        snapshot["inventory"] = _inventory(chroma_root)
+    except Exception as exc:
+        error_type = type(exc).__name__
+        snapshot["inventory"] = {"collection_error_type": error_type}
+        errors.append(f"inventory:{error_type}")
+    snapshot["sqlite_content_inspection"] = "deferred_until_client_owner_process_has_exited"
+    snapshot["pickle_content_inspection"] = "not_performed_presence_and_size_only"
+    snapshot["note"] = (
+        "Stat-only post-exception observations; they do not establish filesystem state at the instant of query failure. "
+        "SQLite and pickle contents are not read while the Chroma owner process is active."
     )
-    for name, collect in collectors:
-        try:
-            snapshot[name] = collect()
-        except Exception as exc:
-            error_type = type(exc).__name__
-            snapshot[name] = {"collection_error_type": error_type}
-            errors.append(f"{name}:{error_type}")
-    snapshot["note"] = "Post-exception observations only; they do not establish filesystem state at the instant of query failure."
     return snapshot, errors
 
 

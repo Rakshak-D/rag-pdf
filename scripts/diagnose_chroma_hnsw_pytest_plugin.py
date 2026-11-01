@@ -8,7 +8,10 @@ not import or activate this plugin.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import threading
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -19,10 +22,8 @@ import pytest
 
 from scripts.diagnose_chroma_hnsw import (
     _inventory,
-    _metadata_pickle_summary,
     _runtime_info,
     _save_failure_evidence,
-    _sqlite_summary,
 )
 
 
@@ -31,6 +32,7 @@ _TARGETS = {
     "tests/integration/test_retrieval.py::test_combined_retrieval_validates_report_and_keeps_modalities_separate",
 }
 _HNSW_ERROR_TEXT = "Error creating hnsw segment reader: Nothing found on disk"
+_MAX_TRACE_EVENTS = 128
 
 
 def is_known_hnsw_error(error: BaseException) -> bool:
@@ -63,13 +65,17 @@ def _cache_observation(store: Any) -> dict[str, Any]:
     """Read installed-version internals without changing cache behavior."""
     try:
         from chromadb.api.rust import RustBindingsAPI
+        from chromadb.api.shared_system_client import SharedSystemClient
 
         client = store._client
+        system = client._system
         api = client._system.instance(RustBindingsAPI)
         return {
             "status": "observed",
             "value": int(api.hnsw_cache_size),
             "source": "unsupported_read_only_installed_internal",
+            "current_system_cached": any(system is item for item in SharedSystemClient._identifier_to_system.values()),
+            "cached_system_count": len(SharedSystemClient._identifier_to_system),
             "eviction_observed": "unknown",
         }
     except Exception as exc:
@@ -80,6 +86,107 @@ def _cache_observation(store: Any) -> dict[str, Any]:
         }
 
 
+def _system_cached_after_close(client: Any) -> dict[str, Any]:
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+
+        system = client._system
+        return {
+            "system_cached": any(system is item for item in SharedSystemClient._identifier_to_system.values()),
+            "cached_system_count": len(SharedSystemClient._identifier_to_system),
+        }
+    except Exception as exc:
+        return {"observation_error_type": type(exc).__name__}
+
+
+def _lease_observation(store: Any, marker_present: bool) -> dict[str, Any]:
+    """Distinguish a lease object owned here from a marker with unknown owner state."""
+    lease = getattr(store, "_writer_lease", None)
+    if lease is None:
+        return {
+            "marker_present": marker_present,
+            "state": "owner_unobserved_active_vs_stale_unknown" if marker_present else "no_marker_observed",
+            "source": "marker_presence_only",
+        }
+    try:
+        owner_pid = int(lease._pid)
+        owner_thread = int(lease._thread)
+        active = bool(lease._active)
+        store_claimed = bool(lease._store_claimed)
+        current_owner = active and owner_pid == os.getpid() and owner_thread == threading.get_ident()
+        return {
+            "marker_present": marker_present,
+            "state": "active_current_process_thread" if current_owner else "lease_object_owner_mismatch_or_inactive",
+            "source": "unsupported_read_only_lease_object_snapshot",
+            "lease_active": active,
+            "store_claimed": store_claimed,
+            "owner_process_id": owner_pid,
+            "owner_thread_id": owner_thread,
+        }
+    except Exception as exc:
+        return {
+            "marker_present": marker_present,
+            "state": "lease_object_present_owner_state_unknown",
+            "source": "unsupported_read_only_lease_object_snapshot",
+            "observation_error_type": type(exc).__name__,
+        }
+
+
+def _bounded_file_observation(store: Any) -> dict[str, Any]:
+    """Stat only Chroma-owned fixture files; never read a live database or index."""
+    chroma_root = Path(store.index_root) / "chroma"
+    names = {
+        "chroma.sqlite3", "chroma.sqlite3-wal", "chroma.sqlite3-shm",
+        "chroma.sqlite3-journal", "data_level0.bin", "header.bin",
+        "length.bin", "link_lists.bin", "index_metadata.pickle",
+    }
+    files: list[dict[str, Any]] = []
+    directories: set[str] = set()
+    visited = 0
+    truncated = False
+    if not chroma_root.is_dir():
+        return {"root_present": False, "files": [], "segment_directory_count": 0, "truncated": False}
+    for base, dirs, filenames in os.walk(chroma_root, followlinks=False):
+        visited += 1
+        if visited > 64:
+            truncated = True
+            break
+        base_path = Path(base)
+        dirs[:] = [name for name in dirs if not (base_path / name).is_symlink()]
+        for directory in dirs:
+            relative_directory = (base_path / directory).relative_to(chroma_root)
+            if len(relative_directory.parts) == 1:
+                directories.add(relative_directory.as_posix())
+        for filename in filenames:
+            if filename not in names:
+                continue
+            path = base_path / filename
+            try:
+                info = path.stat(follow_symlinks=False)
+                files.append({
+                    "relative_path": path.relative_to(chroma_root).as_posix(),
+                    "size_bytes": info.st_size,
+                    "mtime_ns": info.st_mtime_ns,
+                    "is_symlink": path.is_symlink(),
+                })
+            except OSError as exc:
+                files.append({
+                    "relative_path": path.relative_to(chroma_root).as_posix(),
+                    "stat_error_type": type(exc).__name__,
+                })
+            if len(files) >= 128:
+                truncated = True
+                break
+        if truncated:
+            break
+    return {
+        "root_present": True,
+        "files": files,
+        "segment_directory_count": len(directories),
+        "truncated": truncated,
+    }
+
+
 def collect_test_store_evidence(
     store: Any,
     modality: str,
@@ -87,6 +194,7 @@ def collect_test_store_evidence(
     temporary_test_root: Path | None,
     output_root: Path,
     full_traceback: str,
+    operation_context: dict[str, Any] | None = None,
 ) -> tuple[Path | None, list[str]]:
     """Write a post-exception snapshot, inspecting pickle only for owned test data."""
     errors: list[str] = []
@@ -114,17 +222,15 @@ def collect_test_store_evidence(
         "note": "Filesystem inventory is post-exception and may differ from transient state at the failure instant.",
     }
     if synthetic_owned:
-        for key, collector in (
-            ("relevant_files", lambda: _inventory(chroma_root)),
-            ("sqlite", lambda: _sqlite_summary(chroma_root)),
-            ("index_metadata_pickle", lambda: _metadata_pickle_summary(chroma_root)),
-        ):
+        for key, collector in (("relevant_files", lambda: _inventory(chroma_root)),):
             try:
                 snapshot[key] = collector()
             except Exception as exc:
                 error_type = type(exc).__name__
                 snapshot[key] = {"collection_error_type": error_type}
                 errors.append(f"{key}:{error_type}")
+        snapshot["sqlite_content_inspection"] = "deferred_while_chroma_owner_process_is_active"
+        snapshot["pickle_content_inspection"] = "not_performed_presence_and_size_only"
     else:
         snapshot["filesystem_inspection"] = "not_performed_test_temporary_index_provenance_unavailable"
 
@@ -142,6 +248,11 @@ def collect_test_store_evidence(
         chroma_version = "unknown"
         errors.append(f"chromadb_version:{type(exc).__name__}")
 
+    bounded_observation = (
+        _bounded_file_observation(store)
+        if synthetic_owned
+        else {"inspection": "not_performed_test_temporary_index_provenance_unavailable"}
+    )
     report = {
         "failure_kind": "hnsw_reader_error",
         "test_temporary_index_provenance_verified": synthetic_owned,
@@ -151,6 +262,8 @@ def collect_test_store_evidence(
         "collection_name": collection_name,
         "runtime": _runtime_info(chroma_version, None, None),
         "cache_observation": _cache_observation(store),
+        "operation_context": operation_context or {},
+        "bounded_file_observation": bounded_observation,
         "eviction_observed": "unknown",
         "snapshot": snapshot,
         "diagnostic_collection_errors": errors,
@@ -201,13 +314,28 @@ def pytest_configure(config: pytest.Config) -> None:
     config._hnsw_diagnostic_output_root = output_root
 
 
-def _wrap_query(original_query: Any, *, output_root: Path, temporary_test_root: Path | None):
+def _wrap_query(
+    original_query: Any,
+    *,
+    output_root: Path,
+    temporary_test_root: Path | None,
+    checkpoint: Any = None,
+    failure_context: Any = None,
+):
     def diagnostic_query(store: Any, modality: str, query_embedding: Any, n_results: int):
+        if checkpoint is not None:
+            checkpoint(f"query_{modality}_started", store, {"requested_results": n_results})
         try:
-            return original_query(store, modality, query_embedding, n_results)
+            result = original_query(store, modality, query_embedding, n_results)
+            if checkpoint is not None:
+                checkpoint(f"query_{modality}_completed", store)
+            return result
         except Exception as error:
             if is_known_hnsw_error(error):
                 original_traceback = traceback.format_exc()
+                if checkpoint is not None:
+                    checkpoint(f"query_{modality}_raised", store, {"exception_type": type(error).__name__})
+                context = failure_context(store, modality, error, original_traceback) if failure_context is not None else {}
                 try:
                     evidence_dir, _errors = collect_test_store_evidence(
                         store,
@@ -215,6 +343,7 @@ def _wrap_query(original_query: Any, *, output_root: Path, temporary_test_root: 
                         temporary_test_root=temporary_test_root,
                         output_root=output_root,
                         full_traceback=original_traceback,
+                        operation_context=context,
                     )
                     if evidence_dir is not None:
                         print(f"HNSW test-path evidence saved under: {evidence_dir}", file=sys.stderr)
@@ -231,7 +360,9 @@ def _wrap_query(original_query: Any, *, output_root: Path, temporary_test_root: 
 
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_call(item: pytest.Item):
-    if item.nodeid.replace("\\", "/") not in _TARGETS:
+    normalized_nodeid = item.nodeid.replace("\\", "/")
+    target_names = {target.rsplit("::", 1)[-1] for target in _TARGETS}
+    if normalized_nodeid not in _TARGETS and item.name not in target_names:
         yield
         return
 
@@ -240,12 +371,169 @@ def pytest_runtest_call(item: pytest.Item):
     original_query = ChromaVectorStore._query
     output_root: Path = item.config._hnsw_diagnostic_output_root
     temporary_test_root = item.funcargs.get("tmp_path")
+    safe_temp_root = Path(temporary_test_root) if temporary_test_root is not None else None
+    started_ns = time.monotonic_ns()
+    events: list[dict[str, Any]] = []
+    event_lock = threading.Lock()
+
+    def append_event(stage: str, store: Any = None, details: dict[str, Any] | None = None) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "stage": stage,
+            "elapsed_ns": time.monotonic_ns() - started_ns,
+            "process_id": os.getpid(),
+            "thread_id": threading.get_ident(),
+        }
+        if store is not None:
+            try:
+                event["fingerprint_prefix"] = store.manifest.index_fingerprint[:12]
+                reservation_present = (
+                    Path(store.storage_root) / ".writer-leases" / store.manifest.index_fingerprint
+                ).is_dir()
+                event["reservation_present"] = reservation_present
+                event["lease_observation"] = _lease_observation(store, reservation_present)
+                event["cache"] = _cache_observation(store)
+                safe_store = (
+                    safe_temp_root is not None
+                    and _within(Path(store.storage_root), safe_temp_root)
+                    and _within(Path(store.index_root), safe_temp_root)
+                )
+                event["files"] = (
+                    _bounded_file_observation(store)
+                    if safe_store
+                    else {"inspection": "not_performed_test_temporary_index_provenance_unavailable"}
+                )
+            except Exception as exc:
+                event["observation_error_type"] = type(exc).__name__
+        if details:
+            event.update(details)
+        with event_lock:
+            if len(events) < _MAX_TRACE_EVENTS:
+                events.append(event)
+        return event
+
+    def checkpoint(stage: str, store: Any = None, details: dict[str, Any] | None = None) -> None:
+        append_event(stage, store, details)
+
+    def failure_context(store: Any, modality: str, error: BaseException, original_traceback: str) -> dict[str, Any]:
+        return {
+            "last_checkpoint": events[-1]["stage"] if events else None,
+            "event_count": len(events),
+            "process_id": os.getpid(),
+            "thread_id": threading.get_ident(),
+            "modality": modality,
+            "exception_type": type(error).__name__,
+            "exception_message": str(error)[:512],
+            "traceback": original_traceback,
+            "timeline": list(events),
+        }
+
+    # The target test creates and populates its store before the first retrieval.
+    # These wrappers record only operation boundaries and bounded file metadata.
+    original_open_descriptor = ChromaVectorStore.__dict__.get("open")
+    original_open_existing_descriptor = ChromaVectorStore.__dict__.get("open_existing")
+    original_open = getattr(original_open_descriptor, "__func__", None)
+    original_open_existing = getattr(original_open_existing_descriptor, "__func__", None)
+    original_count = ChromaVectorStore.count
+    original_upsert_text = ChromaVectorStore.upsert_text
+    original_upsert_image = ChromaVectorStore.upsert_image
+    original_close = ChromaVectorStore.close
+
+    if original_open is not None:
+        def tracked_open(cls: Any, *args: Any, **kwargs: Any):
+            checkpoint("store_open_started")
+            try:
+                store = original_open(cls, *args, **kwargs)
+            except BaseException as exc:
+                checkpoint("store_open_raised", details={"exception_type": type(exc).__name__})
+                raise
+            checkpoint("store_open_completed", store)
+            return store
+        ChromaVectorStore.open = classmethod(tracked_open)
+
+    if original_open_existing is not None:
+        def tracked_open_existing(cls: Any, *args: Any, **kwargs: Any):
+            checkpoint("open_existing_started")
+            try:
+                store = original_open_existing(cls, *args, **kwargs)
+            except BaseException as exc:
+                checkpoint("open_existing_raised", details={"exception_type": type(exc).__name__})
+                raise
+            checkpoint("open_existing_completed", store)
+            return store
+        ChromaVectorStore.open_existing = classmethod(tracked_open_existing)
+
+    def tracked_count(store: Any, modality: str):
+        checkpoint(f"count_{modality}_started", store)
+        try:
+            count = original_count(store, modality)
+        except BaseException as exc:
+            checkpoint(f"count_{modality}_raised", store, {"exception_type": type(exc).__name__})
+            raise
+        checkpoint(f"count_{modality}_completed", store, {"count": count})
+        return count
+
+    def tracked_upsert_text(store: Any, ids: Any, *args: Any, **kwargs: Any):
+        checkpoint("text_upsert_started", store, {"record_count": len(ids)})
+        result = original_upsert_text(store, ids, *args, **kwargs)
+        checkpoint("text_upsert_completed", store, {"record_count": len(ids)})
+        return result
+
+    def tracked_upsert_image(store: Any, ids: Any, *args: Any, **kwargs: Any):
+        checkpoint("image_upsert_started", store, {"record_count": len(ids)})
+        result = original_upsert_image(store, ids, *args, **kwargs)
+        checkpoint("image_upsert_completed", store, {"record_count": len(ids)})
+        return result
+
+    def tracked_close(store: Any):
+        checkpoint("store_close_started", store)
+        client = getattr(store, "_client", None)
+        try:
+            return original_close(store)
+        finally:
+            details = _system_cached_after_close(client) if client is not None else {"client_reference_present": False}
+            details["reservation_present"] = (
+                Path(store.storage_root) / ".writer-leases" / store.manifest.index_fingerprint
+            ).is_dir()
+            details["lease_observation"] = _lease_observation(store, details["reservation_present"])
+            checkpoint("store_close_completed", details=details)
+
+    ChromaVectorStore.count = tracked_count
+    ChromaVectorStore.upsert_text = tracked_upsert_text
+    ChromaVectorStore.upsert_image = tracked_upsert_image
+    ChromaVectorStore.close = tracked_close
     ChromaVectorStore._query = _wrap_query(
         original_query,
         output_root=output_root,
-        temporary_test_root=Path(temporary_test_root) if temporary_test_root is not None else None,
+        temporary_test_root=safe_temp_root,
+        checkpoint=checkpoint,
+        failure_context=failure_context,
     )
     try:
         yield
     finally:
+        ChromaVectorStore.count = original_count
+        ChromaVectorStore.upsert_text = original_upsert_text
+        ChromaVectorStore.upsert_image = original_upsert_image
+        ChromaVectorStore.close = original_close
+        if original_open_descriptor is not None:
+            ChromaVectorStore.open = original_open_descriptor
+        if original_open_existing_descriptor is not None:
+            ChromaVectorStore.open_existing = original_open_existing_descriptor
         ChromaVectorStore._query = original_query
+        run_id = "target-run-" + uuid.uuid4().hex
+        trace_path = output_root / f"{run_id}.json"
+        try:
+            trace_path.write_text(json.dumps({
+                "test_nodeid": item.nodeid,
+                "target_match": "exact" if normalized_nodeid in _TARGETS else "test_name_fallback",
+                "events": events,
+                "events_truncated": len(events) >= _MAX_TRACE_EVENTS,
+            }, sort_keys=True, allow_nan=False), encoding="utf-8")
+        except Exception as exc:
+            print(f"CHROMA_LIFECYCLE_TRACE_WRITE_FAILED={type(exc).__name__}", file=sys.stderr)
+        print("CHROMA_LIFECYCLE_TRACE=" + json.dumps({
+            "test_nodeid": item.nodeid,
+            "target_match": "exact" if normalized_nodeid in _TARGETS else "test_name_fallback",
+            "events": events,
+            "events_truncated": len(events) >= _MAX_TRACE_EVENTS,
+        }, sort_keys=True, allow_nan=False))
