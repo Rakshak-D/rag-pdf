@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from backend.config import ResolvedRunConfig
 from backend.engine.retrieval import RetrievalQueryError, query_id_for
 from backend.experiments import (
+    ArtifactStoreError,
     BenchmarkCase,
     BenchmarkSuite,
     ExperimentArtifactStore,
@@ -20,8 +23,10 @@ from backend.services import (
     PersistedAblationRun,
     PersistedEvaluationRun,
     ServiceInputError,
+    ServicePersistenceError,
     ModelAdapterRegistry,
 )
+import backend.experiments.artifact_store as artifact_store_module
 from notebooks.config import Config
 from tests.unit.test_evaluation_runner import setup_chain
 
@@ -248,6 +253,140 @@ def test_generation_failure_persists_and_explicit_second_invocation_succeeds(tmp
     records = {record.artifact_id: record for record in service.list_artifacts(benchmark_id="bench")}
     assert records[failed.record.artifact_id].status == "failed"
     assert records[succeeded.record.artifact_id].status == "succeeded"
+
+
+def test_service_publication_failure_is_explicit_and_does_not_register(tmp_path, monkeypatch):
+    service, plan, query = _service(tmp_path)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+    store = service._catalog._store
+    original_os = artifact_store_module.os
+    link_calls = 0
+    fsync_calls = 0
+    private_detail = "private hard-link filesystem detail"
+    injected_error = PermissionError(private_detail)
+
+    def fail_link(*_args, **_kwargs):
+        nonlocal link_calls
+        link_calls += 1
+        raise injected_error
+
+    class OsProxy:
+        link = staticmethod(fail_link)
+
+        def __getattr__(self, name):
+            return getattr(original_os, name)
+
+        @staticmethod
+        def fsync(fd):
+            nonlocal fsync_calls
+            fsync_calls += 1
+            return original_os.fsync(fd)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(artifact_store_module, "os", OsProxy())
+        with pytest.raises(ServicePersistenceError) as error:
+            service.run_evaluation(plan, suite)
+
+    assert artifact_store_module.os is original_os
+    assert error.value.error_code == "evaluation_persistence_failed"
+    assert private_detail not in str(error.value)
+    assert private_detail not in repr(error.value)
+    artifact_error = error.value.__cause__
+    assert isinstance(artifact_error, ArtifactStoreError)
+    assert artifact_error.__cause__ is injected_error
+    assert link_calls == 1
+    assert fsync_calls == 1
+    assert store.list_artifacts() == ()
+    assert service.list_artifacts() == ()
+    assert not list((tmp_path / "artifacts").rglob(".artifact-*.tmp"))
+
+
+def test_service_registration_failure_preserves_orphan_for_explicit_recovery(tmp_path, monkeypatch):
+    service, plan, query = _service(tmp_path)
+    catalog = service._catalog
+    store = catalog._store
+    original_register = catalog._register
+    original_retrieval = service._retrieval_callable
+    delegate = service._generation_adapter
+    retrieval_calls = 0
+    generation_calls = 0
+    register_calls = 0
+    captured = {}
+    private_detail = "private pre-registration diagnostic detail"
+    injected_error = RuntimeError(private_detail)
+    suite = BenchmarkSuite("bench", "1", (BenchmarkCase("case-1", query, ("text",), text_k=5),))
+
+    def recording_retrieval(*args, **kwargs):
+        nonlocal retrieval_calls
+        retrieval_calls += 1
+        return original_retrieval(*args, **kwargs)
+
+    class CountingGeneration:
+        def generate(self, context, supplied_plan):
+            nonlocal generation_calls
+            generation_calls += 1
+            return delegate.generate(context, supplied_plan)
+
+    def fail_before_sqlite_registration(reference, result):
+        nonlocal register_calls
+        register_calls += 1
+        captured["reference"] = reference
+        captured["result"] = result
+        assert store.load_evaluation_result(reference.artifact_id) == result
+        raise injected_error
+
+    service._retrieval_callable = recording_retrieval  # type: ignore[method-assign]
+    service._generation_adapter = CountingGeneration()  # type: ignore[assignment]
+    with monkeypatch.context() as patch:
+        patch.setattr(catalog, "_register", fail_before_sqlite_registration)
+        with pytest.raises(ServicePersistenceError) as error:
+            service.run_evaluation(plan, suite)
+
+    assert catalog._register == original_register
+    assert error.value.error_code == "evaluation_persistence_failed"
+    assert error.value.__cause__ is injected_error
+    assert private_detail not in str(error.value)
+    assert private_detail not in repr(error.value)
+    assert register_calls == 1
+    assert retrieval_calls == 1
+    assert generation_calls == 1
+    reference = captured["reference"]
+    persisted_result = captured["result"]
+    artifact_id = reference.artifact_id
+    artifact_path = tmp_path / "artifacts" / reference.relative_path
+    artifact_bytes = artifact_path.read_bytes()
+    assert hashlib.sha256(artifact_bytes).hexdigest() == artifact_id
+    assert len(artifact_bytes) == reference.byte_length
+    assert store.list_artifacts("evaluation_result") == (reference,)
+    loaded_from_store = store.load_evaluation_result(artifact_id)
+    assert loaded_from_store == persisted_result
+    assert loaded_from_store.report.evaluation_fingerprint == persisted_result.report.evaluation_fingerprint
+    assert loaded_from_store.report.run_fingerprint == plan.run_fingerprint
+    assert catalog.list_artifacts() == ()
+    with sqlite3.connect(tmp_path / "catalog.sqlite") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM metric_aggregates WHERE artifact_id=?", (artifact_id,)).fetchone()[0] == 0
+    assert not list((tmp_path / "artifacts").rglob(".artifact-*.tmp"))
+
+    recovered = catalog.register_existing_evaluation(artifact_id)
+    assert recovered.artifact_id == artifact_id
+    assert recovered.artifact_type == "evaluation_result"
+    assert recovered.status == "succeeded"
+    assert recovered.evaluation_fingerprint == persisted_result.report.evaluation_fingerprint
+    loaded_from_catalog = catalog.load_evaluation_result(artifact_id)
+    assert loaded_from_catalog == persisted_result
+    assert loaded_from_catalog.report.evaluation_fingerprint == recovered.evaluation_fingerprint
+    metrics = catalog.list_metric_aggregates(artifact_id)
+    assert len(metrics) == 19
+    assert {item.metric_id for item in metrics} == {f"M{number}" for number in range(1, 20)}
+    assert all(item.artifact_id == artifact_id for item in metrics)
+    assert catalog.register_existing_evaluation(artifact_id) == recovered
+    assert catalog.list_metric_aggregates(artifact_id) == metrics
+    assert artifact_path.read_bytes() == artifact_bytes
+    assert catalog.list_artifacts() == (recovered,)
+    assert register_calls == 1
+    assert retrieval_calls == 1
+    assert generation_calls == 1
 
 
 def test_six_variant_ablation_delegates_and_registers_all_variants(tmp_path):
