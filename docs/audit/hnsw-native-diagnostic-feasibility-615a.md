@@ -8,6 +8,14 @@
 - **Classification:** **B — Requires separate native-build approval**
 - **Native query experiments in this phase:** None
 
+## Source-attribution correction — 2026-11-03
+
+The report was first published in commit `c00a2b1bd9e1947e0dd8185dd52402a27eb301a2` with an incorrect production-path attribution: it described `rust/frontend/src/impls/in_memory_frontend.rs` as building the production KNN plan and delegating to the local executor. That module uses `TestReferenceSegment` and calls its `reference_impl.knn()`; it is not the production frontend selected by the embedded Python binding.
+
+The verified pinned-source path is `Bindings::query()` → the `Frontend` alias (`ServiceBasedFrontend`) → `ServiceBasedFrontend::retryable_query()` constructing the `Knn` plan and calling its configured executor → `LocalExecutor::knn()` → `LocalSegmentManager::get_hnsw_reader()` → `LocalHnswSegmentReader::from_segment()` on a cache miss. The binding config selects `ExecutorConfig::Local`. The corrected source table and links below replace the erroneous attribution.
+
+This corrects source provenance; it adds no runtime observation and does not change the recorded HNSW outcomes. The native-diagnostic feasibility classification remains defensible: the corrected production path still reaches the three source-level `UninitializedSegment` branches, while the inspected embedded Python path does not expose a branch-specific native event. The installed extension's exact source-build identity remains unverified.
+
 ## Decision
 
 The current supported Python `PersistentClient`/Rust-bindings path does not expose enough native logging or tracing to identify which `UninitializedSegment` branch produced the HNSW reader error. The exact Chroma 1.5.0 source has three conditions that format to the same `Nothing found on disk` message, and the reader error is converted to Python `InternalError` using its display text. No branch-specific event is emitted at those conditions. `RUST_LOG` is only an `EnvFilter` input when a Rust tracing subscriber has been initialized; the embedded Python binding neither exposes that configuration nor initializes the subscriber in its binding construction path.
@@ -38,11 +46,13 @@ The 1.5.0 Rust source reviewed was:
 
 | Source | Relevant code |
 |---|---|
-| [`rust/python_bindings/src/bindings.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/python_bindings/src/bindings.rs#L606-L650) | PyO3 `Bindings::query` builds a `QueryRequest` and awaits `frontend_clone.query(request)` with the GIL released. |
-| [`rust/frontend/src/impls/in_memory_frontend.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/frontend/src/impls/in_memory_frontend.rs#L604-L683) | Builds the KNN plan from collection and segment metadata and delegates to the local executor. |
-| [`rust/frontend/src/executor/local.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/frontend/src/executor/local.rs#L132-L198) | `LocalExecutor::knn` obtains an HNSW reader from `LocalSegmentManager`. |
-| [`rust/segment/src/local_segment_manager.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/segment/src/local_segment_manager.rs#L75-L123) | Wraps reader errors with `Error creating hnsw segment reader: ...`; a cache miss calls `LocalHnswSegmentReader::from_segment`. |
-| [`rust/segment/src/local_hnsw.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/segment/src/local_hnsw.rs#L33-L57) and [`from_segment`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/segment/src/local_hnsw.rs#L98-L175) | Defines the reader error and its persisted-segment initialization branches. |
+| [`rust/python_bindings/src/bindings.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/python_bindings/src/bindings.rs#L654-L701) | PyO3 `Bindings::query` builds a `QueryRequest` and invokes `frontend_clone.query(request)` with the GIL released. The same binding constructs `ExecutorConfig::Local` in [`Bindings::py_new`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/python_bindings/src/bindings.rs#L69-L139). |
+| [`rust/frontend/src/impls/mod.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/frontend/src/impls/mod.rs#L1-L7) | Aliases `Frontend` to `ServiceBasedFrontend`; the in-memory reference frontend is a separate implementation. |
+| [`rust/frontend/src/impls/service_based_frontend.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/frontend/src/impls/service_based_frontend.rs#L1744-L1813) | The production frontend resolves collection/segment metadata, constructs the `Knn` plan, and calls `self.executor.knn(...)`. |
+| [`rust/frontend/src/impls/service_based_frontend.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/frontend/src/impls/service_based_frontend.rs#L2305-L2353) | `ServiceBasedFrontend::try_from_config` constructs the executor from the configured executor kind. |
+| [`rust/frontend/src/executor/local.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/frontend/src/executor/local.rs#L132-L196) | `LocalExecutor::knn` performs backfill handling and obtains the HNSW reader from `LocalSegmentManager`. |
+| [`rust/segment/src/local_segment_manager.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/segment/src/local_segment_manager.rs#L95-L122) | Checks the shared HNSW pool; on a cache miss it calls `LocalHnswSegmentReader::from_segment`. |
+| [`rust/segment/src/local_hnsw.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/segment/src/local_hnsw.rs#L101-L173) | Defines the reader error and its persisted-segment initialization branches. |
 | [`rust/python_bindings/src/errors.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/python_bindings/src/errors.rs#L13-L36) | Maps internal Chroma errors to Python `InternalError` using the error's formatted string. |
 | [`rust/python_bindings/src/lib.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/python_bindings/src/lib.rs#L24-L29) | Exports the binding module; its log configuration classes remain `TODO`. |
 | [`rust/tracing/src/init_tracer.rs`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/tracing/src/init_tracer.rs) | Builds the `RUST_LOG` filter and exposes tracing subscriber initialization. |
@@ -58,8 +68,9 @@ retrieve_semantic()
   → public Collection.query()
   → installed RustBindingsAPI._query()
   → chromadb_rust_bindings.Bindings.query()
-  → Rust Frontend.query()
-  → local KNN executor
+  → Frontend = ServiceBasedFrontend
+  → ServiceBasedFrontend KNN plan construction
+  → configured LocalExecutor
   → LocalSegmentManager.get_hnsw_reader()
   → LocalHnswSegmentReader::from_segment() on a cache miss
 ```
