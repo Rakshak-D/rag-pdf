@@ -114,14 +114,14 @@ The existing failure records demonstrate the practical limitation: the captured 
 
 The Chroma 1.5.0 source includes a Rust tracing utility. Its `init_tracer.rs` builds an `EnvFilter` from `RUST_LOG` (or a default filter), and exposes stdout and OpenTelemetry layers plus `init_tracing()`. However, that only works after the global subscriber is installed.
 
-The embedded Python binding does not expose a supported Rust logging configuration:
+The embedded Python execution path was checked end to end, rather than inferring logging support from one constructor alone:
 
-- `RustBindingsAPI.start()` constructs `Bindings` with reset permission, SQLite config, persistence path, and HNSW cache size; it has no logging/tracing option.
-- `Bindings::py_new()` constructs the Tokio runtime and local frontend but does not call `init_tracing()`.
-- The PyO3 module exports no tracing initializer; its source leaves “Log config classes” as `TODO`.
+- The installed 1.5.0 Python [`RustBindingsAPI.start()`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/chromadb/api/rust.py#L73-L126) constructs `Bindings` with reset permission, SQLite configuration, persistence path, and HNSW cache size; it has no logging/tracing configuration.
+- The called PyO3 [`Bindings::py_new()`](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/python_bindings/src/bindings.rs#L69-L139) creates the Tokio runtime and configured local frontend but does not call `init_tracing()`.
+- The PyO3 [`chromadb_rust_bindings` module](https://github.com/chroma-core/chroma/blob/ad34d58038fc1e9b6cf73bab8e1df4a5e98aaeda/rust/python_bindings/src/lib.rs#L1-L29) exports no tracing initializer; its source leaves “Log config classes” as `TODO`.
 - The exact three `UninitializedSegment` branches contain no `tracing`/logging statement or branch-specific span field. Setting `RUST_LOG` alone cannot create a subscriber or an event that the branch does not emit.
 
-Python-level Chroma telemetry/OpenTelemetry can describe API operations at configured granularity, but it does not expose the Rust `from_segment()` branch or internal map state. The installed `.pyd` contains strings such as `RUST_LOG`, `Global tracing subscriber set`, and the HNSW error text; those static strings establish neither that a subscriber was initialized by the Python path nor that a failure branch emits a diagnostic event. No supported environment variable or setting was found that would make the current pinned Python binding expose the needed branch.
+`init_tracer.rs` supplies subscriber construction and an `EnvFilter` based on `RUST_LOG`; it does not itself prove the subscriber is initialized in this embedding path. A host could separately install a global subscriber, but the reader branches still emit no branch-identifying event. Python-level Chroma telemetry/OpenTelemetry can describe API operations at configured granularity, but it does not expose the Rust `from_segment()` branch or internal map state. The installed `.pyd` contains strings such as `RUST_LOG`, `Global tracing subscriber set`, and the HNSW error text; those static strings establish neither that a subscriber was initialized by the Python path nor that a failure branch emits a diagnostic event. No supported environment variable or setting was found that would make the current pinned Python binding expose the needed branch.
 
 **Answer:** Failure-time native branch identity is **not feasible through supported diagnostics in the current pinned embedded Chroma environment**.
 
