@@ -61,6 +61,33 @@ npm run build
 
 The test suite mocks HTTP responses and does not require the Python backend, models, Ollama, or a corpus. `npm run build` creates ignored output in `dist/`.
 
+## Authenticated browser E2E
+
+The Playwright suite drives the real React application in installed Microsoft
+Edge Stable through Vite and two isolated loopback Starlette services. It
+checks bootstrap authentication, preview and read-only report inventory, then
+ordinary workbench authentication and empty server-backed catalogs. It never
+submits a build, evaluation, or ablation and does not start Chroma or models.
+
+Prerequisites are the locked frontend dependencies and an existing Microsoft
+Edge Stable installation. The suite does not download a browser. From the
+repository root, run the launcher:
+
+```powershell
+.\rag-env\Scripts\python.exe scripts\authenticated_browser_e2e.py
+```
+
+The launcher creates fresh bearer tokens and synthetic PDF/configuration data
+under a unique temporary directory, starts both services and Vite on verified
+loopback ports, runs `npm run test:e2e` with one worker and no retries, then
+stops its owned processes. Redacted test evidence and service logs remain in
+that temporary directory for review. If this same task also installed the
+Playwright packages, pass the previously measured additional byte count with
+`--prior-task-disk-bytes <bytes>` so the one-GiB task budget includes both
+steps. The Playwright specs live under `e2e/`;
+Vitest is limited to `src/` tests so these browser tests are not run by
+`npm test`.
+
 ## Current boundary
 
 The API's `/health` route is liveness only. Runtime model state reports registered adapter state and does not prove index or Ollama readiness. Ablation result loading requires the original compatible base configuration; the UI does not invent or rewrite it. Artifact records have no creation timestamp, so the catalog view does not claim to identify the newest result. The UI does not provide document upload or a query playground, and it does not display fabricated jobs or artifacts.
