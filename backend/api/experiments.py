@@ -44,6 +44,7 @@ from backend.services.job_manager import (
 )
 from backend.services.index_readiness import IndexReadinessInputError
 from backend.services.index_selection import IndexSelectionError
+from backend.services.ask_service import AskError, AskService
 
 from .schemas import (
     AblationRequest,
@@ -53,6 +54,8 @@ from .schemas import (
     IndexReadinessResponse,
     IndexSelectionRequest,
     IndexSelectionResponse,
+    AskRequest,
+    AskResponse,
     RunPlanPreparationRequest,
     RunPlanPreparationResponse,
     RunPlanRequest,
@@ -110,6 +113,8 @@ def _response_error(code: str, status_code: int) -> JSONResponse:
 def _map_error(exc: BaseException) -> JSONResponse:
     if isinstance(exc, ApiRequestError):
         return _response_error(exc.code, exc.status_code)
+    if isinstance(exc, AskError):
+        return _response_error(exc.code, exc.status_code)
     if isinstance(exc, (CatalogNotFoundError, ArtifactNotFoundError)):
         return _response_error("artifact_not_found", 404)
     if isinstance(exc, (CatalogIntegrityError, ArtifactIntegrityError, SerializationError, ServiceResultIntegrityError)):
@@ -119,6 +124,7 @@ def _map_error(exc: BaseException) -> JSONResponse:
     if isinstance(exc, IndexSelectionError):
         conflict_codes = {
             "index_not_selected", "index_selection_stale", "index_selection_incompatible",
+            "ask_requires_explicit_index_selection",
             "manifest_changed", "manifest_empty", "index_fingerprint_mismatch",
             "selection_revision_conflict", "selection_operation_conflict", "build_report_changed",
             "build_report_failed", "build_report_incomplete", "build_report_mismatch", "build_report_invalid",
@@ -339,6 +345,39 @@ async def select_index(request: Request) -> JSONResponse:
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def ask_question(request: Request) -> JSONResponse:
+    try:
+        service: AskService | None = getattr(request.app.state, "ask_service", None)
+        if service is None:
+            raise ApiRequestError("ask_unavailable", 503)
+        model = _model(AskRequest, await _read_json(request, request.app.state.max_request_body_bytes))
+        result = await run_in_threadpool(service.ask, model.question)
+        response_model = AskResponse.model_validate(result)
+        response = JSONResponse(response_model.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def ask_image(request: Request) -> Response:
+    try:
+        service: AskService | None = getattr(request.app.state, "ask_service", None)
+        if service is None:
+            raise ApiRequestError("ask_unavailable", 503)
+        reference = request.path_params.get("reference")
+        image = await run_in_threadpool(service.read_image, reference)
+        return Response(image.data, media_type=image.content_type, headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Content-Disposition": "inline",
+        })
     except Exception as exc:
         return _map_error(exc)
 
@@ -608,6 +647,8 @@ def build_routes(service: ExperimentService, *, max_request_body_bytes: int, job
         Route("/api/v1/index/readiness", index_readiness, methods=["POST"]),
         Route("/api/v1/index/selection", index_selection, methods=["GET"]),
         Route("/api/v1/index/selection", select_index, methods=["POST"]),
+        Route("/api/v1/ask", ask_question, methods=["POST"]),
+        Route("/api/v1/ask/images/{reference:str}", ask_image, methods=["GET"]),
         Route("/api/v1/run-plans", prepare_run_plan, methods=["POST"]),
         Route("/api/v1/evaluations", submit_evaluation, methods=["POST"]),
         Route("/api/v1/ablations", submit_ablation, methods=["POST"]),

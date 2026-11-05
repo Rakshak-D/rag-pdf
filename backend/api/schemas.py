@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.config.schema import ResolvedRunConfig
 from backend.experiments.ablation_plans import create_ablation_plan
@@ -90,6 +91,114 @@ class IndexSelectionResponse(_StrictModel):
     reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
     check_level: Literal["report"]
     store_checked: Literal[False]
+
+
+class AskRequest(_StrictModel):
+    question: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any((ord(char) < 32 and char not in "\n\r\t") or ord(char) == 127 for char in normalized):
+            raise ValueError("question_invalid")
+        return normalized
+
+
+class AskTextEvidenceResponse(_StrictModel):
+    label: str = Field(pattern=r"^T[1-9][0-9]{0,2}$")
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{64}$")
+    source_path: str = Field(min_length=1, max_length=1024)
+    page_number: int | None = Field(default=None, ge=1, le=1_000_000)
+    passage: str = Field(min_length=1, max_length=32_000)
+    record_id: str | None = Field(default=None, max_length=192)
+    truncated: bool
+
+    @field_validator("source_path")
+    @classmethod
+    def validate_source_path(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if ("\\" in value or path.is_absolute() or PureWindowsPath(value).drive or
+                any(part in {"", ".", ".."} for part in path.parts) or path.as_posix() != value or path.suffix.lower() != ".pdf"):
+            raise ValueError("source_path_invalid")
+        return value
+
+
+class AskImageEvidenceResponse(_StrictModel):
+    label: str = Field(pattern=r"^I[1-9][0-9]{0,2}$")
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{64}$")
+    source_path: str = Field(min_length=1, max_length=1024)
+    page_number: int | None = Field(default=None, ge=1, le=1_000_000)
+    caption: str = Field(max_length=2000)
+    record_id: str | None = Field(default=None, max_length=192)
+    image_reference: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    content_type: Literal["image/png", "image/jpeg", "image/webp"] | None
+    size_bytes: int | None = Field(default=None, ge=1, le=8 * 1024 * 1024)
+
+    @field_validator("source_path")
+    @classmethod
+    def validate_source_path(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if ("\\" in value or path.is_absolute() or PureWindowsPath(value).drive or
+                any(part in {"", ".", ".."} for part in path.parts) or path.as_posix() != value or path.suffix.lower() != ".pdf"):
+            raise ValueError("source_path_invalid")
+        return value
+
+    @model_validator(mode="after")
+    def validate_image_reference(self):
+        values = (self.image_reference, self.content_type, self.size_bytes)
+        if any(value is None for value in values) and any(value is not None for value in values):
+            raise ValueError("image_reference_incomplete")
+        return self
+
+
+class AskResponse(_StrictModel):
+    query_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    question: str = Field(min_length=1, max_length=4000)
+    outcome: Literal["answered", "insufficient_evidence"]
+    answer: str | None = Field(default=None, max_length=64 * 1024)
+    model_reported_insufficient_evidence: bool
+    failure_code: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    model_identifier: str | None = Field(default=None, min_length=1, max_length=128)
+    index_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    document_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    run_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    context_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selected_build_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    selected_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_revision: int = Field(ge=1, le=2_147_483_647)
+    text_evidence: list[AskTextEvidenceResponse] = Field(max_length=32)
+    image_evidence: list[AskImageEvidenceResponse] = Field(max_length=16)
+    referenced_citations: list[str] = Field(max_length=48)
+    warnings: list[str] = Field(max_length=32)
+
+    @field_validator("referenced_citations")
+    @classmethod
+    def validate_citations(cls, values: list[str]) -> list[str]:
+        if any(not re.fullmatch(r"(?:T|I)[1-9][0-9]{0,2}", value) for value in values) or len(values) != len(set(values)):
+            raise ValueError("citations_invalid")
+        return values
+
+    @field_validator("warnings")
+    @classmethod
+    def validate_warnings(cls, values: list[str]) -> list[str]:
+        if any(not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", value) for value in values):
+            raise ValueError("warnings_invalid")
+        return values
+
+    @model_validator(mode="after")
+    def validate_outcome(self):
+        if self.outcome == "answered":
+            if not self.answer or self.failure_code is not None or self.model_identifier is None:
+                raise ValueError("answer_outcome_invalid")
+        elif (self.answer is not None or self.failure_code != "no_usable_evidence" or
+              self.model_identifier is not None or self.model_reported_insufficient_evidence or
+              self.text_evidence or self.image_evidence or self.referenced_citations):
+            raise ValueError("insufficient_evidence_outcome_invalid")
+        labels = {item.label for item in self.text_evidence} | {item.label for item in self.image_evidence}
+        if not set(self.referenced_citations).issubset(labels):
+            raise ValueError("citation_target_invalid")
+        return self
 
 
 class IndexReadinessResponse(_StrictModel):

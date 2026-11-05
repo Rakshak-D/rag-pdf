@@ -57,6 +57,51 @@ Each accepted evaluation or ablation pins the validated report identity while jo
 
 Selection is report-level only (`check_level: "report"`, `store_checked: false`). It does not open Chroma, verify collections, load models, warm Ollama, or establish query readiness. The retrieval boundary remains responsible for persisted collection and report checks. If these checks fail, execution returns the established failure contract; no synthetic result is created.
 
+## Ask with selected evidence
+
+The authenticated ordinary runtime exposes `POST /api/v1/ask` with a strict
+JSON body such as `{"question":"What does the report conclude?"}`. The
+question is limited to 4,000 characters and 512 configured tokenizer tokens;
+the existing `RAG_WORKBENCH_MAX_REQUEST_BODY_BYTES` limit also applies. Ask
+requires a valid durable selection. A legacy report environment variable by
+itself is not enough to construct a user-facing Ask plan: select a compatible
+report through Index Builds first. No index is selected automatically.
+
+The server captures the selected RunPlan and report identity, revalidates the
+source manifest and report, and passes that pinned report to the existing
+retrieval engine. It then uses `ContextFormatter` for the configured context
+budget and the existing `LocalGenerationAdapter` for Ollama. Retrieval and
+generation run in the Starlette thread pool, with two simultaneous questions
+per runtime; additional requests receive `ask_capacity_exhausted`. Changing
+the active selection during a question does not redirect that request. A
+browser disconnect does not guarantee that an already-running Ollama request
+stops: the current Ollama client has no configured request deadline, and Ask
+does not claim cancellable inference.
+
+The response contains bounded text and image evidence tied to manifest
+document IDs, safe relative source paths, available page numbers, and the
+context labels supplied to generation (`T1`, `I1`, and so on). Returned
+citation links target only those supplied labels. A valid label shows which
+evidence was provided; it does not prove the answer is factually supported.
+No usable selected evidence returns `outcome: "insufficient_evidence"` and
+does not call Ollama. Other failures use stable error codes; Ask creates no
+benchmark, evaluation artifact, or job.
+
+When generated text begins with an explicit configured-evidence abstention
+phrase, the response marks `model_reported_insufficient_evidence`; this is a
+bounded presentation hint based on the model's wording, not an independent
+semantic check or a guarantee that the model abstained correctly.
+
+Images are fetched separately from authenticated
+`GET /api/v1/ask/images/{reference}` requests. References are random,
+process-local, bounded to 128 entries, expire after five minutes, and are
+revalidated beneath the configured image root before each read. Only bounded
+PNG, JPEG, and WebP files are returned with `Cache-Control: no-store`; the
+reference is not a filesystem path. References expire on runtime restart and
+Ask history is not persisted. A selected report still does not prove Chroma
+readiness, and deterministic adapter tests do not establish real Chroma,
+embedding-model, or Ollama behavior.
+
 Start from the repository root with its pinned environment:
 
 ```powershell

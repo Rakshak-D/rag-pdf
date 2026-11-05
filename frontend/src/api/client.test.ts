@@ -96,6 +96,39 @@ describe("WorkbenchApiClient", () => {
     await expect(html.getHealth()).rejects.toMatchObject({ kind: "non_json", code: "non_json_response" });
   });
 
+  it("validates Ask responses and sends the ordinary bearer only in the request header", async () => {
+    const hash = "a".repeat(64);
+    const response = {
+      query_id: hash, question: "What is shown?", outcome: "answered", answer: "A supported answer.",
+      model_reported_insufficient_evidence: false, failure_code: null, model_identifier: "local-answer",
+      index_fingerprint: hash, document_manifest_hash: hash, run_fingerprint: hash, context_fingerprint: hash,
+      selected_build_id: "b".repeat(32), selected_report_sha256: hash, selection_revision: 1,
+      text_evidence: [], image_evidence: [], referenced_citations: [], warnings: [],
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(response));
+    const client = new WorkbenchApiClient({ token: "ask-secret", fetcher });
+    await expect(client.ask({ question: "What is shown?" })).resolves.toMatchObject({ answer: "A supported answer." });
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/v1/ask");
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe("Bearer ask-secret");
+    expect(String(fetcher.mock.calls[0]?.[0])).not.toContain("ask-secret");
+    await expect(client.ask({ question: "   " })).rejects.toMatchObject({ code: "question_invalid" });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("rejects malformed Ask evidence and incomplete image responses", async () => {
+    const malformedAsk = new WorkbenchApiClient({
+      token: "ask-secret",
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json({ outcome: "answered", answer: "unvalidated" })),
+    });
+    await expect(malformedAsk.ask({ question: "question" })).rejects.toMatchObject({ kind: "malformed_response" });
+
+    const incompleteImage = new WorkbenchApiClient({
+      token: "ask-secret",
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json({ error: { code: "image_evidence_expired" } }, { status: 404 })),
+    });
+    await expect(incompleteImage.getAskImage("c".repeat(32))).rejects.toMatchObject({ status: 404, code: "image_evidence_expired" });
+  });
+
   it("sends JSON content type for JSON requests and discards unsafe error text", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ error: { code: "private path\nsecret" } }, { status: 400 }));
     const client = new WorkbenchApiClient({ token: "local-secret", fetcher });

@@ -90,6 +90,36 @@ def test_failed_inference_retries_and_returns_explicit_failure(tmp_path):
     assert "private server detail" not in str(result)
 
 
+def test_ollama_connection_failure_has_stable_unavailable_code(tmp_path):
+    plan, _ = make_plan(tmp_path, llm_retries=0, llm_fail_fast=False)
+
+    class UnavailableClient:
+        def chat(self, **_request):
+            raise ConnectionError("private local endpoint detail")
+
+    result = LocalGenerationAdapter(
+        client_factory=lambda _: UnavailableClient(), encoder=CharEncoder(),
+    ).generate(make_context(plan), plan)
+    assert result.status == "failed"
+    assert result.error_code == "ollama_unavailable"
+    assert "private local endpoint detail" not in str(result)
+
+
+def test_ollama_connection_failure_is_typed_when_fail_fast(tmp_path):
+    plan, _ = make_plan(tmp_path, llm_retries=0, llm_fail_fast=True)
+
+    class UnavailableClient:
+        def chat(self, **_request):
+            raise ConnectionError("private local endpoint detail")
+
+    with pytest.raises(GenerationInferenceError) as exc_info:
+        LocalGenerationAdapter(
+            client_factory=lambda _: UnavailableClient(), encoder=CharEncoder(),
+        ).generate(make_context(plan), plan)
+    assert exc_info.value.error_code == "ollama_unavailable"
+    assert "private local endpoint detail" not in str(exc_info.value)
+
+
 def test_fail_fast_raises_after_retry_exhaustion(tmp_path):
     plan, _ = make_plan(tmp_path, llm_retries=1, llm_fail_fast=True)
     client = FakeClient(failures=2)

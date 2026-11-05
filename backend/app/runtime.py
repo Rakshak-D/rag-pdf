@@ -11,7 +11,7 @@ import ipaddress
 import os
 from pathlib import Path
 import re
-from typing import Mapping
+from typing import Any, Callable, Mapping
 
 from backend.config.paths import PathContainmentError, resolve_disjoint_paths
 from backend.engine.context import ContextFormatter
@@ -20,6 +20,7 @@ from backend.experiments.artifact_store import ExperimentArtifactStore
 from backend.experiments.catalog import ExperimentCatalog
 from backend.services.experiment_service import ExperimentService
 from backend.services.index_selection import IndexSelectionError, IndexSelectionService
+from backend.services.ask_service import AskService
 from backend.services.job_manager import ExperimentJobManager
 from backend.services.model_registry import ModelAdapterRegistry
 from backend.services.index_readiness import IndexReadinessService
@@ -160,6 +161,7 @@ class LocalRuntime:
     service: ExperimentService = field(repr=False)
     job_manager: ExperimentJobManager = field(repr=False)
     index_selection_service: IndexSelectionService = field(repr=False)
+    ask_service: AskService = field(repr=False)
 
 
 def _reject_symlink_components(path: Path) -> None:
@@ -227,6 +229,7 @@ def build_runtime(
     context_formatter: ContextFormatter | None = None,
     generation_adapter: LocalGenerationAdapter | None = None,
     model_registry: ModelAdapterRegistry | None = None,
+    ask_retrieval_callable: Callable[..., Any] | None = None,
 ) -> LocalRuntime:
     """Compose the existing API components without starting workers or models.
 
@@ -243,6 +246,8 @@ def build_runtime(
         raise RuntimeConfigurationError("context_formatter_invalid")
     if generation_adapter is not None and not hasattr(generation_adapter, "generate"):
         raise RuntimeConfigurationError("generation_adapter_invalid")
+    if ask_retrieval_callable is not None and not callable(ask_retrieval_callable):
+        raise RuntimeConfigurationError("ask_retrieval_invalid")
     _validate_paths(selected)
 
     try:
@@ -267,6 +272,15 @@ def build_runtime(
             model_registry=registry,
             index_selection_service=selection_service,
         )
+        ask_service = AskService(
+            selected.data_dir,
+            selected.index_storage_root,
+            selection_service,
+            registry,
+            formatter,
+            generator,
+            retrieval_callable=ask_retrieval_callable,
+        )
         jobs = ExperimentJobManager(
             service,
             selected.jobs_db_path,
@@ -283,13 +297,14 @@ def build_runtime(
                 selected.data_dir, selected.index_storage_root, selected.build_report_path,
                 selection_service=selection_service,
             ),
+            ask_service=ask_service,
         )
     except RuntimeConfigurationError:
         raise
     except Exception as exc:
         # Component errors often contain local paths. Keep the CLI boundary safe.
         raise RuntimeConfigurationError("runtime_composition_failed") from exc
-    return LocalRuntime(selected, app, artifact_store, catalog, registry, generator, formatter, service, jobs, selection_service)
+    return LocalRuntime(selected, app, artifact_store, catalog, registry, generator, formatter, service, jobs, selection_service, ask_service)
 
 
 def run_server(runtime: LocalRuntime) -> None:

@@ -476,6 +476,26 @@ class IndexSelectionService:
         self.validate_pinned(plan, active)
         return active
 
+    def resolve_active_plan(self) -> tuple[RunPlan, PinnedIndexReport]:
+        """Capture one validated durable selection for an interactive query.
+
+        The selection-update lock is held only while the report and plan are
+        read and validated. Callers retain the returned report pin and must
+        revalidate it before retrieval; long model work runs after this method
+        releases the lock.
+        """
+        with self.admission_guard():
+            try:
+                record = self._read_record()
+            except IndexSelectionError:
+                raise
+            if record is None:
+                code = "ask_requires_explicit_index_selection" if self._legacy_report_path is not None else "index_not_selected"
+                raise IndexSelectionError(code)
+            plan = self._record_plan(record)
+            pinned = self._validate_record(record)
+            return plan, pinned
+
     def resolve_for_config(self, config: ResolvedRunConfig, manifest_hash: str, workflow: str) -> PinnedIndexReport:
         config = self._validate_config(config)
         if workflow not in {"evaluation", "ablation"}:

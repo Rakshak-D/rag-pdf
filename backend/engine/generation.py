@@ -283,11 +283,16 @@ class LocalGenerationAdapter:
                 raise
             except GenerationInferenceError as exc:
                 last_error = GenerationInferenceError("local Ollama inference failed", attempts=attempts, error_code=exc.error_code)
+            except ConnectionError:
+                # The installed Ollama SDK converts httpx.ConnectError into
+                # Python ConnectionError when its local service is unreachable.
+                # Keep that distinct from a response/model inference failure.
+                last_error = GenerationInferenceError("local Ollama service is unavailable", attempts=attempts, error_code="ollama_unavailable")
             except Exception as exc:
                 last_error = GenerationInferenceError("local Ollama inference failed", attempts=attempts)
             if attempt < config.llm_retries:
                 self._sleeper(config.llm_retry_backoff_sec * (2 ** attempt))
         assert last_error is not None
         if config.llm_fail_fast:
-            raise last_error
+            raise last_error from None
         return self._base_result(context, plan, config, started=started, status="failed", response=None, error_code=_safe_error_code(last_error), attempts=attempts, prompt_tokens=len(self._encode(system + "\n\n" + user, config)), output_tokens=0, image_hashes=image_hashes, prompt_fingerprint=prompt_fingerprint)

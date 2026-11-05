@@ -2,6 +2,8 @@ import type {
   AblationPlanQuery,
   AblationRequest,
   AblationSubmissionResponse,
+  AskRequest,
+  AskResponse,
   ApiErrorEnvelope,
   ArtifactListFilters,
   BootstrapInventoryCandidate,
@@ -140,6 +142,61 @@ function isIndexSelectionState(value: unknown): value is IndexSelectionState {
   return value.revision === 0 && value.legacy_report_reference === null;
 }
 
+function isAskTextEvidence(value: unknown): boolean {
+  return isRecord(value) && typeof value.label === "string" && /^T[1-9][0-9]{0,2}$/.test(value.label) &&
+    typeof value.document_id === "string" && /^doc_[a-f0-9]{64}$/.test(value.document_id) &&
+    typeof value.source_path === "string" && value.source_path.length > 0 && !value.source_path.startsWith("/") &&
+    !value.source_path.includes("\\") && !value.source_path.split("/").some((part) => part === ".." || part === "." || part === "") &&
+    value.source_path.toLowerCase().endsWith(".pdf") && (value.page_number === null || (Number.isInteger(value.page_number) && Number(value.page_number) > 0)) &&
+    typeof value.passage === "string" && value.passage.length > 0 && value.passage.length <= 32_000 &&
+    isNullableString(value.record_id) && typeof value.truncated === "boolean";
+}
+
+function isAskImageEvidence(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.label !== "string" || !/^I[1-9][0-9]{0,2}$/.test(value.label) ||
+    typeof value.document_id !== "string" || !/^doc_[a-f0-9]{64}$/.test(value.document_id) ||
+    typeof value.source_path !== "string" || value.source_path.length === 0 || value.source_path.startsWith("/") ||
+    value.source_path.includes("\\") || value.source_path.split("/").some((part) => part === ".." || part === "." || part === "") ||
+    !value.source_path.toLowerCase().endsWith(".pdf") || !(value.page_number === null || (Number.isInteger(value.page_number) && Number(value.page_number) > 0)) ||
+    typeof value.caption !== "string" || value.caption.length > 2000 || !isNullableString(value.record_id)) return false;
+  const reference = value.image_reference;
+  const contentType = value.content_type;
+  const size = value.size_bytes;
+  if (reference === null && contentType === null && size === null) return true;
+  return typeof reference === "string" && /^[0-9a-f]{32}$/.test(reference) &&
+    (contentType === "image/png" || contentType === "image/jpeg" || contentType === "image/webp") &&
+    typeof size === "number" && Number.isInteger(size) && size > 0 && size <= 8 * 1024 * 1024;
+}
+
+function isAskResponse(value: unknown): value is AskResponse {
+  if (!isRecord(value) || !sha256(value.query_id) || typeof value.question !== "string" || value.question.length < 1 || value.question.length > 4000 ||
+    (value.outcome !== "answered" && value.outcome !== "insufficient_evidence") ||
+    !isNullableString(value.answer) || (typeof value.answer === "string" && value.answer.length > 64 * 1024) ||
+    !isNullableString(value.failure_code) || (typeof value.failure_code === "string" && !/^[a-z][a-z0-9_]{1,63}$/.test(value.failure_code)) ||
+    !isNullableString(value.model_identifier) || (typeof value.model_identifier === "string" && (value.model_identifier.length < 1 || value.model_identifier.length > 128)) ||
+    typeof value.model_reported_insufficient_evidence !== "boolean" ||
+    !sha256(value.index_fingerprint) || !sha256(value.document_manifest_hash) || !sha256(value.run_fingerprint) ||
+    !sha256(value.context_fingerprint) || typeof value.selected_build_id !== "string" || !/^[0-9a-f]{32}$/.test(value.selected_build_id) ||
+    !sha256(value.selected_report_sha256) || !count(value.selection_revision) || value.selection_revision < 1 ||
+    !Array.isArray(value.text_evidence) || value.text_evidence.length > 32 || !value.text_evidence.every(isAskTextEvidence) ||
+    !Array.isArray(value.image_evidence) || value.image_evidence.length > 16 || !value.image_evidence.every(isAskImageEvidence) ||
+    !Array.isArray(value.referenced_citations) || value.referenced_citations.length > 48 ||
+    !value.referenced_citations.every((label) => typeof label === "string" && /^(?:T|I)[1-9][0-9]{0,2}$/.test(label)) ||
+    new Set(value.referenced_citations).size !== value.referenced_citations.length ||
+    !Array.isArray(value.warnings) || value.warnings.length > 32 ||
+    !value.warnings.every((warning) => typeof warning === "string" && /^[a-z][a-z0-9_]{1,63}$/.test(warning))) return false;
+  const evidenceLabels = new Set([
+    ...value.text_evidence.map((item) => (item as Record<string, unknown>).label),
+    ...value.image_evidence.map((item) => (item as Record<string, unknown>).label),
+  ]);
+  if (evidenceLabels.size !== value.text_evidence.length + value.image_evidence.length) return false;
+  if (!value.referenced_citations.every((label) => evidenceLabels.has(label))) return false;
+  if (value.outcome === "answered") return typeof value.answer === "string" && value.answer.length > 0 && value.failure_code === null && typeof value.model_identifier === "string" && value.model_identifier.length > 0;
+  return value.answer === null && value.failure_code === "no_usable_evidence" && value.model_identifier === null &&
+    value.model_reported_insufficient_evidence === false &&
+    value.text_evidence.length === 0 && value.image_evidence.length === 0 && value.referenced_citations.length === 0;
+}
+
 function isModelStatus(value: unknown): value is ModelComponentStatus {
   if (!isRecord(value)) return false;
   return (
@@ -239,13 +296,17 @@ export class WorkbenchApiClient {
     this.fetcher = options.fetcher ?? fetch;
   }
 
-  private async request(path: string, options: { method?: string; body?: unknown; protected?: boolean } = {}): Promise<unknown> {
+  private async request(path: string, options: { method?: string; body?: unknown; protected?: boolean; signal?: AbortSignal } = {}): Promise<unknown> {
     const headers = new Headers();
     if (options.protected !== false && path.startsWith("/api/v1/")) {
       if (!this.token) throw new ApiError("http", "authentication_required", 401);
       headers.set("Authorization", `Bearer ${this.token}`);
     }
-    const init: RequestInit = { method: options.method ?? "GET", headers };
+    const init: RequestInit = {
+      method: options.method ?? "GET",
+      headers,
+      ...(options.signal ? { signal: options.signal } : {}),
+    };
     if (options.body !== undefined) {
       headers.set("Content-Type", "application/json");
       init.body = JSON.stringify(options.body);
@@ -309,6 +370,43 @@ export class WorkbenchApiClient {
       value.selection.document_manifest_hash !== input.expected_manifest_hash ||
       value.selection.index_fingerprint !== input.expected_index_fingerprint) malformed();
     return value;
+  }
+
+  async ask(input: AskRequest, signal?: AbortSignal): Promise<AskResponse> {
+    if (typeof input.question !== "string" || !input.question.trim() || input.question.length > 4000) {
+      throw new ApiError("malformed_response", "question_invalid");
+    }
+    const value = await this.request("/api/v1/ask", {
+      method: "POST", body: input, ...(signal ? { signal } : {}),
+    });
+    if (!isAskResponse(value)) malformed();
+    return value;
+  }
+
+  async getAskImage(reference: string, signal?: AbortSignal): Promise<Blob> {
+    if (!this.token) throw new ApiError("http", "authentication_required", 401);
+    if (!/^[0-9a-f]{32}$/.test(reference)) throw new ApiError("malformed_response", "image_reference_invalid");
+    let response: Response;
+    try {
+      response = await this.fetcher(`/api/v1/ask/images/${reference}`, {
+        method: "GET",
+        headers: new Headers({ Authorization: `Bearer ${this.token}` }),
+        ...(signal ? { signal } : {}),
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      throw new ApiError("network", "network_error");
+    }
+    if (!response.ok) {
+      let code = "request_failed";
+      try { code = errorCode(await parseJson(response)) ?? code; } catch { /* retain a stable fallback */ }
+      throw new ApiError("http", code, response.status);
+    }
+    const mediaType = (response.headers.get("content-type") ?? "").split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    if (!["image/png", "image/jpeg", "image/webp"].includes(mediaType)) malformed(response.status);
+    const blob = await response.blob();
+    if (blob.size <= 0 || blob.size > 8 * 1024 * 1024) malformed(response.status);
+    return blob;
   }
 
   async getRuntimeModels(): Promise<RuntimeModelsResponse> {

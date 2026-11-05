@@ -81,10 +81,53 @@ limit.
 
 Read routes delegate to `ExperimentService`, which delegates to the catalog and
 artifact store. Result loading preserves canonical serialization and requires
-the accepted plan for ablation artifacts. The API returns no raw request
-queries, references, passages, responses, credentials, absolute paths or
-arbitrary exception messages. The current request/response bound is local and
-conservative; a later job layer may provide durable asynchronous execution.
+the accepted plan for ablation artifacts. API errors do not echo request
+bodies, credentials, absolute paths, or arbitrary exception messages. The
+current request/response bound is local and conservative; a later job layer
+may provide durable asynchronous execution.
+
+## Interactive Ask
+
+`POST /api/v1/ask` accepts only `{"question":"..."}` under the ordinary
+bearer token. Strict JSON parsing rejects duplicate keys, unsupported content
+types, malformed schemas, and bodies above the configured byte limit. The
+question is limited to 4,000 characters and 512 tokens in the selected
+configuration's `tiktoken` encoding. The server requires a valid explicit
+index selection; it resolves and pins the selected RunPlan/report before
+retrieval. Clients cannot supply a report path, index path, model, or retrieval
+override.
+
+Ask uses the existing `retrieve_for_plan()`, `ContextFormatter`, model
+registry, and `LocalGenerationAdapter`. It returns a bounded answer or an
+explicit `insufficient_evidence` outcome, plus only the selected source
+passages/images, safe manifest-relative source paths, available page numbers,
+context citation labels, and selected report/run identities. Unsupported
+model-emitted citation labels are not linked to evidence. These presentation
+citations identify supplied context and do not establish factual entailment.
+Ask is separate from evaluation/ablation and creates no benchmark result,
+metrics, artifact, or job. Ask selection is report-level; Chroma/store and
+model readiness are not inferred from selection status.
+
+An explicit leading evidence-abstention phrase is surfaced as
+`model_reported_insufficient_evidence`. This is a presentation hint derived
+from wording, not a semantic evaluation of the answer.
+
+Synchronous Ask work runs in the Starlette thread pool and is limited to two
+concurrent questions per runtime. There is no configured Ollama request
+deadline, and an HTTP disconnect does not guarantee that inference stops.
+Local Ollama connection failures use `ollama_unavailable`; other response or
+inference failures use `generation_failed`.
+`GET /api/v1/ask/images/{reference}` requires the same bearer token. References
+are random, bounded, process-local, expire after five minutes, and resolve only
+to revalidated PNG/JPEG/WebP files beneath the owned image root. The endpoint
+does not accept arbitrary paths and returns `Cache-Control: no-store`;
+references and Ask history do not survive process restart.
+
+Ask intentionally returns the submitted question, generated answer, and
+selected evidence to its authenticated caller. It does not return prompts,
+credentials, absolute paths, unrestricted Chroma metadata, or raw exception
+details. See [local runtime](local-runtime.md) for selection and operational
+limitations.
 # Bounded jobs
 
 An optional `ExperimentJobManager` supplied to `create_app` adds authenticated, bounded job submission and polling. Job requests return HTTP 202 while validated plans remain in process memory; lifecycle metadata is stored in a separate SQLite registry. The manager delegates execution to `ExperimentService`, and does not provide distributed coordination or restart-resumable payloads.

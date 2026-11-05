@@ -5,7 +5,7 @@ interface AppShellProps {
   children: ReactNode;
 }
 
-const comingSoon = ["Ask", "Evaluations", "Ablations", "Results"];
+const comingSoon = ["Evaluations", "Ablations", "Results"];
 
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
@@ -13,6 +13,7 @@ export function AppShell({ children }: AppShellProps) {
     : location.pathname.startsWith("/artifacts") ? "Artifacts"
       : location.pathname.startsWith("/index-builds") ? "Index Builds"
       : location.pathname.startsWith("/documents") ? "Documents"
+      : location.pathname.startsWith("/ask") ? "Ask"
       : location.pathname.startsWith("/experiments") ? "Experiments"
       : location.pathname === "/" ? "Overview" : "Not found";
 
@@ -30,10 +31,11 @@ export function AppShell({ children }: AppShellProps) {
           <NavLink to="/artifacts" title="Artifacts" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">▧</span>Artifacts</NavLink>
           <NavLink to="/index-builds" title="Index Builds" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">⌁</span>Index Builds</NavLink>
           <NavLink to="/documents" title="Documents" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">▤</span>Documents</NavLink>
+          <NavLink to="/ask" title="Ask" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">⌕</span>Ask</NavLink>
           <NavLink to="/experiments/evaluation" title="Experiments" className={({ isActive }) => `nav-item${isActive ? " nav-item--active" : ""}`}><span className="nav-icon" aria-hidden="true">＋</span>Experiments</NavLink>
           {comingSoon.map((item, index) => (
             <div className="nav-item nav-item--disabled" key={item} aria-disabled="true" title={`${item} is not available yet`}>
-              <span className="nav-icon" aria-hidden="true">{["⌕", "◷", "⇄", "▧"][index]}</span>
+              <span className="nav-icon" aria-hidden="true">{["◷", "⇄", "▧"][index]}</span>
               <span>{item}</span><span className="nav-soon">Next</span>
             </div>
           ))}

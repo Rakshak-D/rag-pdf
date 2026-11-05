@@ -18,6 +18,17 @@ function mount(initialPath = "/") {
 }
 
 describe("workbench overview", () => {
+  it("routes to the real Ask workspace and shows its disconnected state", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(health));
+    vi.stubGlobal("fetch", fetcher);
+    mount("/ask");
+
+    expect(await screen.findByRole("heading", { name: "Ask your documents" })).toBeInTheDocument();
+    expect(screen.getByText("Ordinary runtime disconnected")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ask" })).toHaveAttribute("aria-current", "page");
+    expect(fetcher.mock.calls.some(([input]) => String(input).includes("/api/v1/ask"))).toBe(false);
+  });
+
   it("shows liveness and disconnected state without inventing records", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(health));
     vi.stubGlobal("fetch", fetcher);

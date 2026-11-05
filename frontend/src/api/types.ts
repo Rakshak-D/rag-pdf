@@ -323,6 +323,53 @@ export interface IndexSelectionRequest {
   operation_id: string;
 }
 
+export interface AskTextEvidence {
+  label: string;
+  document_id: string;
+  source_path: string;
+  page_number: number | null;
+  passage: string;
+  record_id: string | null;
+  truncated: boolean;
+}
+
+export interface AskImageEvidence {
+  label: string;
+  document_id: string;
+  source_path: string;
+  page_number: number | null;
+  caption: string;
+  record_id: string | null;
+  image_reference: string | null;
+  content_type: "image/png" | "image/jpeg" | "image/webp" | null;
+  size_bytes: number | null;
+}
+
+export interface AskRequest {
+  question: string;
+}
+
+export interface AskResponse {
+  query_id: string;
+  question: string;
+  outcome: "answered" | "insufficient_evidence";
+  answer: string | null;
+  model_reported_insufficient_evidence: boolean;
+  failure_code: string | null;
+  model_identifier: string | null;
+  index_fingerprint: string;
+  document_manifest_hash: string;
+  run_fingerprint: string;
+  context_fingerprint: string;
+  selected_build_id: string;
+  selected_report_sha256: string;
+  selection_revision: number;
+  text_evidence: AskTextEvidence[];
+  image_evidence: AskImageEvidence[];
+  referenced_citations: string[];
+  warnings: string[];
+}
+
 export interface BenchmarkCaseInput {
   case_id: string;
   query: string;
