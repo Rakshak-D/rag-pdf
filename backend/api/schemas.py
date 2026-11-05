@@ -56,6 +56,42 @@ class IndexReadinessRequest(RunPlanPreparationRequest):
     workflow: Literal["evaluation", "ablation"]
 
 
+class IndexSelectionRequest(_StrictModel):
+    resolved_config: dict[str, Any]
+    expected_manifest_hash: str
+    expected_index_fingerprint: str
+    build_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    expected_revision: int = Field(ge=0, le=2_147_483_646)
+    operation_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+    @field_validator("expected_manifest_hash", "expected_index_fingerprint")
+    @classmethod
+    def validate_identity_hash(cls, value: str) -> str:
+        return canonical_sha256(value)
+
+
+class IndexSelectionIdentity(_StrictModel):
+    build_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    report_reference: str = Field(pattern=r"^build-artifacts/[0-9a-f]{32}/build-report\.json$")
+    document_manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    index_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    configuration_snapshot_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    run_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    report_status: Literal["completed", "completed_with_warnings"]
+    selection_revision: int = Field(ge=1, le=2_147_483_647)
+
+
+class IndexSelectionResponse(_StrictModel):
+    selection_status: Literal["unselected", "selected", "stale", "invalid", "legacy_configured"]
+    revision: int | None = Field(ge=0, le=2_147_483_647)
+    selection: IndexSelectionIdentity | None
+    legacy_report_reference: str | None
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    check_level: Literal["report"]
+    store_checked: Literal[False]
+
+
 class IndexReadinessResponse(_StrictModel):
     status: Literal["report_match", "mismatch", "unavailable", "indeterminate"]
     reason_code: str

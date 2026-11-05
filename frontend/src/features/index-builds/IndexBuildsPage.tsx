@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError, BootstrapApiClient } from "../../api/client";
-import type { BootstrapInventoryCandidate, BootstrapInventoryPage, BootstrapJobRecord, BootstrapPreviewResponse, BootstrapStatusResponse } from "../../api/types";
+import type { BootstrapInventoryCandidate, BootstrapInventoryPage, BootstrapJobRecord, BootstrapPreviewResponse, BootstrapStatusResponse, RuntimeModelsResponse } from "../../api/types";
 import { apiErrorText } from "../../components/apiErrorText";
+import { ConnectionPanel } from "../../components/ConnectionPanel";
 import { StatusBadge } from "../../components/StatusBadge";
 import { PageHeading } from "../shared";
 import { BootstrapConnectionPanel } from "./BootstrapConnectionPanel";
+import { IndexSelectionPanel } from "./IndexSelectionPanel";
 import { validateResolvedConfig } from "./configValidation";
 
 interface Props {
@@ -15,6 +17,12 @@ interface Props {
   connectionError: string | null;
   onConnect: (candidate: string) => Promise<boolean>;
   onDisconnect: () => void;
+  ordinaryToken: string | null;
+  ordinaryChecking: boolean;
+  ordinaryModels: RuntimeModelsResponse | null;
+  ordinaryError: string | null;
+  onOrdinaryConnect: (candidate: string) => Promise<boolean>;
+  onOrdinaryDisconnect: () => void;
 }
 
 const emptyHistory: BootstrapJobRecord[] = [];
@@ -87,7 +95,8 @@ function JobMetadata({ job }: { job: BootstrapJobRecord }) {
   </div>;
 }
 
-export function IndexBuildsPage({ token, status, checking, connectionError, onConnect, onDisconnect }: Props) {
+export function IndexBuildsPage({ token, status, checking, connectionError, onConnect, onDisconnect,
+  ordinaryToken, ordinaryChecking, ordinaryModels, ordinaryError, onOrdinaryConnect, onOrdinaryDisconnect }: Props) {
   const { jobId } = useParams();
   const navigate = useNavigate();
   const client = useMemo(() => new BootstrapApiClient({ token }), [token]);
@@ -348,6 +357,8 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
     <PageHeading eyebrow="FRESH-ONLY OPERATIONS" title={jobId ? "Index build details" : "Index Builds"}
       description="Preview the trusted local PDF source, confirm its server-computed identity, and inspect fresh-only build jobs." />
     <BootstrapConnectionPanel connected={token !== null} checking={checking} busy={submitting} status={status} error={connectionError} onConnect={onConnect} onDisconnect={onDisconnect} />
+    {!jobId ? <ConnectionPanel title="Ordinary runtime connection" tokenLabel="Ordinary runtime bearer token" connected={ordinaryToken !== null} checking={ordinaryChecking}
+      runtimeModels={ordinaryModels} error={ordinaryError} onConnect={onOrdinaryConnect} onDisconnect={onOrdinaryDisconnect} /> : null}
     {inventoryError && !preview ? <section className="panel bootstrap-warning" role="alert" aria-label="Inventory requires a new preview"><p>{inventoryError}</p></section> : null}
 
     {!jobId ? <>
@@ -429,6 +440,8 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
         </> : null}
       </section> : null}
 
+      <IndexSelectionPanel token={ordinaryToken} preview={preview} resolvedConfig={validation.value ?? null} inventoryPage={inventoryPage} />
+
       {uncertainRequestId ? <section className="panel bootstrap-warning" aria-labelledby="uncertain-title">
         <span className="eyebrow">SUBMISSION RESPONSE UNCERTAIN</span><h2 id="uncertain-title">The server may have accepted this request</h2>
         <p>Request ID: <code>{uncertainRequestId}</code>. No automatic retry was made. Search the durable job history before deciding on a new build.</p>
@@ -452,7 +465,7 @@ export function IndexBuildsPage({ token, status, checking, connectionError, onCo
       {detail ? <>
         <div className="bootstrap-job-status"><StatusBadge status={statusTone(detail.status)} label={statusLabel(detail.status)} /><span>{detail.status === "running" ? "The local build worker is executing this fresh-only job." : detail.status === "queued" ? "Accepted and waiting for the single local worker." : detail.status === "succeeded" ? "The builder published a report and the manager validated the result." : detail.status === "failed" ? "The build failed; any partial index evidence is preserved." : "This job was interrupted and will not be replayed automatically."}</span></div>
         <JobMetadata job={detail} />
-        {detail.status === "succeeded" ? <div className="bootstrap-success-note"><strong>Manual runtime activation</strong><p>This does not activate an index or start an evaluation. Set the ordinary runtime's existing build-report setting to this report, resolved beneath your trusted index storage root:</p><code>{detail.report_reference}</code><p>Restart the experiment runtime and perform its normal manifest and report checks. A successful build record does not guarantee retrieval or model execution will succeed.</p></div> : null}
+        {detail.status === "succeeded" ? <div className="bootstrap-success-note"><strong>Explicit runtime selection</strong><p>This build is not active automatically. Return to <Link to="/index-builds">Index Builds</Link>, preview the current source, inspect compatible reports, and select this report with the ordinary runtime connection. The runtime verifies the report identity before use; selection does not confirm Chroma or model readiness.</p><code>{detail.report_reference}</code></div> : null}
         {detail.status === "failed" || detail.status === "interrupted" || detail.partial_persistence === true ? <p className="result-error" role="alert">Failed or partial index data is preserved. This interface does not delete, repair, resume, cancel, or retry builds.</p> : null}
       </> : null}
     </section>}

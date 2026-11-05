@@ -19,6 +19,7 @@ from backend.engine.retrieval import (
 )
 from backend.experiments.ablation_plans import AblationPlanError, create_ablation_plan
 from backend.experiments.run_plan import RunPlan, build_run_plan
+from backend.services.index_selection import IndexSelectionError, IndexSelectionService
 
 
 class IndexReadinessInputError(ValueError):
@@ -49,12 +50,23 @@ class IndexReportCompatibility:
 class IndexReadinessService:
     """Inspect only a server-configured source and report; never open Chroma."""
 
-    def __init__(self, source_root: str | Path, storage_root: str | Path, report_path: str | Path) -> None:
-        if any(not isinstance(value, (str, Path)) or not Path(value).is_absolute() for value in (source_root, storage_root, report_path)):
+    def __init__(
+        self,
+        source_root: str | Path,
+        storage_root: str | Path,
+        report_path: str | Path | None = None,
+        *,
+        selection_service: IndexSelectionService | None = None,
+    ) -> None:
+        paths = (source_root, storage_root) + ((report_path,) if report_path is not None else ())
+        if any(not isinstance(value, (str, Path)) or not Path(value).is_absolute() for value in paths):
             raise ValueError("readiness_paths_invalid")
+        if selection_service is not None and not isinstance(selection_service, IndexSelectionService):
+            raise ValueError("readiness_selection_service_invalid")
         self._source_root = Path(source_root)
         self._storage_root = Path(storage_root)
-        self._report_path = Path(report_path)
+        self._report_path = Path(report_path) if report_path is not None else None
+        self._selection_service = selection_service
 
     def check(self, config: ResolvedRunConfig, expected_manifest_hash: str, workflow: str) -> IndexReportCompatibility:
         if workflow not in {"evaluation", "ablation"} or not isinstance(config, ResolvedRunConfig):
@@ -85,8 +97,17 @@ class IndexReadinessService:
             if plan.index_fingerprint != ablation.shared_index_fingerprint:
                 raise IndexReadinessInputError("ablation_plan_invalid")
         base = dict(workflow=workflow, document_manifest_hash=expected, expected_index_fingerprint=plan.index_fingerprint)
+        report_path = self._report_path
+        if self._selection_service is not None:
+            try:
+                if self._selection_service.has_durable_selection():
+                    report_path = self._selection_service.resolve_for_plan(plan).report_path
+            except IndexSelectionError as exc:
+                raise IndexReadinessInputError(exc.code) from exc
+        if report_path is None:
+            raise IndexReadinessInputError("index_not_selected")
         try:
-            report = _validate_build_report(self._storage_root, self._report_path, plan)
+            report = _validate_build_report(self._storage_root, report_path, plan)
         except RetrievalReportUnavailable:
             return IndexReportCompatibility(status="unavailable", reason_code="report_unavailable", **base)
         except OSError:

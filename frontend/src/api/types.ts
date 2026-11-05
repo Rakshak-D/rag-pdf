@@ -290,6 +290,39 @@ export interface IndexReadinessResponse {
   check_level: "report";
 }
 
+export type IndexSelectionStatus = "unselected" | "selected" | "stale" | "invalid" | "legacy_configured";
+
+export interface IndexSelectionIdentity {
+  build_id: string;
+  report_reference: string;
+  document_manifest_hash: string;
+  index_fingerprint: string;
+  report_sha256: string;
+  configuration_snapshot_hash: string;
+  run_fingerprint: string;
+  report_status: "completed" | "completed_with_warnings";
+  selection_revision: number;
+}
+
+export interface IndexSelectionState {
+  selection_status: IndexSelectionStatus;
+  revision: number | null;
+  selection: IndexSelectionIdentity | null;
+  legacy_report_reference: string | null;
+  reason_code: string;
+  check_level: "report";
+  store_checked: false;
+}
+
+export interface IndexSelectionRequest {
+  resolved_config: Record<string, unknown>;
+  expected_manifest_hash: string;
+  expected_index_fingerprint: string;
+  build_id: string;
+  expected_revision: number;
+  operation_id: string;
+}
+
 export interface BenchmarkCaseInput {
   case_id: string;
   query: string;

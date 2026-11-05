@@ -33,7 +33,7 @@ def _settings(tmp_path: Path, **overrides) -> LocalRuntimeSettings:
     data.mkdir(exist_ok=True)
     index = tmp_path / "index-storage"
     index.mkdir(exist_ok=True)
-    report = index / "build-artifacts" / "build-test" / "build-report.json"
+    report = index / "build-artifacts" / "0123456789abcdef0123456789abcdef" / "build-report.json"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text('{"status":"test placeholder"}', encoding="utf-8")
     state = tmp_path / "state"
@@ -54,15 +54,17 @@ def _settings(tmp_path: Path, **overrides) -> LocalRuntimeSettings:
 
 
 def _environment(settings: LocalRuntimeSettings) -> dict[str, str]:
-    return {
+    values = {
         "RAG_WORKBENCH_API_TOKEN": settings.api_token,
         "RAG_WORKBENCH_DATA_DIR": str(settings.data_dir),
         "RAG_WORKBENCH_ARTIFACT_STORE_DIR": str(settings.artifact_store_dir),
         "RAG_WORKBENCH_CATALOG_DB_PATH": str(settings.catalog_db_path),
         "RAG_WORKBENCH_JOBS_DB_PATH": str(settings.jobs_db_path),
         "RAG_WORKBENCH_INDEX_STORAGE_ROOT": str(settings.index_storage_root),
-        "RAG_WORKBENCH_BUILD_REPORT_PATH": str(settings.build_report_path),
     }
+    if settings.build_report_path is not None:
+        values["RAG_WORKBENCH_BUILD_REPORT_PATH"] = str(settings.build_report_path)
+    return values
 
 
 def test_environment_settings_require_paths_and_default_to_loopback(tmp_path: Path):
@@ -81,6 +83,11 @@ def test_environment_settings_require_paths_and_default_to_loopback(tmp_path: Pa
         LocalRuntimeSettings.from_environment(missing)
     assert error.value.error_code == "required_setting_missing"
     assert "test-local-token" not in str(error.value)
+
+    without_report = _environment(settings)
+    without_report.pop("RAG_WORKBENCH_BUILD_REPORT_PATH")
+    loaded_without_report = LocalRuntimeSettings.from_environment(without_report)
+    assert loaded_without_report.build_report_path is None
 
     missing_index = _environment(settings)
     del missing_index["RAG_WORKBENCH_INDEX_STORAGE_ROOT"]
@@ -185,6 +192,25 @@ def test_composition_is_lazy_and_app_lifespan_owns_job_manager(tmp_path: Path):
         assert runtime.job_manager._started is True
     assert runtime.job_manager._shutdown is True
     assert runtime.model_registry.snapshot().components == ()
+
+
+def test_runtime_starts_without_report_and_keeps_read_only_api_available(tmp_path: Path):
+    settings = replace(_settings(tmp_path), build_report_path=None)
+    runtime = build_runtime(settings, context_formatter=_ContextFake(), generation_adapter=_GenerationFake())
+    headers = {"Authorization": "Bearer test-local-token"}
+    with TestClient(runtime.app) as client:
+        assert client.get("/health").status_code == 200
+        selection = client.get("/api/v1/index/selection", headers=headers)
+        assert selection.status_code == 200
+        assert selection.json() == {
+            "selection_status": "unselected", "revision": 0, "selection": None,
+            "legacy_report_reference": None, "reason_code": "index_not_selected",
+            "check_level": "report", "store_checked": False,
+        }
+        assert client.get("/api/v1/documents/manifest", headers=headers).status_code == 200
+        assert client.get("/api/v1/jobs", headers=headers).status_code == 200
+        assert client.get("/api/v1/artifacts", headers=headers).status_code == 200
+    assert runtime.job_manager._shutdown is True
 
 
 def test_runtime_import_does_not_construct_app_or_touch_storage(tmp_path: Path):

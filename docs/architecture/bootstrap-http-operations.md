@@ -187,14 +187,22 @@ deletion, retry, or experiment controls.
 ## After a successful build
 
 A successful job exposes a relative reference such as
-`build-artifacts/<build-id>/build-report.json`. Manually configure the ordinary
-runtime's existing `RAG_WORKBENCH_INDEX_STORAGE_ROOT` and
-`RAG_WORKBENCH_BUILD_REPORT_PATH`, then start `python -m backend.app`. The
-bootstrap service never changes runtime configuration and never starts the
-experiment runtime. The normal retrieval boundary remains authoritative and
-revalidates report identity and persisted collections for each operation.
-Neither a successful bootstrap job nor report compatibility guarantees that
-future retrieval or model execution will succeed.
+`build-artifacts/<build-id>/build-report.json`. Start the ordinary runtime with
+its trusted `RAG_WORKBENCH_INDEX_STORAGE_ROOT`; a report path is no longer
+required for startup. In **Index Builds**, preview the same source/configuration,
+inspect report candidates, connect separately to the ordinary runtime, and
+explicitly select a compatible build. The ordinary runtime persists that
+selection and revalidates its source and report identity after restart. Existing
+deployments may retain `RAG_WORKBENCH_BUILD_REPORT_PATH` as a legacy fallback
+when no selection record exists. The bootstrap service never writes the
+ordinary selection or starts the experiment runtime.
+
+Report inventory and selection do not open Chroma or verify collections. The
+normal retrieval boundary remains authoritative and validates persisted
+collections for each accepted execution. Neither a successful bootstrap job
+nor report compatibility guarantees that future retrieval or model execution
+will succeed. See [local runtime](local-runtime.md) for selection persistence,
+stale-state handling, authentication, and job pinning.
 
 Actual builds run the existing indexing engine and may load/download configured
 embedding models and consume substantial CPU, GPU, memory, and disk. Automated

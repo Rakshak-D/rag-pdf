@@ -1,5 +1,14 @@
 # Report handoff and activation safety design
 
+> **Current implementation note (M2A, 2026-11-05):** The explicit local
+> selection workflow described in [local runtime](local-runtime.md) now
+> supersedes the earlier recommendation below to use only manual environment
+> handoff. Its scope is a durable, report-level pointer with compare-and-swap
+> updates, source/report revalidation, and per-job report pinning. It does not
+> open Chroma, claim store readiness, or make indexes immutable. The original
+> design constraints and unresolved external-writer limitations below remain
+> relevant.
+
 ## Decision summary
 
 For the next operator-facing milestone, keep report handoff manual and use the

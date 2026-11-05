@@ -215,6 +215,26 @@ button:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-vis
 .inventory-details dt { margin-bottom: 5px; }
 .inventory-details dd { margin: 0; overflow-wrap: anywhere; color: #31463a; font-size: 10px; }
 .inventory-details__wide { grid-column: 1 / -1; }
+.index-selection { margin-top: 0; }
+.index-selection > .muted { margin: -3px 0 0; line-height: 1.5; }
+.index-selection__identity { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 3px 0; }
+.index-selection__identity > div { min-width: 0; padding: 10px 11px; border-left: 2px solid #6d987a; background: #f8faf8; }
+.index-selection__identity dt { margin-bottom: 5px; color: #718078; font-size: 10px; }
+.index-selection__identity dd { margin: 0; overflow-wrap: anywhere; color: #30463a; font-size: 11px; }
+.index-selection__identity code, .index-selection__choice code { color: #315b42; font-family: var(--mono); font-size: 10px; }
+.index-selection__wide { grid-column: 1 / -1; }
+.index-selection__choices { display: grid; gap: 8px; padding-top: 13px; border-top: 1px solid #e5ebe6; }
+.index-selection__choices h3 { margin: 0; color: #34483b; font-size: 12px; }
+.index-selection__choice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border: 1px solid #e3eae4; border-radius: 7px; background: #fff; }
+.index-selection__choice > div { display: grid; min-width: 0; gap: 4px; }
+.index-selection__choice strong { overflow-wrap: anywhere; }
+.index-selection__choice small { color: #77837c; font-size: 10px; }
+.index-selection__note, .index-selection__hint, .index-selection__confirmed { margin: 2px 0 0; padding: 9px 11px; border-left: 3px solid #9bad9f; background: #f6f8f6; color: #637168; font-size: 10px; line-height: 1.55; }
+.index-selection__confirmed { border-color: #75a785; background: #f1f7f2; color: #385c43; }
+.index-selection__links { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 4px; color: #78847d; font-size: 10px; }
+.index-selection__links a { color: #356b51; font-weight: 600; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.index-selection__links a:focus-visible { outline: 2px solid #457d5d; outline-offset: 3px; border-radius: 2px; }
+@media (max-width: 560px) { .index-selection__identity { grid-template-columns: 1fr; }.index-selection__choice { align-items: flex-start; flex-direction: column; }.index-selection__choice .button { width: 100%; } }
 
 .documents-page { display: grid; gap: 16px; }
 .documents-page .page-heading { margin-bottom: 2px; }

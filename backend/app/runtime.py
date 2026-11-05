@@ -19,6 +19,7 @@ from backend.engine.generation import LocalGenerationAdapter
 from backend.experiments.artifact_store import ExperimentArtifactStore
 from backend.experiments.catalog import ExperimentCatalog
 from backend.services.experiment_service import ExperimentService
+from backend.services.index_selection import IndexSelectionError, IndexSelectionService
 from backend.services.job_manager import ExperimentJobManager
 from backend.services.model_registry import ModelAdapterRegistry
 from backend.services.index_readiness import IndexReadinessService
@@ -92,7 +93,7 @@ class LocalRuntimeSettings:
     catalog_db_path: Path
     jobs_db_path: Path
     index_storage_root: Path
-    build_report_path: Path
+    build_report_path: Path | None = None
     host: str = _DEFAULT_HOST
     port: int = _DEFAULT_PORT
     max_request_body_bytes: int = _DEFAULT_BODY_LIMIT
@@ -102,8 +103,10 @@ class LocalRuntimeSettings:
     def __post_init__(self) -> None:
         if not isinstance(self.api_token, str) or not self.api_token or len(self.api_token) > 4096 or any(char.isspace() for char in self.api_token):
             raise RuntimeConfigurationError("api_token_invalid")
-        for name in ("data_dir", "artifact_store_dir", "catalog_db_path", "jobs_db_path", "index_storage_root", "build_report_path"):
+        for name in ("data_dir", "artifact_store_dir", "catalog_db_path", "jobs_db_path", "index_storage_root"):
             object.__setattr__(self, name, _absolute_path(getattr(self, name)))
+        if self.build_report_path is not None:
+            object.__setattr__(self, "build_report_path", _absolute_path(self.build_report_path))
         object.__setattr__(self, "host", _loopback_host(self.host))
         _positive_int(self.port, maximum=65535, code="api_port_invalid")
         _positive_int(self.max_request_body_bytes, maximum=_MAX_BODY_LIMIT, code="request_limit_invalid")
@@ -115,7 +118,7 @@ class LocalRuntimeSettings:
         """Load settings from the documented ``RAG_WORKBENCH_`` variables."""
 
         values = os.environ if environ is None else environ
-        required = ("api_token", "data_dir", "artifact_store_dir", "catalog_db_path", "jobs_db_path", "index_storage_root", "build_report_path")
+        required = ("api_token", "data_dir", "artifact_store_dir", "catalog_db_path", "jobs_db_path", "index_storage_root")
         missing = [key for key in required if not values.get(_ENV[key], "").strip()]
         if missing:
             raise RuntimeConfigurationError("required_setting_missing")
@@ -133,7 +136,8 @@ class LocalRuntimeSettings:
             catalog_db_path=Path(values[_ENV["catalog_db_path"]]),
             jobs_db_path=Path(values[_ENV["jobs_db_path"]]),
             index_storage_root=Path(values[_ENV["index_storage_root"]]),
-            build_report_path=Path(values[_ENV["build_report_path"]]),
+            build_report_path=(Path(values[_ENV["build_report_path"]])
+                               if values.get(_ENV["build_report_path"], "").strip() else None),
             host=values.get(_ENV["host"], _DEFAULT_HOST),
             port=integer("port", _DEFAULT_PORT, 65535, "api_port_invalid"),
             max_request_body_bytes=integer("max_request_body_bytes", _DEFAULT_BODY_LIMIT, _MAX_BODY_LIMIT, "request_limit_invalid"),
@@ -155,6 +159,7 @@ class LocalRuntime:
     context_formatter: ContextFormatter = field(repr=False)
     service: ExperimentService = field(repr=False)
     job_manager: ExperimentJobManager = field(repr=False)
+    index_selection_service: IndexSelectionService = field(repr=False)
 
 
 def _reject_symlink_components(path: Path) -> None:
@@ -173,25 +178,27 @@ def _resolve(path: Path) -> Path:
         raise RuntimeConfigurationError("runtime_path_invalid") from exc
 
 
-def _validate_paths(settings: LocalRuntimeSettings) -> tuple[Path, ...]:
+def _validate_paths(settings: LocalRuntimeSettings) -> tuple[Path | None, ...]:
     paths = tuple(
         _resolve(getattr(settings, name))
-        for name in ("data_dir", "artifact_store_dir", "catalog_db_path", "jobs_db_path", "index_storage_root", "build_report_path")
+        for name in ("data_dir", "artifact_store_dir", "catalog_db_path", "jobs_db_path", "index_storage_root")
     )
-    data, artifacts, catalog_db, jobs_db, index_root, report = paths
+    data, artifacts, catalog_db, jobs_db, index_root = paths
+    report = _resolve(settings.build_report_path) if settings.build_report_path is not None else None
 
     if not data.is_dir() or not index_root.is_dir():
         raise RuntimeConfigurationError("runtime_directory_missing")
-    if not report.is_file():
-        raise RuntimeConfigurationError("build_report_missing")
-    if report.name != "build-report.json":
-        raise RuntimeConfigurationError("build_report_path_invalid")
-    try:
-        relative_report = report.relative_to(index_root)
-    except ValueError as exc:
-        raise RuntimeConfigurationError("build_report_path_invalid") from exc
-    if len(relative_report.parts) != 3 or relative_report.parts[0] != "build-artifacts" or not relative_report.parts[1]:
-        raise RuntimeConfigurationError("build_report_path_invalid")
+    if report is not None:
+        if not report.is_file():
+            raise RuntimeConfigurationError("build_report_missing")
+        if report.name != "build-report.json":
+            raise RuntimeConfigurationError("build_report_path_invalid")
+        try:
+            relative_report = report.relative_to(index_root)
+        except ValueError as exc:
+            raise RuntimeConfigurationError("build_report_path_invalid") from exc
+        if len(relative_report.parts) != 3 or relative_report.parts[0] != "build-artifacts" or not relative_report.parts[1]:
+            raise RuntimeConfigurationError("build_report_path_invalid")
 
     artifact_parent = artifacts.parent
     if not artifact_parent.is_dir():
@@ -211,7 +218,7 @@ def _validate_paths(settings: LocalRuntimeSettings) -> tuple[Path, ...]:
                 resolve_disjoint_paths(path_a, path_b, first_label=label_a, second_label=label_b)
     except PathContainmentError as exc:
         raise RuntimeConfigurationError("runtime_paths_overlap") from exc
-    return paths
+    return (*paths, report)
 
 
 def build_runtime(
@@ -245,6 +252,12 @@ def build_runtime(
         registry = model_registry if model_registry is not None else ModelAdapterRegistry()
         formatter = context_formatter if context_formatter is not None else ContextFormatter()
         generator = generation_adapter if generation_adapter is not None else LocalGenerationAdapter()
+        selection_service = IndexSelectionService(
+            selected.data_dir,
+            selected.index_storage_root,
+            selected.jobs_db_path.parent / "active-index-selection.json",
+            legacy_report_path=selected.build_report_path,
+        )
         service = ExperimentService(
             catalog,
             selected.index_storage_root,
@@ -252,6 +265,7 @@ def build_runtime(
             formatter,
             generator,
             model_registry=registry,
+            index_selection_service=selection_service,
         )
         jobs = ExperimentJobManager(
             service,
@@ -265,14 +279,17 @@ def build_runtime(
             max_request_body_bytes=selected.max_request_body_bytes,
             job_manager=jobs,
             document_source_root=selected.data_dir,
-            index_readiness_service=IndexReadinessService(selected.data_dir, selected.index_storage_root, selected.build_report_path),
+            index_readiness_service=IndexReadinessService(
+                selected.data_dir, selected.index_storage_root, selected.build_report_path,
+                selection_service=selection_service,
+            ),
         )
     except RuntimeConfigurationError:
         raise
     except Exception as exc:
         # Component errors often contain local paths. Keep the CLI boundary safe.
         raise RuntimeConfigurationError("runtime_composition_failed") from exc
-    return LocalRuntime(selected, app, artifact_store, catalog, registry, generator, formatter, service, jobs)
+    return LocalRuntime(selected, app, artifact_store, catalog, registry, generator, formatter, service, jobs, selection_service)
 
 
 def run_server(runtime: LocalRuntime) -> None:

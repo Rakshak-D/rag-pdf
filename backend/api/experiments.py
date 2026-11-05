@@ -43,6 +43,7 @@ from backend.services.job_manager import (
     JobStateError,
 )
 from backend.services.index_readiness import IndexReadinessInputError
+from backend.services.index_selection import IndexSelectionError
 
 from .schemas import (
     AblationRequest,
@@ -50,6 +51,8 @@ from .schemas import (
     ManifestResponse,
     IndexReadinessRequest,
     IndexReadinessResponse,
+    IndexSelectionRequest,
+    IndexSelectionResponse,
     RunPlanPreparationRequest,
     RunPlanPreparationResponse,
     RunPlanRequest,
@@ -113,6 +116,20 @@ def _map_error(exc: BaseException) -> JSONResponse:
         return _response_error("artifact_integrity_error", 409)
     if isinstance(exc, ServiceInputError):
         return _response_error("request_invalid", 400)
+    if isinstance(exc, IndexSelectionError):
+        conflict_codes = {
+            "index_not_selected", "index_selection_stale", "index_selection_incompatible",
+            "manifest_changed", "manifest_empty", "index_fingerprint_mismatch",
+            "selection_revision_conflict", "selection_operation_conflict", "build_report_changed",
+            "build_report_failed", "build_report_incomplete", "build_report_mismatch", "build_report_invalid",
+        }
+        unavailable_codes = {
+            "selection_state_unavailable", "selection_lock_unavailable", "selection_unlock_failed",
+            "selection_write_failed", "selection_commit_uncertain", "selection_source_unavailable",
+            "build_report_unavailable",
+        }
+        not_found_codes = {"build_report_not_found"}
+        return _response_error(exc.code, 404 if exc.code in not_found_codes else 503 if exc.code in unavailable_codes else 409 if exc.code in conflict_codes else 400)
     if isinstance(exc, ServicePersistenceError):
         return _response_error("persistence_failed", 503)
     if isinstance(exc, ServiceExecutionError):
@@ -128,7 +145,12 @@ def _map_error(exc: BaseException) -> JSONResponse:
     if isinstance(exc, JobStateError):
         return _response_error(exc.error_code, 409 if exc.error_code == "job_not_cancellable" else 503)
     if isinstance(exc, ExperimentJobError):
-        return _response_error(exc.error_code, 400)
+        selection_conflicts = {
+            "index_not_selected", "index_selection_stale", "index_selection_incompatible",
+            "manifest_changed", "manifest_empty", "index_fingerprint_mismatch",
+            "selection_revision_conflict", "selection_operation_conflict",
+        }
+        return _response_error(exc.error_code, 409 if exc.error_code in selection_conflicts else 400)
     return _response_error("internal_error", 500)
 
 
@@ -258,7 +280,8 @@ async def index_readiness(request: Request) -> JSONResponse:
         try:
             result = await run_in_threadpool(service.check, config, model.expected_manifest_hash, model.workflow)
         except IndexReadinessInputError as exc:
-            raise ApiRequestError(exc.code, 409 if exc.code in {"manifest_empty", "manifest_changed"} else 400) from exc
+            conflict_codes = {"manifest_empty", "manifest_changed", "index_not_selected", "index_selection_stale", "index_selection_incompatible"}
+            raise ApiRequestError(exc.code, 409 if exc.code in conflict_codes else 400) from exc
         except ManifestSourceChangedError as exc:
             raise ApiRequestError("manifest_source_changed", 409) from exc
         except ManifestValidationError as exc:
@@ -266,6 +289,56 @@ async def index_readiness(request: Request) -> JSONResponse:
         except OSError as exc:
             raise ApiRequestError("manifest_source_unavailable", 503) from exc
         return JSONResponse(IndexReadinessResponse.model_validate(asdict(result)).model_dump(mode="json"))
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def index_selection(request: Request) -> JSONResponse:
+    try:
+        service: ExperimentService = request.app.state.experiment_service
+        selection_service = service.index_selection_service
+        if selection_service is None:
+            raise ApiRequestError("index_selection_unconfigured", 503)
+        payload = await run_in_threadpool(selection_service.get_state)
+        response_model = IndexSelectionResponse.model_validate(payload)
+        response = JSONResponse(response_model.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def select_index(request: Request) -> JSONResponse:
+    try:
+        service: ExperimentService = request.app.state.experiment_service
+        selection_service = service.index_selection_service
+        if selection_service is None:
+            raise ApiRequestError("index_selection_unconfigured", 503)
+        model = _model(IndexSelectionRequest, await _read_json(request, request.app.state.max_request_body_bytes))
+        if set(model.resolved_config) != set(ResolvedRunConfig.model_fields):
+            raise ApiRequestError("configuration_invalid", 400)
+        try:
+            config = ResolvedRunConfig.model_validate(model.resolved_config)
+        except Exception as exc:
+            raise ApiRequestError("configuration_invalid", 400) from exc
+        try:
+            payload = await run_in_threadpool(
+                selection_service.select,
+                config=config,
+                expected_manifest_hash=model.expected_manifest_hash,
+                expected_index_fingerprint=model.expected_index_fingerprint,
+                build_id=model.build_id,
+                expected_revision=model.expected_revision,
+                operation_id=model.operation_id,
+            )
+        except IndexSelectionError as exc:
+            raise exc
+        response_model = IndexSelectionResponse.model_validate(payload)
+        response = JSONResponse(response_model.model_dump(mode="json"), status_code=200)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
     except Exception as exc:
         return _map_error(exc)
 
@@ -533,6 +606,8 @@ def build_routes(service: ExperimentService, *, max_request_body_bytes: int, job
         Route("/health", health, methods=["GET"]),
         Route("/api/v1/documents/manifest", inspect_document_manifest, methods=["GET"]),
         Route("/api/v1/index/readiness", index_readiness, methods=["POST"]),
+        Route("/api/v1/index/selection", index_selection, methods=["GET"]),
+        Route("/api/v1/index/selection", select_index, methods=["POST"]),
         Route("/api/v1/run-plans", prepare_run_plan, methods=["POST"]),
         Route("/api/v1/evaluations", submit_evaluation, methods=["POST"]),
         Route("/api/v1/ablations", submit_ablation, methods=["POST"]),

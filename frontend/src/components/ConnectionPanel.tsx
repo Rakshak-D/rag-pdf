@@ -3,6 +3,8 @@ import type { RuntimeModelsResponse } from "../api/types";
 import { StatusBadge } from "./StatusBadge";
 
 interface ConnectionPanelProps {
+  title?: string;
+  tokenLabel?: string;
   connected: boolean;
   checking: boolean;
   runtimeModels: RuntimeModelsResponse | null;
@@ -11,7 +13,7 @@ interface ConnectionPanelProps {
   onDisconnect: () => void;
 }
 
-export function ConnectionPanel({ connected, checking, runtimeModels, error, onConnect, onDisconnect }: ConnectionPanelProps) {
+export function ConnectionPanel({ title = "Backend connection", tokenLabel = "Bearer token", connected, checking, runtimeModels, error, onConnect, onDisconnect }: ConnectionPanelProps) {
   const [token, setToken] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -25,7 +27,7 @@ export function ConnectionPanel({ connected, checking, runtimeModels, error, onC
       <div className="connection-panel__heading">
         <div>
           <span className="eyebrow">LOCAL API</span>
-          <h2 id="connection-title">Backend connection</h2>
+          <h2 id="connection-title">{title}</h2>
         </div>
         <StatusBadge status={connected ? "ready" : checking ? "loading" : "unloaded"} label={connected ? "Connected" : checking ? "Checking" : "Disconnected"} />
       </div>
@@ -50,7 +52,7 @@ export function ConnectionPanel({ connected, checking, runtimeModels, error, onC
         </div>
       ) : (
         <form className="connection-form" onSubmit={submit}>
-          <label htmlFor="api-token">Bearer token</label>
+          <label htmlFor="api-token">{tokenLabel}</label>
           <div className="connection-form__row">
             <input
               id="api-token"

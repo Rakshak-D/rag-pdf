@@ -5,7 +5,7 @@ interface AppShellProps {
   children: ReactNode;
 }
 
-const comingSoon = ["Query", "Evaluations", "Ablations", "Results"];
+const comingSoon = ["Ask", "Evaluations", "Ablations", "Results"];
 
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation();

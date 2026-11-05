@@ -18,6 +18,7 @@ from backend.config.paths import PathContainmentError, resolve_disjoint_paths
 from backend.experiments.ablation_plans import AblationPlan
 from backend.experiments.benchmark import BenchmarkSuite
 from backend.experiments.run_plan import RunPlan
+from backend.services.index_selection import PinnedIndexReport
 
 from .experiment_service import (
     ExperimentService,
@@ -138,6 +139,7 @@ class _WorkItem:
     job_type: str
     payload: RunPlan | AblationPlan
     benchmark_suite: BenchmarkSuite
+    pinned_index_report: PinnedIndexReport | None = None
 
 
 class ExperimentJobManager:
@@ -277,6 +279,9 @@ class ExperimentJobManager:
 
     @staticmethod
     def _failure_code(exc: BaseException) -> str:
+        selection_code = getattr(exc, "code", None)
+        if isinstance(selection_code, str) and _CODE_RE.fullmatch(selection_code):
+            return selection_code
         if isinstance(exc, ServiceInputError):
             return "job_input_invalid"
         if isinstance(exc, ServiceResultIntegrityError):
@@ -299,9 +304,19 @@ class ExperimentJobManager:
                 if self._claim(item.job_id):
                     try:
                         if item.job_type == "evaluation":
-                            persisted = self._service.run_evaluation(item.payload, item.benchmark_suite)
+                            if item.pinned_index_report is None:
+                                persisted = self._service.run_evaluation(item.payload, item.benchmark_suite)
+                            else:
+                                persisted = self._service.run_evaluation(
+                                    item.payload, item.benchmark_suite, pinned_index_report=item.pinned_index_report
+                                )
                         else:
-                            persisted = self._service.run_ablation(item.payload, item.benchmark_suite)
+                            if item.pinned_index_report is None:
+                                persisted = self._service.run_ablation(item.payload, item.benchmark_suite)
+                            else:
+                                persisted = self._service.run_ablation(
+                                    item.payload, item.benchmark_suite, pinned_index_report=item.pinned_index_report
+                                )
                         record = persisted.record
                         self._finish(item.job_id, status=record.status, artifact_id=record.artifact_id, result_status=record.status, error_code=None)
                     except BaseException as exc:
@@ -316,23 +331,52 @@ class ExperimentJobManager:
 
     def submit_evaluation(self, run_plan: RunPlan, benchmark_suite: BenchmarkSuite) -> ExperimentJobRecord:
         try:
-            self._service.validate_evaluation_request(run_plan, benchmark_suite)
+            with self._service.selection_admission_guard():
+                self._service.validate_evaluation_request(run_plan, benchmark_suite)
+                pinned = self._service.capture_index_report(run_plan)
+                return self._submit(
+                    "evaluation", run_plan, benchmark_suite, run_plan.run_fingerprint,
+                    run_plan.index_fingerprint, run_plan.document_manifest_hash, pinned,
+                )
+        except ExperimentJobError:
+            raise
         except ExperimentServiceError as exc:
             raise ExperimentJobError(exc.error_code) from exc
         except Exception as exc:
+            code = getattr(exc, "code", None)
+            if isinstance(code, str) and _CODE_RE.fullmatch(code):
+                raise ExperimentJobError(code) from exc
             raise ExperimentJobError("job_input_invalid") from exc
-        return self._submit("evaluation", run_plan, benchmark_suite, run_plan.run_fingerprint, None, None)
 
     def submit_ablation(self, ablation_plan: AblationPlan, benchmark_suite: BenchmarkSuite) -> ExperimentJobRecord:
         try:
-            self._service.validate_ablation_request(ablation_plan, benchmark_suite)
+            with self._service.selection_admission_guard():
+                self._service.validate_ablation_request(ablation_plan, benchmark_suite)
+                pinned = self._service.capture_index_report(ablation_plan)
+                return self._submit(
+                    "ablation", ablation_plan, benchmark_suite, None,
+                    ablation_plan.shared_index_fingerprint, ablation_plan.document_manifest_hash, pinned,
+                )
+        except ExperimentJobError:
+            raise
         except ExperimentServiceError as exc:
             raise ExperimentJobError(exc.error_code) from exc
         except Exception as exc:
+            code = getattr(exc, "code", None)
+            if isinstance(code, str) and _CODE_RE.fullmatch(code):
+                raise ExperimentJobError(code) from exc
             raise ExperimentJobError("job_input_invalid") from exc
-        return self._submit("ablation", ablation_plan, benchmark_suite, None, ablation_plan.shared_index_fingerprint, ablation_plan.document_manifest_hash)
 
-    def _submit(self, job_type: str, payload: RunPlan | AblationPlan, suite: BenchmarkSuite, run_fingerprint: str | None, index_fingerprint: str | None, manifest: str | None) -> ExperimentJobRecord:
+    def _submit(
+        self,
+        job_type: str,
+        payload: RunPlan | AblationPlan,
+        suite: BenchmarkSuite,
+        run_fingerprint: str | None,
+        index_fingerprint: str | None,
+        manifest: str | None,
+        pinned_index_report: PinnedIndexReport | None = None,
+    ) -> ExperimentJobRecord:
         # Fast preflight gives an early stable error; the same condition is
         # checked again under the admission lock to linearize against shutdown.
         self._validate_manager()
@@ -345,7 +389,7 @@ class ExperimentJobManager:
             created = _now()
             with self._connect() as connection:
                 connection.execute("INSERT INTO experiment_jobs (job_id,job_type,status,created_at,started_at,finished_at,benchmark_id,benchmark_version,run_fingerprint,shared_index_fingerprint,document_manifest_hash,artifact_id,error_code,result_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (job_id, job_type, "queued", created, None, None, suite.benchmark_id, suite.benchmark_version, run_fingerprint, index_fingerprint, manifest, None, None, None))
-            item = _WorkItem(job_id, job_type, payload, suite)
+            item = _WorkItem(job_id, job_type, payload, suite, pinned_index_report)
             try:
                 self._queue.put_nowait(item)
             except queue.Full as exc:

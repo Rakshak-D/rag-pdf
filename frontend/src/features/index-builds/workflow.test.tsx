@@ -34,6 +34,28 @@ function inventoryResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function selectionResponse(selected = false) {
+  return {
+    selection_status: selected ? "selected" : "unselected",
+    revision: selected ? 1 : 0,
+    selection: selected ? {
+      build_id: inventoryBuildId,
+      report_reference: `build-artifacts/${inventoryBuildId}/build-report.json`,
+      document_manifest_hash: hash,
+      index_fingerprint: fingerprint,
+      report_sha256: "e".repeat(64),
+      configuration_snapshot_hash: "f".repeat(64),
+      run_fingerprint: "c".repeat(64),
+      report_status: "completed",
+      selection_revision: 1,
+    } : null,
+    legacy_report_reference: null,
+    reason_code: selected ? "selection_verified" : "index_not_selected",
+    check_level: "report",
+    store_checked: false,
+  };
+}
+
 function completeConfig(): string {
   const value: Record<string, unknown> = Object.fromEntries(REQUIRED_RESOLVED_CONFIG_FIELDS.map((key) => [key, null]));
   value.pdf_dir = "trusted-source";
@@ -50,6 +72,8 @@ function mount(path = "/index-builds") {
 }
 function responseFor(path: string, init?: RequestInit): Response {
   if (path === "/health") return json(health);
+  if (path === "/api/v1/runtime/models") return json({ components: [] });
+  if (path === "/api/v1/index/selection") return json(selectionResponse(init?.method === "POST"));
   if (path === "/bootstrap-api/v1/bootstrap/status") return json(service);
   if (path === "/bootstrap-api/v1/bootstrap/preview") return json(preview);
   if (path === "/bootstrap-api/v1/bootstrap/index-inventory") return json(inventoryResponse());
@@ -92,6 +116,35 @@ describe("bootstrap index-build workflow", () => {
     expect(screen.queryByText(/Authenticated bootstrap mode/)).not.toBeInTheDocument();
     expect(fetcher.mock.calls.some(([, init]) => new Headers(init?.headers).get("Authorization") === "Bearer wrong-service-token")).toBe(true);
     expect(fetcher.mock.calls.every(([url]) => !String(url).includes("wrong-service-token"))).toBe(true);
+  });
+
+  it("keeps bootstrap inventory and ordinary selection credentials on their own routes", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => responseFor(String(input), init));
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup(); mount();
+    await connectBootstrap(user);
+    await preparePreview(user);
+    await user.click(screen.getByRole("button", { name: "Inspect build reports" }));
+    expect(await screen.findByText(inventoryBuildId)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Ordinary runtime bearer token"), "ordinary-only-secret");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    await screen.findByText("No adapters are registered yet. This status does not indicate index or Ollama readiness.");
+    await user.click(screen.getByRole("button", { name: "Select report" }));
+    await screen.findByText("The runtime confirmed this report selection. Chroma and model readiness were not checked.");
+
+    const bootstrapCall = fetcher.mock.calls.find(([url]) => String(url) === "/bootstrap-api/v1/bootstrap/index-inventory");
+    expect(new Headers(bootstrapCall?.[1]?.headers).get("Authorization")).toBe("Bearer bootstrap-only-secret");
+    const selectionCalls = fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/index/selection");
+    expect(selectionCalls.length).toBeGreaterThanOrEqual(2);
+    expect(selectionCalls.every(([, init]) => new Headers(init?.headers).get("Authorization") === "Bearer ordinary-only-secret")).toBe(true);
+    expect(fetcher.mock.calls.every(([url, init]) => {
+      const path = String(url);
+      const authorization = new Headers(init?.headers).get("Authorization");
+      if (path.startsWith("/bootstrap-api/")) return authorization !== "Bearer ordinary-only-secret";
+      if (path.startsWith("/api/v1/")) return authorization !== "Bearer bootstrap-only-secret";
+      return true;
+    })).toBe(true);
+    expect(fetcher.mock.calls.every(([url]) => !String(url).includes("-only-secret"))).toBe(true);
   });
 
   it("previews server identities, requires explicit acknowledgment, submits once, and opens the real job detail", async () => {
@@ -404,8 +457,11 @@ describe("bootstrap index-build workflow", () => {
       const label = ({ succeeded: "Succeeded", failed: "Failed", interrupted: "Interrupted" } as const)[state];
       expect(await screen.findByText(label, { exact: true })).toBeInTheDocument();
       if (state === "succeeded") {
-        expect(screen.getByText("Manual runtime activation")).toBeInTheDocument();
-        expect(screen.getByText(/does not guarantee retrieval or model execution/)).toBeInTheDocument();
+        expect(screen.getByText("Explicit runtime selection")).toBeInTheDocument();
+        const selectionInstructions = screen.getByText(/Return to/);
+        expect(within(selectionInstructions).getByRole("link", { name: "Index Builds" })).toHaveAttribute("href", "/index-builds");
+        expect(screen.getByText(/selection does not confirm Chroma or model readiness/)).toBeInTheDocument();
+        expect(screen.queryByText(/Set the ordinary runtime's existing build-report setting/)).not.toBeInTheDocument();
       }
       if (state === "failed") expect(screen.getByText(/partial index data is preserved/i)).toBeInTheDocument();
     }

@@ -26,6 +26,9 @@ import type {
   RunPlanPreparationResponse,
   IndexReadinessRequest,
   IndexReadinessResponse,
+  IndexSelectionIdentity,
+  IndexSelectionRequest,
+  IndexSelectionState,
   EvaluationSubmissionResponse,
   ExperimentJobRecord,
   HealthResponse,
@@ -109,6 +112,32 @@ function isIndexReadiness(value: unknown): value is IndexReadinessResponse {
   return value.status === "report_match"
     ? value.reported_text_records !== null && value.reported_image_records !== null && (value.report_status === "completed" || value.report_status === "completed_with_warnings")
     : value.reported_text_records === null && value.reported_image_records === null && value.report_status === null && value.build_id === null;
+}
+
+function isIndexSelectionIdentity(value: unknown): value is IndexSelectionIdentity {
+  return isRecord(value) && typeof value.build_id === "string" && /^[0-9a-f]{32}$/.test(value.build_id) &&
+    value.report_reference === `build-artifacts/${value.build_id}/build-report.json` &&
+    sha256(value.document_manifest_hash) && sha256(value.index_fingerprint) && sha256(value.report_sha256) &&
+    sha256(value.configuration_snapshot_hash) && sha256(value.run_fingerprint) &&
+    (value.report_status === "completed" || value.report_status === "completed_with_warnings") &&
+    count(value.selection_revision) && value.selection_revision > 0;
+}
+
+function isIndexSelectionState(value: unknown): value is IndexSelectionState {
+  if (!isRecord(value) || !["unselected", "selected", "stale", "invalid", "legacy_configured"].includes(String(value.selection_status)) ||
+    !(value.revision === null || count(value.revision)) || !(value.selection === null || isIndexSelectionIdentity(value.selection)) ||
+    !(value.legacy_report_reference === null || (typeof value.legacy_report_reference === "string" && /^build-artifacts\/[0-9a-f]{32}\/build-report\.json$/.test(value.legacy_report_reference))) ||
+    typeof value.reason_code !== "string" || !/^[a-z][a-z0-9_]{1,63}$/.test(value.reason_code) ||
+    value.check_level !== "report" || value.store_checked !== false) return false;
+  if (value.selection_status === "selected" || value.selection_status === "stale") {
+    return isIndexSelectionIdentity(value.selection) && value.revision === value.selection.selection_revision && value.legacy_report_reference === null;
+  }
+  if (value.selection !== null) return false;
+  if (value.selection_status === "invalid") return value.revision === null;
+  if (value.selection_status === "legacy_configured") {
+    return value.revision === 0 && typeof value.legacy_report_reference === "string";
+  }
+  return value.revision === 0 && value.legacy_report_reference === null;
 }
 
 function isModelStatus(value: unknown): value is ModelComponentStatus {
@@ -257,6 +286,28 @@ export class WorkbenchApiClient {
   async checkIndexReadiness(input: IndexReadinessRequest): Promise<IndexReadinessResponse> {
     const value = await this.request("/api/v1/index/readiness", { method: "POST", body: input });
     if (!isIndexReadiness(value) || value.workflow !== input.workflow || value.document_manifest_hash !== input.expected_manifest_hash.toLowerCase()) malformed();
+    return value;
+  }
+
+  async getIndexSelection(): Promise<IndexSelectionState> {
+    const value = await this.request("/api/v1/index/selection");
+    if (!isIndexSelectionState(value)) malformed();
+    return value;
+  }
+
+  async selectIndex(input: IndexSelectionRequest): Promise<IndexSelectionState> {
+    if (!/^[0-9a-f]{64}$/.test(input.expected_manifest_hash) ||
+      !/^[0-9a-f]{64}$/.test(input.expected_index_fingerprint) ||
+      !/^[0-9a-f]{32}$/.test(input.build_id) ||
+      !Number.isSafeInteger(input.expected_revision) || input.expected_revision < 0 ||
+      !/^[0-9a-f]{32}$/.test(input.operation_id)) {
+      throw new ApiError("malformed_response", "selection_request_invalid");
+    }
+    const value = await this.request("/api/v1/index/selection", { method: "POST", body: input });
+    if (!isIndexSelectionState(value) || value.selection_status !== "selected" ||
+      value.selection?.build_id !== input.build_id ||
+      value.selection.document_manifest_hash !== input.expected_manifest_hash ||
+      value.selection.index_fingerprint !== input.expected_index_fingerprint) malformed();
     return value;
   }
 

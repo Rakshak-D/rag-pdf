@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from backend.experiments.evaluation_runner import EvaluationCaseOutcome, Evaluat
 from backend.experiments.run_plan import RunPlan
 from backend.experiments.tracing import QueryTrace
 from backend.services.model_registry import ModelAdapterRegistry
+from backend.services.index_selection import IndexSelectionError, IndexSelectionService, PinnedIndexReport
 
 
 class ExperimentServiceError(ValueError):
@@ -195,7 +197,7 @@ class ExperimentService:
         self,
         catalog: ExperimentCatalog,
         storage_root: str | Path,
-        build_report_path: str | Path,
+        build_report_path: str | Path | None,
         context_formatter: ContextFormatter,
         generation_adapter: LocalGenerationAdapter,
         *,
@@ -208,10 +210,12 @@ class ExperimentService:
         ram_monitor_factory: object | None = None,
         model_registry: ModelAdapterRegistry | None = None,
         retrieval_callable: Callable[..., HybridRetrievalResult] | None = None,
+        index_selection_service: IndexSelectionService | None = None,
     ) -> None:
         if not isinstance(catalog, ExperimentCatalog):
             raise ServiceInputError("catalog_invalid")
-        if not isinstance(storage_root, (str, Path)) or not str(storage_root).strip() or not isinstance(build_report_path, (str, Path)) or not str(build_report_path).strip():
+        if (not isinstance(storage_root, (str, Path)) or not str(storage_root).strip()
+                or (build_report_path is not None and (not isinstance(build_report_path, (str, Path)) or not str(build_report_path).strip()))):
             raise ServiceInputError("storage_path_invalid")
         if not hasattr(context_formatter, "format") or not hasattr(generation_adapter, "generate"):
             raise ServiceInputError("pipeline_components_invalid")
@@ -219,6 +223,8 @@ class ExperimentService:
             raise ServiceInputError("retrieval_callable_invalid")
         if model_registry is not None and not isinstance(model_registry, ModelAdapterRegistry):
             raise ServiceInputError("model_registry_invalid")
+        if index_selection_service is not None and not isinstance(index_selection_service, IndexSelectionService):
+            raise ServiceInputError("index_selection_service_invalid")
         if model_registry is not None and any(value is not None for value in (text_adapter, image_adapter, reranker_adapter)):
             raise ServiceInputError("conflicting_model_adapters")
         self._catalog = catalog
@@ -235,20 +241,71 @@ class ExperimentService:
         self._ram_monitor_factory = ram_monitor_factory
         self._model_registry = model_registry
         self._retrieval_callable = retrieval_callable or retrieve_for_plan
+        self._index_selection_service = index_selection_service
 
-    def _retrieval(self, case: BenchmarkCase, plan: RunPlan) -> HybridRetrievalResult:
+    @property
+    def index_selection_service(self) -> IndexSelectionService | None:
+        return self._index_selection_service
+
+    def selection_admission_guard(self):
+        """Coordinate job admission with a concurrent active-selection update."""
+        if self._index_selection_service is None:
+            return nullcontext()
+        return self._index_selection_service.admission_guard()
+
+    def capture_index_report(self, payload: RunPlan | AblationPlan) -> PinnedIndexReport | None:
+        """Resolve and pin the effective report before work is accepted."""
+        if isinstance(payload, RunPlan):
+            plan = payload
+        elif isinstance(payload, AblationPlan):
+            plan = payload.variants[0].run_plan
+        else:
+            raise ServiceInputError("run_plan_invalid")
+        if self._index_selection_service is not None:
+            return self._index_selection_service.resolve_for_plan(plan)
+        if self._build_report_path is None:
+            raise IndexSelectionError("index_not_selected")
+        return None
+
+    def _execution_pin(
+        self,
+        plan: RunPlan,
+        pinned_index_report: PinnedIndexReport | None,
+    ) -> PinnedIndexReport | None:
+        if self._index_selection_service is not None:
+            pinned = pinned_index_report or self._index_selection_service.resolve_for_plan(plan)
+            self._index_selection_service.validate_pinned(plan, pinned)
+            return pinned
+        if self._build_report_path is None:
+            raise IndexSelectionError("index_not_selected")
+        return None
+
+    def _retrieval(
+        self,
+        case: BenchmarkCase,
+        plan: RunPlan,
+        pinned_index_report: PinnedIndexReport | None = None,
+    ) -> HybridRetrievalResult:
         text_k, image_k = _effective_limits(case, plan)
+        report_path = self._build_report_path
+        if self._index_selection_service is not None:
+            if pinned_index_report is None:
+                raise IndexSelectionError("index_not_selected")
+            self._index_selection_service.validate_pinned(plan, pinned_index_report)
+            report_path = pinned_index_report.report_path
         text_adapter = self._text_adapter
         image_adapter = self._image_adapter
         reranker_adapter = self._reranker_adapter
         if self._model_registry is not None:
             bundle = self._model_registry.get_bundle(plan.resolved_config())
             text_adapter, image_adapter, reranker_adapter = bundle.text_adapter, bundle.image_adapter, bundle.reranker
+        if self._index_selection_service is not None:
+            self._index_selection_service.verify_report_pin(plan, pinned_index_report)
         return self._retrieval_callable(
             case.query,
             plan,
             self._storage_root,
-            build_report_path=self._build_report_path,
+            build_report_path=report_path,
             modalities=case.modalities,
             text_adapter=text_adapter,
             image_adapter=image_adapter,
@@ -290,13 +347,23 @@ class ExperimentService:
         _validate_ablation_plan(ablation_plan)
         _validate_suite_for_plan(ablation_plan.variants[0].run_plan, benchmark_suite)
 
-    def run_evaluation(self, run_plan: RunPlan, benchmark_suite: BenchmarkSuite) -> PersistedEvaluationRun:
+    def run_evaluation(
+        self,
+        run_plan: RunPlan,
+        benchmark_suite: BenchmarkSuite,
+        *,
+        pinned_index_report: PinnedIndexReport | None = None,
+    ) -> PersistedEvaluationRun:
         self.validate_evaluation_request(run_plan, benchmark_suite)
+        pinned = self._execution_pin(run_plan, pinned_index_report)
         try:
             text_embedder = self._text_embedder
             if text_embedder is None and self._model_registry is not None:
                 text_embedder = self._model_registry.get_text_adapter(run_plan.resolved_config())
-            runner = EvaluationRunner(run_plan, self._retrieval, self._context_formatter, self._generation_adapter, text_embedder=text_embedder, **self._runner_kwargs())
+            def retrieve(case: BenchmarkCase, plan: RunPlan) -> HybridRetrievalResult:
+                return self._retrieval(case, plan, pinned)
+
+            runner = EvaluationRunner(run_plan, retrieve, self._context_formatter, self._generation_adapter, text_embedder=text_embedder, **self._runner_kwargs())
             result = runner.run(benchmark_suite)
         except ExperimentServiceError:
             raise
@@ -309,19 +376,40 @@ class ExperimentService:
             raise ServicePersistenceError("evaluation_persistence_failed") from exc
         return PersistedEvaluationRun(result, record)
 
-    def run_ablation(self, ablation_plan: AblationPlan, benchmark_suite: BenchmarkSuite) -> PersistedAblationRun:
+    def run_ablation(
+        self,
+        ablation_plan: AblationPlan,
+        benchmark_suite: BenchmarkSuite,
+        *,
+        pinned_index_report: PinnedIndexReport | None = None,
+    ) -> PersistedAblationRun:
         self.validate_ablation_request(ablation_plan, benchmark_suite)
+        pinned = self._execution_pin(ablation_plan.variants[0].run_plan, pinned_index_report)
         try:
             text_embedder = self._text_embedder
-            retrieval_callable = self._retrieval_callable
             if self._model_registry is not None:
                 text_embedder = text_embedder or self._model_registry.get_text_adapter(ablation_plan.variants[0].run_plan.resolved_config())
-                retrieval_callable = self._registry_retrieval
+
+            def retrieve(query: str, plan: RunPlan, storage_root: object, **kwargs: Any) -> HybridRetrievalResult:
+                report_path = self._build_report_path
+                if self._index_selection_service is not None:
+                    if pinned is None:
+                        raise IndexSelectionError("index_not_selected")
+                    self._index_selection_service.validate_pinned(plan, pinned)
+                    report_path = pinned.report_path
+                if self._model_registry is not None:
+                    bundle = self._model_registry.get_bundle(plan.resolved_config())
+                    kwargs.update(text_adapter=bundle.text_adapter, image_adapter=bundle.image_adapter, reranker_adapter=bundle.reranker)
+                if self._index_selection_service is not None:
+                    self._index_selection_service.verify_report_pin(plan, pinned)
+                kwargs["build_report_path"] = report_path
+                return self._retrieval_callable(query, plan, storage_root, **kwargs)
+
             runner = AblationRunner(
                 ablation_plan,
                 benchmark_suite,
                 self._storage_root,
-                self._build_report_path,
+                pinned.report_path if pinned is not None else self._build_report_path,
                 self._context_formatter,
                 self._generation_adapter,
                 text_adapter=self._text_adapter,
@@ -331,7 +419,7 @@ class ExperimentService:
                 clock=self._clock,
                 cpu_monitor_factory=self._cpu_monitor_factory,
                 ram_monitor_factory=self._ram_monitor_factory,
-                retrieval_callable=retrieval_callable,
+                retrieval_callable=retrieve,
             )
             result = runner.run()
         except ExperimentServiceError:

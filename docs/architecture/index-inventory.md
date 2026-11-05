@@ -90,8 +90,10 @@ the response. A response is not a reservation and is not a guarantee that a
 later build or retrieval will succeed. Inventory does not verify store counts
 against collections.
 
-There is no general index catalog and no index selection or activation
-operation in this phase. Operators must continue to configure the ordinary
-runtime's existing report path manually. The historical Chroma HNSW reader
-error and intermittent artifact publisher integrity incident remain
-unresolved; this service does not attempt to diagnose or repair either one.
+The inventory itself remains a report-discovery operation: it does not select
+or activate a report. The ordinary runtime's separate authenticated selection
+API consumes a specific compatible candidate after recomputing its manifest
+and RunPlan; see [local runtime](local-runtime.md). Selection remains report
+level and does not establish Chroma or model readiness. The historical Chroma
+HNSW reader error and intermittent artifact publisher integrity incident
+remain unresolved; neither service diagnoses or repairs them.
