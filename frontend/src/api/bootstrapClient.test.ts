@@ -19,6 +19,18 @@ const reportCandidate = {
   report_status: "completed", reported_text_records: 14, reported_image_records: 2,
   check_level: "report", store_checked: false,
 };
+const documentRecord = {
+  document_id: `doc_${"f".repeat(64)}`,
+  relative_path: "Research note.pdf",
+  size_bytes: 28,
+  sha256: "e".repeat(64),
+};
+function documentsResponse(documents: Array<typeof documentRecord> = []) {
+  return {
+    inventory_status: "available", documents, manifest_hash: hash, total: documents.length,
+    limit: 50, offset: 0, complete: true, max_upload_bytes: 1024 * 1024, max_pages: 200,
+  };
+}
 function inventoryPage(candidate: Record<string, unknown> = reportCandidate) {
   return {
     expected_index_fingerprint: fingerprint, document_manifest_hash: hash,
@@ -153,5 +165,42 @@ describe("BootstrapApiClient", () => {
     await expect(html.getStatus()).rejects.toMatchObject({ kind: "non_json", code: "bootstrap_proxy_unavailable" });
     const unauthenticated = new BootstrapApiClient({ fetcher: vi.fn<typeof fetch>() });
     await expect(unauthenticated.getStatus()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("lists manifest-backed documents and posts raw PDF bytes only to the bootstrap route", async () => {
+    const file = new File(["%PDF-test payload"], "Research note.pdf", { type: "application/pdf" });
+    const imported = {
+      outcome: "imported", document: { ...documentRecord, size_bytes: file.size },
+      manifest_hash: "a".repeat(64), max_upload_bytes: 1024 * 1024, error_code: null,
+    };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(documentsResponse()))
+      .mockResolvedValueOnce(Response.json(imported, { status: 201 }));
+    const client = new BootstrapApiClient({ token: "bootstrap-only-token", fetcher });
+    await expect(client.listDocuments({ limit: 50, offset: 0 })).resolves.toEqual(documentsResponse());
+    await expect(client.uploadDocument(file)).resolves.toEqual(imported);
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe("/bootstrap-api/v1/bootstrap/documents?limit=50&offset=0");
+    const [url, init] = fetcher.mock.calls[1]!;
+    expect(String(url)).toBe("/bootstrap-api/v1/bootstrap/documents");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(file);
+    expect(new Headers(init?.headers).get("Content-Type")).toBe("application/pdf");
+    expect(new Headers(init?.headers).get("X-Document-Filename")).toBe(file.name);
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer bootstrap-only-token");
+    expect(String(url)).not.toContain("bootstrap-only-token");
+  });
+
+  it("preserves committed-but-unconfirmed imports and rejects malformed document inventory", async () => {
+    const uncertain = {
+      outcome: "committed_inventory_unavailable", document: documentRecord,
+      manifest_hash: null, max_upload_bytes: 1024 * 1024, error_code: "manifest_confirmation_failed",
+    };
+    const client = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json(uncertain, { status: 503 })) });
+    await expect(client.uploadDocument(new File(["%PDF"], "Research note.pdf"))).resolves.toEqual(uncertain);
+
+    const malformed = new BootstrapApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json({
+      ...documentsResponse(), documents: [{ ...documentRecord, relative_path: "C:/private/file.pdf" }], total: 1,
+    })) });
+    await expect(malformed.listDocuments()).rejects.toMatchObject({ kind: "malformed_response" });
   });
 });

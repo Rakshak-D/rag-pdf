@@ -12,6 +12,7 @@ import { ArtifactDetailPage } from "./features/artifacts/ArtifactDetailPage";
 import { ArtifactsPage } from "./features/artifacts/ArtifactsPage";
 import { ExperimentWorkflowPage } from "./features/experiments/ExperimentWorkflowPage";
 import { IndexBuildsPage } from "./features/index-builds/IndexBuildsPage";
+import { DocumentsPage } from "./features/documents/DocumentsPage";
 
 type DataState = "disconnected" | "loading" | "ready" | "error";
 
@@ -80,12 +81,16 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    if (location.pathname === "/documents") {
+      setHealth(null); setHealthError(null);
+      return () => { active = false; };
+    }
     setHealth(null); setHealthError(null);
     void client.getHealth().then((value) => { if (active) setHealth(value); }).catch((error: unknown) => {
       if (active) setHealthError(apiErrorText(error));
     });
     return () => { active = false; };
-  }, [client, refreshVersion]);
+  }, [client, location.pathname, refreshVersion]);
 
   useEffect(() => {
     let active = true;
@@ -114,7 +119,7 @@ export default function App() {
   }, [client, connected, location.pathname, refreshVersion]);
 
   return <AppShell>
-    {!location.pathname.startsWith("/index-builds") ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
+    {!location.pathname.startsWith("/index-builds") && location.pathname !== "/documents" ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
     <Routes>
       <Route path="/" element={<OverviewPage connected={connected} health={health} healthError={healthError} dataState={dataState} jobs={jobs} evaluationArtifacts={evaluationArtifacts} ablationArtifacts={ablationArtifacts} dataError={dataError} refreshing={refreshing} onRefresh={refresh} />} />
       <Route path="/jobs" element={<JobsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
@@ -122,6 +127,7 @@ export default function App() {
       <Route path="/artifacts" element={<ArtifactsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/artifacts/:artifactId" element={<ArtifactDetailPage key={location.pathname} client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/experiments/:workflow" element={<ExperimentWorkflowPage key={location.pathname} client={client} connected={connected} onAccepted={refresh} />} />
+      <Route path="/documents" element={<DocumentsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} />} />
       <Route path="/index-builds" element={<IndexBuildsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} />} />
       <Route path="/index-builds/:jobId" element={<IndexBuildsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} />} />
       <Route path="*" element={<section className="panel not-found"><span className="eyebrow">ROUTE NOT FOUND</span><h1>This page is unavailable</h1><p>Use the workbench navigation to return to a supported view.</p><Link className="button button--primary" to="/">Open overview</Link></section>} />

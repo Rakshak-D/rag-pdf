@@ -7,6 +7,9 @@ import type {
   BootstrapInventoryCandidate,
   BootstrapInventoryPage,
   BootstrapInventoryRequest,
+  BootstrapDocumentImportResponse,
+  BootstrapDocumentRecord,
+  BootstrapDocumentsResponse,
   BootstrapJobEnvelope,
   BootstrapJobRecord,
   BootstrapJobRequest,
@@ -388,6 +391,43 @@ function isBootstrapStatus(value: unknown): value is BootstrapStatusResponse {
     Number.isInteger(value.queue_capacity) && Number(value.queue_capacity) >= 1 && Number(value.queue_capacity) <= 32;
 }
 
+const documentRecordKeys = ["document_id", "relative_path", "size_bytes", "sha256"] as const;
+const documentsResponseKeys = [
+  "inventory_status", "documents", "manifest_hash", "total", "limit", "offset", "complete", "max_upload_bytes", "max_pages",
+] as const;
+const documentImportKeys = ["outcome", "document", "manifest_hash", "max_upload_bytes", "error_code"] as const;
+
+function isBootstrapDocument(value: unknown): value is BootstrapDocumentRecord {
+  if (!isRecord(value) || !hasExactKeys(value, documentRecordKeys) ||
+    typeof value.document_id !== "string" || !/^doc_[a-f0-9]{64}$/.test(value.document_id) ||
+    typeof value.relative_path !== "string" || value.relative_path.length < 1 || value.relative_path.length > 2048 ||
+    value.relative_path.startsWith("/") || value.relative_path.includes("\\") ||
+    value.relative_path.split("/").some((part) => part === "" || part === "." || part === "..") ||
+    /^[A-Za-z]:/.test(value.relative_path) || !/\.pdf$/i.test(value.relative_path) ||
+    !count(value.size_bytes) || !sha256(value.sha256)) return false;
+  return true;
+}
+
+function isBootstrapDocuments(value: unknown, limit: number, offset: number): value is BootstrapDocumentsResponse {
+  return isRecord(value) && hasExactKeys(value, documentsResponseKeys) &&
+    value.inventory_status === "available" && Array.isArray(value.documents) && value.documents.length <= limit &&
+    value.documents.every(isBootstrapDocument) && sha256(value.manifest_hash) && count(value.total) &&
+    value.limit === limit && value.offset === offset && value.complete === true &&
+    value.documents.length === Math.min(limit, Math.max(0, value.total - offset)) &&
+    Number.isSafeInteger(value.max_upload_bytes) && Number(value.max_upload_bytes) >= 1 && Number(value.max_upload_bytes) <= 16 * 1024 * 1024 &&
+    value.max_pages === 200;
+}
+
+function isBootstrapDocumentImport(value: unknown): value is BootstrapDocumentImportResponse {
+  if (!isRecord(value) || !hasExactKeys(value, documentImportKeys) || !isBootstrapDocument(value.document) ||
+    !Number.isSafeInteger(value.max_upload_bytes) || Number(value.max_upload_bytes) < 1 || Number(value.max_upload_bytes) > 16 * 1024 * 1024 ||
+    !(value.manifest_hash === null || sha256(value.manifest_hash)) ||
+    !(value.error_code === null || (typeof value.error_code === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(value.error_code)))) return false;
+  return value.outcome === "imported"
+    ? sha256(value.manifest_hash) && value.error_code === null
+    : value.outcome === "committed_inventory_unavailable" && value.manifest_hash === null && value.error_code !== null;
+}
+
 function isBootstrapPreview(value: unknown): value is BootstrapPreviewResponse {
   return isRecord(value) && Number.isInteger(value.document_count) && Number(value.document_count) >= 1 &&
     Number(value.document_count) <= 1_000_000 && sha256(value.manifest_hash) &&
@@ -504,16 +544,24 @@ export class BootstrapApiClient {
     this.prefix = options.prefix ?? "/bootstrap-api";
   }
 
-  private async request(path: string, options: { method?: string; body?: unknown; protected?: boolean } = {}): Promise<unknown> {
+  private async request(path: string, options: {
+    method?: string; body?: unknown; protected?: boolean; binaryBody?: Blob; filename?: string;
+    signal?: AbortSignal; acceptStatuses?: readonly number[];
+  } = {}): Promise<unknown> {
     const headers = new Headers();
     if (options.protected !== false) {
       if (!this.token) throw new ApiError("http", "authentication_required", 401);
       headers.set("Authorization", `Bearer ${this.token}`);
     }
     const init: RequestInit = { method: options.method ?? "GET", headers };
+    if (options.signal) init.signal = options.signal;
     if (options.body !== undefined) {
       headers.set("Content-Type", "application/json");
       init.body = JSON.stringify(options.body);
+    } else if (options.binaryBody !== undefined) {
+      headers.set("Content-Type", "application/pdf");
+      headers.set("X-Document-Filename", options.filename ?? "");
+      init.body = options.binaryBody;
     }
     let response: Response;
     try {
@@ -530,7 +578,7 @@ export class BootstrapApiClient {
       }
       throw error;
     }
-    if (!response.ok) {
+    if (!response.ok && !options.acceptStatuses?.includes(response.status)) {
       throw new ApiError("http", errorCode(payload) ?? "http_error", response.status);
     }
     return payload;
@@ -545,6 +593,32 @@ export class BootstrapApiClient {
   async getStatus(): Promise<BootstrapStatusResponse> {
     const value = await this.request("/v1/bootstrap/status");
     if (!isBootstrapStatus(value)) malformed();
+    return value;
+  }
+
+  async listDocuments(options: { limit?: number; offset?: number; signal?: AbortSignal } = {}): Promise<BootstrapDocumentsResponse> {
+    const limit = options.limit ?? 50;
+    const offset = options.offset ?? 0;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0 || offset > 1_000_000) {
+      throw new ApiError("malformed_response", "pagination_invalid");
+    }
+    const value = await this.request(
+      `/v1/bootstrap/documents?limit=${limit}&offset=${offset}`,
+      options.signal ? { signal: options.signal } : {},
+    );
+    if (!isBootstrapDocuments(value, limit, offset)) malformed();
+    return value;
+  }
+
+  async uploadDocument(file: File, options: { signal?: AbortSignal } = {}): Promise<BootstrapDocumentImportResponse> {
+    if (!file || !/^[A-Za-z0-9][A-Za-z0-9 _().-]{0,114}\.pdf$/.test(file.name) || file.size < 1) {
+      throw new ApiError("malformed_response", "document_file_invalid");
+    }
+    const value = await this.request("/v1/bootstrap/documents", {
+      method: "POST", binaryBody: file, filename: file.name, acceptStatuses: [503],
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (!isBootstrapDocumentImport(value)) malformed();
     return value;
   }
 

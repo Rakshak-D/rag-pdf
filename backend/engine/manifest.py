@@ -235,9 +235,20 @@ def _hash_pdf(path: Path, source_root: Path) -> tuple[_FileSignature, str]:
     return before, digest.hexdigest()
 
 
-def _document_id(relative_path: str, sha256: str) -> str:
-    identity = f"{relative_path}\0{sha256}".encode("utf-8")
+def document_id_for(relative_path: str, sha256: str) -> str:
+    """Return the canonical identity used by ``DocumentManifestEntry``."""
+    entry = DocumentManifestEntry(
+        relative_path=relative_path,
+        size_bytes=0,
+        sha256=sha256,
+        document_id="doc_" + "0" * 64,
+    )
+    identity = f"{entry.relative_path}\0{entry.sha256}".encode("utf-8")
     return "doc_" + hashlib.sha256(identity).hexdigest()
+
+
+def _document_id(relative_path: str, sha256: str) -> str:
+    return document_id_for(relative_path, sha256)
 
 
 def _validated_manifest(manifest: DocumentManifest) -> DocumentManifest:

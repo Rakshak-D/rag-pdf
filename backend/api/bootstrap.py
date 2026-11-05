@@ -10,7 +10,7 @@ import re
 import sqlite3
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -22,6 +22,15 @@ from backend.config.schema import ResolvedRunConfig, WorkbenchSafetyPolicy
 from backend.engine.manifest import ManifestSourceChangedError, ManifestValidationError, build_document_manifest
 from backend.experiments.run_plan import RunPlan, build_run_plan
 from backend.services.bootstrap_jobs import BootstrapJobError, BootstrapJobManager, BuildJob
+from backend.services.bootstrap_documents import (
+    MAX_DOCUMENT_PAGES,
+    MAX_OFFSET as MAX_DOCUMENT_OFFSET,
+    MAX_PAGE_SIZE as MAX_DOCUMENT_PAGE_SIZE,
+    DEFAULT_PAGE_SIZE as DEFAULT_DOCUMENT_PAGE_SIZE,
+    BootstrapDocumentError,
+    import_pdf,
+    list_documents,
+)
 from backend.services.index_inventory import IndexInventoryInputError
 
 
@@ -126,6 +135,41 @@ class BootstrapInventoryResponse(_StrictModel):
     reason_code: str = Field(max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
     check_level: Literal["report"]
     store_checked: Literal[False]
+
+
+class BootstrapDocumentView(_StrictModel):
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{64}$")
+    relative_path: str = Field(min_length=1, max_length=2048)
+    size_bytes: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class BootstrapDocumentsResponse(_StrictModel):
+    inventory_status: Literal["available"]
+    documents: list[BootstrapDocumentView] = Field(max_length=MAX_DOCUMENT_PAGE_SIZE)
+    manifest_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=MAX_DOCUMENT_PAGE_SIZE)
+    offset: int = Field(ge=0, le=MAX_DOCUMENT_OFFSET)
+    complete: Literal[True]
+    max_upload_bytes: int = Field(ge=1, le=16 * 1024 * 1024)
+    max_pages: Literal[MAX_DOCUMENT_PAGES]
+
+
+class BootstrapDocumentImportResponse(_StrictModel):
+    outcome: Literal["imported", "committed_inventory_unavailable"]
+    document: BootstrapDocumentView
+    manifest_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    max_upload_bytes: int = Field(ge=1, le=16 * 1024 * 1024)
+    error_code: str | None = Field(default=None, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+
+    @model_validator(mode="after")
+    def validate_result(self):
+        if self.outcome == "imported" and (self.manifest_hash is None or self.error_code is not None):
+            raise ValueError("confirmed import requires its manifest identity")
+        if self.outcome == "committed_inventory_unavailable" and (self.manifest_hash is not None or self.error_code is None):
+            raise ValueError("unconfirmed import requires a bounded error code")
+        return self
 
 
 def _safe_components(path: Path) -> None:
@@ -281,6 +325,10 @@ def _bounded_json(request: Request, payload: dict[str, Any], *, status_code: int
             payload = BootstrapJobsResponse.model_validate(payload).model_dump(mode="json")
         elif "candidates" in payload:
             payload = BootstrapInventoryResponse.model_validate(payload).model_dump(mode="json")
+        elif "documents" in payload:
+            payload = BootstrapDocumentsResponse.model_validate(payload).model_dump(mode="json")
+        elif "document" in payload:
+            payload = BootstrapDocumentImportResponse.model_validate(payload).model_dump(mode="json")
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(encoded) > request.app.state.max_response_body_bytes:
             raise ApiRequestError("response_body_too_large", 413)
@@ -310,6 +358,68 @@ async def status(request: Request) -> JSONResponse:
         })
     except Exception as exc:
         return _map_bootstrap_error(exc)
+
+
+async def list_documents_route(request: Request) -> JSONResponse:
+    try:
+        _trusted_state(request)
+        source, _storage = _trusted_roots(request)
+        limit = _pagination(request.query_params.get("limit"), DEFAULT_DOCUMENT_PAGE_SIZE, MAX_DOCUMENT_PAGE_SIZE)
+        offset = _pagination(request.query_params.get("offset"), 0, MAX_DOCUMENT_OFFSET)
+        inventory = await run_in_threadpool(list_documents, source, limit=limit, offset=offset)
+        settings = request.app.state.bootstrap_settings
+        return _bounded_json(request, {
+            "inventory_status": "available",
+            "documents": [entry.model_dump(mode="json") for entry in inventory.documents],
+            "manifest_hash": inventory.manifest_hash,
+            "total": inventory.total,
+            "limit": inventory.limit,
+            "offset": inventory.offset,
+            "complete": inventory.complete,
+            "max_upload_bytes": settings.max_request_body_bytes,
+            "max_pages": MAX_DOCUMENT_PAGES,
+        })
+    except Exception as exc:
+        return _map_bootstrap_error(exc)
+
+
+async def import_document_route(request: Request) -> JSONResponse:
+    try:
+        _trusted_state(request)
+        source, _storage = _trusted_roots(request)
+        settings = request.app.state.bootstrap_settings
+        result = await import_pdf(
+            source,
+            _manager(request),
+            request.stream(),
+            filename=request.headers.get("x-document-filename", ""),
+            content_type=request.headers.get("content-type", ""),
+            content_encoding=request.headers.get("content-encoding"),
+            content_length=request.headers.get("content-length"),
+            maximum_bytes=settings.max_request_body_bytes,
+        )
+        body = {
+            "outcome": result.outcome,
+            "document": result.document.model_dump(mode="json"),
+            "manifest_hash": result.manifest_hash,
+            "max_upload_bytes": settings.max_request_body_bytes,
+            "error_code": result.error_code,
+        }
+        return _bounded_json(request, body, status_code=201 if result.outcome == "imported" else 503)
+    except (BootstrapDocumentError, ApiRequestError) as exc:
+        return JSONResponse(
+            {"outcome": "rejected", "error": {"code": exc.code}},
+            status_code=exc.status_code,
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        )
+    except Exception as exc:
+        # Every unhandled path here precedes publication; post-publication
+        # uncertainty is converted to an explicit result by the service.
+        return JSONResponse(
+            {"outcome": "rejected", "error": {"code": "document_import_unavailable"}},
+            status_code=503,
+            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        )
 
 
 async def preview(request: Request) -> JSONResponse:
@@ -427,6 +537,8 @@ async def get_job(request: Request) -> JSONResponse:
 def _map_bootstrap_error(exc: BaseException) -> JSONResponse:
     if isinstance(exc, ApiRequestError):
         return _response_error(exc.code, exc.status_code)
+    if isinstance(exc, BootstrapDocumentError):
+        return _response_error(exc.code, exc.status_code)
     if isinstance(exc, IndexInventoryInputError):
         code = exc.code
         if code in {"manifest_changed", "manifest_source_changed", "manifest_empty", "manifest_invalid"}:
@@ -450,6 +562,8 @@ def _map_bootstrap_error(exc: BaseException) -> JSONResponse:
             return _response_error(code, 409 if code != "job_input_invalid" else 400)
         if code in {"manager_not_accepting", "job_store_unavailable", "job_admission_failed", "bootstrap_instance_owned", "bootstrap_ownership_unavailable"}:
             return _response_error(code, 503)
+        if code == "source_mutation_active":
+            return _response_error("document_source_busy", 409)
         if code == "job_schema_unsupported":
             return _response_error(code, 503)
         return _response_error("bootstrap_service_error", 503)
@@ -463,6 +577,8 @@ def build_bootstrap_routes() -> list[Route]:
     return [
         Route("/health", health, methods=["GET"]),
         Route("/api/v1/bootstrap/status", status, methods=["GET"]),
+        Route("/api/v1/bootstrap/documents", list_documents_route, methods=["GET"]),
+        Route("/api/v1/bootstrap/documents", import_document_route, methods=["POST"]),
         Route("/api/v1/bootstrap/preview", preview, methods=["POST"]),
         Route("/api/v1/bootstrap/index-inventory", index_inventory, methods=["POST"]),
         Route("/api/v1/bootstrap/jobs", submit_job, methods=["POST"]),

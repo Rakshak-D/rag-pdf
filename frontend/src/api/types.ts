@@ -28,6 +28,33 @@ export interface BootstrapStatusResponse {
   queue_capacity: number;
 }
 
+export interface BootstrapDocumentRecord {
+  document_id: string;
+  relative_path: string;
+  size_bytes: number;
+  sha256: string;
+}
+
+export interface BootstrapDocumentsResponse {
+  inventory_status: "available";
+  documents: BootstrapDocumentRecord[];
+  manifest_hash: string;
+  total: number;
+  limit: number;
+  offset: number;
+  complete: true;
+  max_upload_bytes: number;
+  max_pages: 200;
+}
+
+export interface BootstrapDocumentImportResponse {
+  outcome: "imported" | "committed_inventory_unavailable";
+  document: BootstrapDocumentRecord;
+  manifest_hash: string | null;
+  max_upload_bytes: number;
+  error_code: string | null;
+}
+
 export interface BootstrapPreviewRequest {
   resolved_config: Record<string, unknown>;
 }

@@ -1,10 +1,11 @@
 # Local bootstrap HTTP operations
 
 The bootstrap service is a separate, loopback-only application for the first
-fresh index build. It can start before any build report exists. It does not
-expose experiment execution, ablation execution, index reset, document upload,
-retrieval, or automatic index activation. The ordinary experiment runtime
-continues to require its configured successful build report.
+fresh index build. It can start before any build report exists. It supports
+bounded PDF import and source inventory, but does not expose experiment
+execution, ablation execution, index reset, retrieval, deletion, or automatic
+index activation. The ordinary experiment runtime continues to require its
+configured successful build report.
 
 ## Trusted settings and startup
 
@@ -34,6 +35,45 @@ $env:RAG_WORKBENCH_BOOTSTRAP_INDEX_STORAGE_ROOT = '<absolute owned index directo
 $env:RAG_WORKBENCH_BOOTSTRAP_STATE_DIR = '<existing absolute private state directory>'
 .\rag-env\Scripts\python.exe -m backend.bootstrap_app
 ```
+
+## Importing and listing source documents
+
+Both document routes require the bootstrap bearer token. The service uses
+only its configured `source_root`; a request cannot select a destination.
+
+- `GET /api/v1/bootstrap/documents?limit=50&offset=0` returns a page of the
+  current `build_document_manifest()` entries, the corpus manifest hash, an
+  exact total, and the effective `max_upload_bytes`. Pages contain at most
+  100 records. An empty `documents` array with `total: 0` is a verified empty
+  source. An unreadable root or invalid manifest returns a bounded error.
+- `POST /api/v1/bootstrap/documents` accepts raw bytes with
+  `Content-Type: application/pdf` and an `X-Document-Filename` header. The
+  request body is streamed and limited by
+  `RAG_WORKBENCH_BOOTSTRAP_MAX_REQUEST_BODY_BYTES` (default 2 MiB, maximum
+  16 MiB). PDFs must have a valid signature, be readable and unencrypted, and
+  contain 1–200 pages. PyMuPDF validates structure without extracting text or
+  loading embedding, reranking, generation, or Chroma components.
+
+Filenames use a conservative ASCII policy: 1–120 characters, begin with a
+letter or digit, contain only letters, digits, spaces, parentheses, periods,
+underscores or hyphens, and end in lowercase `.pdf`. Path separators, drive
+prefixes, control characters and Windows device names are rejected. Existing
+names and case-insensitive stems conflict; files are never overwritten.
+
+The service writes to a random `.part` file inside the trusted source root,
+streams and hashes the bytes, flushes and fsyncs the file, validates the PDF,
+then publishes with an atomic no-overwrite hard link. The document ID and
+corpus hash come from the existing manifest identity contract. Imports are
+serialized with job admission and return a conflict while a build is queued
+or running; a build submission racing an import must revalidate its manifest.
+An `imported` response means the file was found in the recomputed manifest.
+`committed_inventory_unavailable` means publication occurred but that final
+confirmation failed; inspect the inventory before attempting another upload.
+Pre-publication failures return `outcome: rejected` and a bounded error code.
+
+Imported documents are source files available for a later explicit Index
+Builds preview. Import does not index, activate, or make a document queryable.
+There is no document delete, overwrite, activation, or automatic reindex route.
 
 The launcher fixes Uvicorn to one worker. Composition and module import do not
 open SQLite, Chroma, or models. The ASGI lifespan acquires the manager's

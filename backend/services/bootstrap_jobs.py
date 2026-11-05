@@ -12,6 +12,7 @@ import queue
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
 from typing import Callable
 
 from backend.config.schema import ResolvedRunConfig
@@ -75,6 +76,9 @@ class BootstrapJobManager:
         self._last_worker_error: str | None = None
         self._last_worker_stage: str | None = None
         self._lock = threading.Lock()
+        # Serializes source mutations against build admission without holding
+        # the manager lock while a bounded upload is streamed from a client.
+        self._source_mutation_gate = threading.Lock()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._owner = self.path.parent / ".bootstrap-instance-owner"
@@ -177,6 +181,8 @@ class BootstrapJobManager:
         with self._lock:
             if not self._accepting or self._owner_token is None:
                 raise BootstrapJobError("manager_not_accepting")
+            if self._source_mutation_gate.locked():
+                raise BootstrapJobError("source_mutation_active")
             request_hash = self._request_hash(request_id, config, manifest_hash, fingerprint)
             with self._connect() as db:
                 prior = db.execute("SELECT * FROM bootstrap_jobs WHERE client_request_id=?", (request_id,)).fetchone()
@@ -222,6 +228,8 @@ class BootstrapJobManager:
         with self._lock:
             if not self._accepting or self._owner_token is None:
                 raise BootstrapJobError("manager_not_accepting")
+            if self._source_mutation_gate.locked():
+                raise BootstrapJobError("source_mutation_active")
             request_hash = self._request_hash(request_id, config, manifest_hash, fingerprint)
             with self._connect() as db:
                 prior = db.execute("SELECT * FROM bootstrap_jobs WHERE client_request_id=?", (request_id,)).fetchone()
@@ -230,6 +238,33 @@ class BootstrapJobManager:
             if prior["request_hash"] != request_hash:
                 raise BootstrapJobError("request_id_conflict")
             return self._record(prior)
+
+    @contextmanager
+    def source_mutation(self):
+        """Reserve the trusted PDF source while no build is queued or running.
+
+        The gate and manager lock make the active-job check atomic with build
+        admission. The manager lock is released before yielding, so a slow
+        client upload cannot block health or shutdown bookkeeping.
+        """
+        if not self._source_mutation_gate.acquire(blocking=False):
+            raise BootstrapJobError("source_mutation_active")
+        try:
+            with self._lock:
+                if not self._accepting or self._owner_token is None:
+                    raise BootstrapJobError("manager_not_accepting")
+                try:
+                    with self._connect() as db:
+                        active = db.execute(
+                            "SELECT 1 FROM bootstrap_jobs WHERE status IN ('queued','running') LIMIT 1"
+                        ).fetchone()
+                except (sqlite3.Error, BootstrapJobError) as exc:
+                    raise BootstrapJobError("job_store_unavailable") from exc
+                if active:
+                    raise BootstrapJobError("source_build_active")
+            yield
+        finally:
+            self._source_mutation_gate.release()
 
     def _request_hash(self, request_id: str, config: ResolvedRunConfig, manifest_hash: str, fingerprint: str) -> str:
         if (not isinstance(request_id, str) or not 16 <= len(request_id) <= 80 or
