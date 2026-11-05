@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import signal
@@ -23,12 +24,34 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
+
+
+def _same_path(left: str | Path, right: Path) -> bool:
+    try:
+        left_path = Path(left or Path.cwd()).resolve()
+        right_path = right.resolve()
+        return os.path.normcase(os.path.realpath(str(left_path))) == os.path.normcase(
+            os.path.realpath(str(right_path))
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
+def _ensure_repository_root_on_sys_path(root: Path = ROOT) -> None:
+    """Make repository imports work for direct script execution, without duplicates."""
+    resolved_root = root.resolve()
+    sys.path[:] = [entry for entry in sys.path if not _same_path(entry, resolved_root)]
+    sys.path.insert(0, str(resolved_root))
+
+
+_ensure_repository_root_on_sys_path()
 EXPECTED_BRANCH = "production-evaluation-workbench"
 REQUIREMENTS_SHA256 = "EF3095DBC1A1657CCB5D5FCBA4D2DF245DD5EC9D04B6C2D237823FDFE472734F"
 GLOBAL_DEADLINE_SECONDS = 600
 LOG_LIMIT_BYTES = 2 * 1024 * 1024
 TASK_DISK_BUDGET_BYTES = 1024 * 1024 * 1024
 EVIDENCE_SCHEMA_VERSION = 1
+_SAFE_MODULE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
 
 class E2EBlocked(RuntimeError):
@@ -41,6 +64,13 @@ class E2EBlocked(RuntimeError):
 
 class EvidenceCaptureFailed(RuntimeError):
     """The task could not durably retain required launcher evidence."""
+
+
+def _safe_missing_module_identifier(exc: ModuleNotFoundError) -> str:
+    name = getattr(exc, "name", None)
+    if isinstance(name, str) and _SAFE_MODULE_IDENTIFIER.fullmatch(name):
+        return name
+    return "module_identifier_redacted"
 
 
 @dataclass
@@ -250,12 +280,15 @@ def _record_preflight_failure(attempt: LauncherAttempt, code: str, exc: Exceptio
         "edge_discovery": attempt.values.get("edge", {"status": "not_attempted"}),
         "failed_utc": _utc_now(),
     }
+    if isinstance(exc, ModuleNotFoundError):
+        record["missing_module"] = _safe_missing_module_identifier(exc)
     _write_json(attempt.evidence_dir / "launcher-failure.json", record)
 
 
 def _execute_preflight(
     attempt: LauncherAttempt,
     steps: list[tuple[str, Any]],
+    resource_guard: Any = None,
 ) -> tuple[int, dict[str, Any]]:
     for stage, operation in steps:
         attempt.last_attempted_stage = stage
@@ -275,17 +308,26 @@ def _execute_preflight(
             }
         try:
             operation()
+            if resource_guard is not None:
+                resource_guard()
         except Exception as exc:
             code = exc.code if isinstance(exc, E2EBlocked) else "preflight_unexpected"
+            missing_module = (
+                _safe_missing_module_identifier(exc)
+                if isinstance(exc, ModuleNotFoundError) else None
+            )
             try:
-                _append_jsonl(attempt.evidence_dir / "launcher-progress.jsonl", {
+                failed_event = {
                     "attempt_id": attempt.attempt_id,
                     "event": "stage_failed",
                     "stage": stage,
                     "failure_code": code,
                     "exception_class": type(exc).__name__,
                     "utc": _utc_now(),
-                })
+                }
+                if missing_module is not None:
+                    failed_event["missing_module"] = missing_module
+                _append_jsonl(attempt.evidence_dir / "launcher-progress.jsonl", failed_event)
                 _record_preflight_failure(attempt, code, exc)
             except Exception as capture_exc:
                 return 1, {
@@ -294,13 +336,16 @@ def _execute_preflight(
                     "exception_class": type(capture_exc).__name__,
                     "durable_evidence": False,
                 }
-            return 1, {
+            result = {
                 "classification": "LAUNCHER_PREFLIGHT_BLOCKED",
                 "failure_code": code,
                 "exception_class": type(exc).__name__,
                 "last_attempted_stage": stage,
                 "durable_evidence": True,
             }
+            if missing_module is not None:
+                result["missing_module"] = missing_module
+            return 1, result
         try:
             _append_jsonl(attempt.evidence_dir / "launcher-progress.jsonl", {
                 "attempt_id": attempt.attempt_id,
@@ -970,7 +1015,11 @@ def _build_preflight_steps(attempt: LauncherAttempt, prior_task_disk_bytes: int)
     ]
 
 
-def _run(prior_task_disk_bytes: int = 0) -> tuple[int, dict[str, Any]]:
+def _run(
+    prior_task_disk_bytes: int = 0,
+    *,
+    preflight_only: bool = False,
+) -> tuple[int, dict[str, Any]]:
     overall_started = time.monotonic()
     local_app_data = os.environ.get("LOCALAPPDATA")
     if not local_app_data:
@@ -982,11 +1031,30 @@ def _run(prior_task_disk_bytes: int = 0) -> tuple[int, dict[str, Any]]:
         raise E2EBlocked("evidence_workspace_unavailable") from exc
     attempt = _create_attempt(temp_root)
     workspace = attempt.workspace
+    preflight_resource_metrics: dict[str, int] = {
+        "prior_task_disk_bytes": prior_task_disk_bytes,
+        "peak_task_owned_disk_bytes": max(0, prior_task_disk_bytes),
+    }
+
+    def guard_preflight_resources() -> None:
+        if time.monotonic() - overall_started > GLOBAL_DEADLINE_SECONDS:
+            raise E2EBlocked("overall_e2e_deadline_exceeded")
+        # Let the explicit task_budget stage report an invalid prior measurement.
+        if prior_task_disk_bytes < 0 or prior_task_disk_bytes >= TASK_DISK_BUDGET_BYTES:
+            return
+        task_bytes = prior_task_disk_bytes + _tree_bytes(workspace)
+        preflight_resource_metrics["current_task_owned_disk_bytes"] = task_bytes
+        preflight_resource_metrics["peak_task_owned_disk_bytes"] = max(
+            preflight_resource_metrics["peak_task_owned_disk_bytes"], task_bytes
+        )
+        if task_bytes > TASK_DISK_BUDGET_BYTES:
+            raise E2EBlocked("task_owned_disk_budget_exceeded")
+
     prepared_steps: dict[str, list[tuple[str, Any]]] = {}
     preflight_code, preflight_result = _execute_preflight(attempt, [(
         "preflight_plan_construction",
         lambda: prepared_steps.setdefault("steps", _build_preflight_steps(attempt, prior_task_disk_bytes)),
-    )])
+    )], resource_guard=guard_preflight_resources if preflight_only else None)
     if preflight_code:
         return preflight_code, {
             **preflight_result,
@@ -994,7 +1062,11 @@ def _run(prior_task_disk_bytes: int = 0) -> tuple[int, dict[str, Any]]:
             "evidence_directory": "evidence",
             "workspace_id": attempt.workspace.name,
         }
-    preflight_code, preflight_result = _execute_preflight(attempt, prepared_steps["steps"])
+    preflight_code, preflight_result = _execute_preflight(
+        attempt,
+        prepared_steps["steps"],
+        resource_guard=guard_preflight_resources if preflight_only else None,
+    )
     if preflight_code:
         return preflight_code, {
             **preflight_result,
@@ -1002,6 +1074,59 @@ def _run(prior_task_disk_bytes: int = 0) -> tuple[int, dict[str, Any]]:
             "evidence_directory": "evidence",
             "workspace_id": workspace.name,
         }
+
+    if preflight_only:
+        completed_stages = [
+            row["stage"]
+            for row in _read_jsonl(attempt.evidence_dir / "launcher-progress.jsonl")
+            if row.get("event") == "stage_succeeded"
+        ]
+        summary = {
+            "workspace_id": workspace.name,
+            "attempt_id": attempt.attempt_id,
+            "classification": "PREFLIGHT_READY_NO_BROWSER",
+            "failure_code": None,
+            "overall_elapsed_ms": round((time.monotonic() - overall_started) * 1000),
+            "completed_preflight_stages": completed_stages,
+            "edge_discovery": attempt.values.get("edge", {"status": "not_attempted"}),
+            "fixtures_created": attempt.fixtures_created,
+            "synthetic_configuration_prepared": all(
+                key in attempt.values for key in ("config", "manifest", "plan", "ordinary_plan")
+            ),
+            "subprocess_command_prepared": "test_command" in attempt.values,
+            "managed_process_state": {
+                "started_count": len(attempt.managed_child_pids),
+                "active_count": len(attempt.active_managed_child_pids),
+            },
+            "browser_launch_attempted": False,
+            "service_startup_attempted": False,
+            "http_requests": 0,
+            "resource_metrics": preflight_resource_metrics,
+        }
+        attempt.last_attempted_stage = "preflight_summary_write"
+        try:
+            _write_json(workspace / "evidence" / "launcher-summary.json", summary)
+        except Exception as exc:
+            try:
+                _record_preflight_failure(attempt, "EVIDENCE_CAPTURE_FAILED", exc)
+            except Exception as capture_exc:
+                return 1, {
+                    "classification": "LAUNCHER_PREFLIGHT_BLOCKED",
+                    "failure_code": "EVIDENCE_CAPTURE_FAILED",
+                    "exception_class": type(capture_exc).__name__,
+                    "durable_evidence": False,
+                    "attempt_id": attempt.attempt_id,
+                    "workspace_id": workspace.name,
+                }
+            return 1, {
+                "classification": "LAUNCHER_PREFLIGHT_BLOCKED",
+                "failure_code": "EVIDENCE_CAPTURE_FAILED",
+                "exception_class": type(exc).__name__,
+                "durable_evidence": True,
+                "attempt_id": attempt.attempt_id,
+                "workspace_id": workspace.name,
+            }
+        return 0, summary
 
     values = attempt.values
     ports = values["ports"]
@@ -1262,7 +1387,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return values
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Run one isolated authenticated browser E2E invocation.")
@@ -1270,9 +1395,17 @@ def main() -> int:
         "--prior-task-disk-bytes", type=int, default=0,
         help="measured task-owned bytes already consumed by prerequisite installation in this task",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="prepare and verify browser prerequisites without starting services or a browser",
+    )
+    args = parser.parse_args(argv)
     try:
-        exit_code, summary = _run(args.prior_task_disk_bytes)
+        exit_code, summary = _run(
+            args.prior_task_disk_bytes,
+            preflight_only=args.preflight_only,
+        )
     except EvidenceCaptureFailed as exc:
         print(json.dumps({
             "classification": "LAUNCHER_PREFLIGHT_BLOCKED",

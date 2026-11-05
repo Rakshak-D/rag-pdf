@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
+from importlib.machinery import PathFinder
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -337,3 +340,157 @@ def test_failure_record_write_error_returns_capture_failed_without_false_success
     assert attempt.active_managed_child_pids == []
     retained = b"".join(path.read_bytes() for path in attempt.evidence_dir.iterdir() if path.is_file())
     assert SECRET_SENTINEL.encode() not in retained
+
+
+def test_direct_script_search_path_without_repository_root_cannot_find_backend():
+    scripts_only = [str(launcher.ROOT / "scripts")]
+    assert PathFinder.find_spec("backend", scripts_only) is None
+
+
+def test_repository_root_path_correction_resolves_configuration_imports_without_pythonpath(monkeypatch):
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    non_root_entries = [
+        entry for entry in sys.path
+        if not launcher._same_path(entry, launcher.ROOT)
+        and not launcher._same_path(entry, launcher.ROOT / "scripts")
+    ]
+    monkeypatch.setattr(sys, "path", [str(launcher.ROOT / "scripts"), *non_root_entries])
+
+    launcher._ensure_repository_root_on_sys_path()
+
+    assert Path(sys.path[0]).resolve() == launcher.ROOT.resolve()
+    assert sum(launcher._same_path(entry, launcher.ROOT) for entry in sys.path) == 1
+    assert importlib.import_module("backend.config").ResolvedRunConfig
+    assert importlib.import_module("backend.engine.manifest").build_document_manifest
+    assert importlib.import_module("backend.experiments.run_plan").build_run_plan
+    assert importlib.import_module("notebooks.config").Config
+
+
+def test_repository_root_path_correction_removes_equivalent_duplicates(monkeypatch):
+    root = launcher.ROOT.resolve()
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [str(root / "scripts"), str(root), str(root / "."), str(root).upper(), "external-entry"],
+    )
+
+    launcher._ensure_repository_root_on_sys_path(root)
+
+    assert sys.path[0] == str(root)
+    assert sum(launcher._same_path(entry, root) for entry in sys.path) == 1
+    assert "external-entry" in sys.path
+
+
+@pytest.mark.parametrize(
+    ("module_name", "expected"),
+    [
+        ("backend.config", "backend.config"),
+        (f"bad;{SECRET_SENTINEL}", "module_identifier_redacted"),
+        (None, "module_identifier_redacted"),
+    ],
+)
+def test_missing_module_identifier_is_safely_recorded_without_message_or_traceback(
+    tmp_path, module_name, expected
+):
+    attempt = _attempt(tmp_path)
+
+    def fail_import():
+        raise ModuleNotFoundError(f"sensitive import text {SECRET_SENTINEL}", name=module_name)
+
+    _run_one_failure(attempt, "python_imports", fail_import)
+    failure = _assert_sanitized_failure(attempt, "python_imports", "preflight_unexpected")
+
+    assert failure["exception_class"] == "ModuleNotFoundError"
+    assert failure["missing_module"] == expected
+    serialized = b"".join(path.read_bytes() for path in attempt.evidence_dir.iterdir() if path.is_file())
+    assert SECRET_SENTINEL.encode() not in serialized
+    assert b"sensitive import text" not in serialized
+    assert b"backend.config" in serialized if expected == "backend.config" else b"backend.config" not in serialized
+
+
+def _configure_synthetic_preflight_run(tmp_path, monkeypatch, steps):
+    attempt = _attempt(tmp_path)
+    local_app_data = tmp_path / "local-app-data"
+    local_app_data.mkdir()
+    (local_app_data / "Temp").mkdir()
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setattr(launcher, "_create_attempt", lambda _base: attempt)
+    monkeypatch.setattr(launcher, "_build_preflight_steps", lambda _attempt, _prior: steps(attempt))
+    return attempt
+
+
+def test_preflight_only_success_writes_distinct_summary_without_spawning(tmp_path, monkeypatch):
+    def steps(attempt):
+        def discovered_edge():
+            attempt.values["edge"] = {
+                "status": "found",
+                "path": "synthetic-edge-path",
+                "file_version": "156.0.1.2",
+                "discovery_source": "program_files_x86",
+            }
+
+        def fixtures():
+            attempt.fixtures_created = True
+            attempt.values.update({key: object() for key in ("config", "manifest", "plan", "ordinary_plan")})
+            attempt.values["test_command"] = ["node", "npm-cli.js", "run", "test:e2e"]
+
+        return [("edge_discovery", discovered_edge), ("synthetic_fixture_creation", fixtures)]
+
+    attempt = _configure_synthetic_preflight_run(tmp_path, monkeypatch, steps)
+    monkeypatch.setattr(launcher, "_spawn", lambda *args, **kwargs: pytest.fail("managed process spawned"))
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("child process spawned"))
+
+    exit_code, result = launcher._run(preflight_only=True)
+
+    assert exit_code == 0
+    assert result["classification"] == "PREFLIGHT_READY_NO_BROWSER"
+    assert result["fixtures_created"] is True
+    assert result["synthetic_configuration_prepared"] is True
+    assert result["edge_discovery"]["status"] == "found"
+    assert result["managed_process_state"] == {"started_count": 0, "active_count": 0}
+    assert result["browser_launch_attempted"] is False
+    assert result["service_startup_attempted"] is False
+    assert result["http_requests"] == 0
+    assert json.loads((attempt.evidence_dir / "launcher-summary.json").read_text(encoding="utf-8")) == result
+
+
+def test_preflight_only_failure_keeps_stage_and_code_without_spawning(tmp_path, monkeypatch):
+    def steps(_attempt):
+        def fail():
+            raise launcher.E2EBlocked("synthetic_edge_block")
+
+        return [("edge_discovery", fail)]
+
+    attempt = _configure_synthetic_preflight_run(tmp_path, monkeypatch, steps)
+    monkeypatch.setattr(launcher, "_spawn", lambda *args, **kwargs: pytest.fail("managed process spawned"))
+    monkeypatch.setattr(launcher.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("child process spawned"))
+
+    exit_code, result = launcher._run(preflight_only=True)
+
+    assert exit_code != 0
+    assert result["classification"] == "LAUNCHER_PREFLIGHT_BLOCKED"
+    assert result["failure_code"] == "synthetic_edge_block"
+    assert result["last_attempted_stage"] == "edge_discovery"
+    assert result["durable_evidence"] is True
+    failure = json.loads((attempt.evidence_dir / "launcher-failure.json").read_text(encoding="utf-8"))
+    assert failure["failure_code"] == "synthetic_edge_block"
+    assert failure["last_attempted_stage"] == "edge_discovery"
+
+
+@pytest.mark.parametrize("argv, expected_preflight_only", [([], False), (["--preflight-only"], True)])
+def test_main_routes_preflight_option_without_changing_default_execution_mode(
+    monkeypatch, capsys, argv, expected_preflight_only
+):
+    calls = []
+
+    def run(prior_task_disk_bytes, *, preflight_only):
+        calls.append((prior_task_disk_bytes, preflight_only))
+        return 0, {"classification": "PREFLIGHT_READY_NO_BROWSER" if preflight_only else "synthetic_normal_path"}
+
+    monkeypatch.setattr(launcher, "_run", run)
+
+    assert launcher.main(argv) == 0
+    assert calls == [(0, expected_preflight_only)]
+    assert json.loads(capsys.readouterr().out)["classification"] == (
+        "PREFLIGHT_READY_NO_BROWSER" if expected_preflight_only else "synthetic_normal_path"
+    )
