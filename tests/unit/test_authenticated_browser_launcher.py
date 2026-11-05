@@ -141,6 +141,114 @@ def test_edge_discovery_records_resolved_allowlisted_path_and_version(tmp_path):
     }
 
 
+@pytest.mark.parametrize(
+    ("environment_key", "source"),
+    [
+        ("PROGRAMFILES(X86)", "program_files_x86"),
+        ("ProgramFiles(x86)", "program_files_x86"),
+        ("programfiles(x86)", "program_files_x86"),
+        ("pRoGrAmFiLeS(X86)", "program_files_x86"),
+        ("PROGRAMFILES", "program_files"),
+        ("localappdata", "local_app_data"),
+    ],
+)
+def test_edge_discovery_matches_environment_keys_case_insensitively(
+    tmp_path, environment_key, source
+):
+    install_root = tmp_path / "synthetic-install-root"
+    edge_path = install_root / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+    edge_path.parent.mkdir(parents=True)
+    edge_path.write_bytes(b"synthetic executable placeholder")
+
+    result = launcher._discover_edge(
+        {environment_key: str(install_root)},
+        version_reader=lambda path: "156.0.1.2" if path == edge_path.resolve() else pytest.fail("unexpected Edge path"),
+    )
+
+    assert result == {
+        "status": "found",
+        "path": str(edge_path.resolve()),
+        "file_version": "156.0.1.2",
+        "discovery_source": source,
+    }
+
+
+def test_edge_discovery_prefers_x86_program_files(tmp_path):
+    x86_root = tmp_path / "Program Files x86"
+    program_root = tmp_path / "Program Files"
+    x86_edge = x86_root / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+    program_edge = program_root / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+    x86_edge.parent.mkdir(parents=True)
+    program_edge.parent.mkdir(parents=True)
+    x86_edge.write_bytes(b"x86 placeholder")
+    program_edge.write_bytes(b"program placeholder")
+
+    result = launcher._discover_edge(
+        {"PROGRAMFILES": str(program_root), "PROGRAMFILES(X86)": str(x86_root)},
+        version_reader=lambda path: "test-version",
+    )
+
+    assert result["path"] == str(x86_edge.resolve())
+    assert result["discovery_source"] == "program_files_x86"
+
+
+def test_edge_candidate_deduplication_preserves_first_source(tmp_path):
+    install_root = tmp_path / "same-install-root"
+
+    candidates = launcher._edge_candidates({
+        "ProgramFiles": str(install_root),
+        "PROGRAMFILES(X86)": str(install_root),
+        "programfiles(x86)": str(install_root),
+    })
+
+    assert candidates == [(
+        "program_files_x86",
+        install_root / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+    )]
+
+
+def test_edge_discovery_rejects_conflicting_case_variants_deterministically(tmp_path):
+    x86_root = tmp_path / "Program Files x86"
+    edge_path = x86_root / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+    edge_path.parent.mkdir(parents=True)
+    edge_path.write_bytes(b"synthetic executable placeholder")
+
+    with pytest.raises(launcher.E2EBlocked) as error:
+        launcher._discover_edge({
+            "PROGRAMFILES(X86)": str(x86_root),
+            "ProgramFiles(x86)": str(tmp_path / "conflicting-x86-root"),
+        })
+
+    assert error.value.code == "edge_environment_ambiguous"
+
+
+def test_edge_discovery_missing_executable_keeps_stable_code(tmp_path):
+    with pytest.raises(launcher.E2EBlocked) as error:
+        launcher._discover_edge({"PROGRAMFILES": str(tmp_path)})
+
+    assert error.value.code == "microsoft_edge_stable_unavailable"
+
+
+def test_edge_discovery_does_not_launch_browser_or_child_process(tmp_path, monkeypatch):
+    install_root = tmp_path / "Program Files"
+    edge_path = install_root / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+    edge_path.parent.mkdir(parents=True)
+    edge_path.write_bytes(b"synthetic executable placeholder")
+
+    def unexpected_process(*args, **kwargs):
+        pytest.fail("Edge discovery must not launch a child process")
+
+    monkeypatch.setattr(subprocess, "Popen", unexpected_process)
+    monkeypatch.setattr(subprocess, "run", unexpected_process)
+    result = launcher._discover_edge(
+        {"ProgramFiles": str(install_root)},
+        version_reader=lambda path: "test-version",
+    )
+
+    assert result["status"] == "found"
+    assert result["path"] == str(edge_path.resolve())
+
+
 def test_loopback_port_ownership_failure_is_durably_blocked(tmp_path):
     attempt = _attempt(tmp_path)
     ports = iter((31001, 31002, 31003))

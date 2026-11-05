@@ -337,6 +337,17 @@ def _verify_playwright(frontend: Path) -> None:
         raise E2EBlocked("playwright_test_dependency_unavailable")
 
 
+def _environment_value_case_insensitive(environment: dict[str, str], name: str) -> str | None:
+    values = sorted({
+        value
+        for key, value in environment.items()
+        if key.casefold() == name.casefold() and value
+    })
+    if len(values) > 1:
+        raise E2EBlocked("edge_environment_ambiguous")
+    return values[0] if values else None
+
+
 def _edge_candidates(environment: dict[str, str]) -> list[tuple[str, Path]]:
     candidates: list[tuple[str, Path]] = []
     for key, source in (
@@ -344,7 +355,7 @@ def _edge_candidates(environment: dict[str, str]) -> list[tuple[str, Path]]:
         ("ProgramFiles", "program_files"),
         ("LOCALAPPDATA", "local_app_data"),
     ):
-        base = environment.get(key)
+        base = _environment_value_case_insensitive(environment, key)
         if base:
             candidates.append((source, Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe"))
     deduped: list[tuple[str, Path]] = []
