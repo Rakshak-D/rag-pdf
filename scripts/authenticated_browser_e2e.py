@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -51,6 +52,8 @@ GLOBAL_DEADLINE_SECONDS = 600
 LOG_LIMIT_BYTES = 2 * 1024 * 1024
 TASK_DISK_BUDGET_BYTES = 1024 * 1024 * 1024
 EVIDENCE_SCHEMA_VERSION = 1
+LISTENER_EVIDENCE_ENTRY_LIMIT = 32
+NETSTAT_PARSE_BYTE_LIMIT = 2 * 1024 * 1024
 _SAFE_MODULE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
 
@@ -555,36 +558,265 @@ def _free_loopback_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _listeners(port: int) -> list[dict[str, str | int]]:
+def _parse_netstat_endpoint(value: str) -> dict[str, Any] | None:
+    if value.startswith("["):
+        end = value.find("]")
+        if end < 0 or value[end + 1:end + 2] != ":":
+            return None
+        host = value[1:end]
+        port_text = value[end + 2:]
+    elif ":" in value:
+        host, port_text = value.rsplit(":", 1)
+    else:
+        return None
+    if not re.fullmatch(r"[0-9]+", port_text):
+        return None
+    port = int(port_text)
+    if not 0 <= port <= 65535:
+        return None
+    address_text, separator, scope = host.partition("%")
+    try:
+        address = ipaddress.ip_address(address_text)
+    except ValueError:
+        return {
+            "port": port,
+            "local_address": "address_redacted",
+            "address_family": "unknown",
+            "address_valid": False,
+        }
+    if separator and re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", scope):
+        normalized_host = f"{address}%{scope}"
+    elif separator:
+        return {
+            "port": port,
+            "local_address": "address_redacted",
+            "address_family": "unknown",
+            "address_valid": False,
+        }
+    else:
+        normalized_host = str(address)
+    family = "ipv4" if address.version == 4 else "ipv6"
+    formatted_host = normalized_host if family == "ipv4" else f"[{normalized_host}]"
+    return {
+        "port": port,
+        "local_address": f"{formatted_host}:{port}",
+        "address_family": family,
+        "address_valid": True,
+    }
+
+
+def _parse_netstat_listener_output(output: bytes | str, port: int) -> dict[str, Any]:
+    raw = output.encode("utf-8", "replace") if isinstance(output, str) else bytes(output or b"")
+    output_bytes = len(raw)
+    output_truncated = output_bytes > NETSTAT_PARSE_BYTE_LIMIT
+    text = raw[:NETSTAT_PARSE_BYTE_LIMIT].decode("utf-8", "replace")
+    matches: list[dict[str, Any]] = []
+    total_matches = 0
+    malformed_rows = 0
+    evidence_incomplete = output_truncated or not raw
+
+    for line in text.splitlines():
+        fields = line.split()
+        if not fields or fields[0].upper() != "TCP":
+            continue
+        if len(fields) < 4:
+            malformed_rows += 1
+            evidence_incomplete = True
+            continue
+        if len(fields) != 5:
+            malformed_rows += 1
+            evidence_incomplete = True
+        if fields[3].upper() != "LISTENING":
+            continue
+        endpoint = _parse_netstat_endpoint(fields[1])
+        if endpoint is None:
+            malformed_rows += 1
+            evidence_incomplete = True
+            continue
+        if endpoint["port"] != port:
+            continue
+        total_matches += 1
+        pid: int | None = None
+        if len(fields) >= 5 and re.fullmatch(r"[0-9]+", fields[4]):
+            pid = int(fields[4])
+        else:
+            malformed_rows += 1
+            evidence_incomplete = True
+        if not endpoint["address_valid"]:
+            malformed_rows += 1
+            evidence_incomplete = True
+        if len(matches) < LISTENER_EVIDENCE_ENTRY_LIMIT:
+            matches.append({
+                "local_address": endpoint["local_address"],
+                "pid": pid,
+                "address_family": endpoint["address_family"],
+            })
+
+    return {
+        "total_matching_listeners": total_matches,
+        "matching_listeners": matches,
+        "matching_count_complete": not evidence_incomplete,
+        "evidence_truncated": output_truncated or total_matches > LISTENER_EVIDENCE_ENTRY_LIMIT,
+        "evidence_incomplete": evidence_incomplete,
+        "malformed_tcp_rows": malformed_rows,
+        "query_output_bytes": output_bytes,
+    }
+
+
+def _query_listener_snapshot(port: int, *, runner: Any = None) -> dict[str, Any]:
     netstat = shutil.which("netstat.exe") or shutil.which("netstat")
     if not netstat:
+        snapshot = _parse_netstat_listener_output(b"", port)
+        snapshot.update({"query_status": "unavailable", "query_exit_code": None})
+        return snapshot
+    invoke = subprocess.run if runner is None else runner
+    try:
+        result = invoke([netstat, "-ano", "-p", "tcp"], capture_output=True, timeout=10, check=False)
+    except subprocess.TimeoutExpired as exc:
+        partial = exc.stdout if isinstance(exc.stdout, (bytes, str)) else b""
+        snapshot = _parse_netstat_listener_output(partial, port)
+        snapshot.update({
+            "query_status": "timeout",
+            "query_exit_code": None,
+            "evidence_incomplete": True,
+            "matching_count_complete": False,
+        })
+        return snapshot
+    except OSError:
+        snapshot = _parse_netstat_listener_output(b"", port)
+        snapshot.update({"query_status": "launch_failed", "query_exit_code": None})
+        return snapshot
+    stdout = result.stdout if isinstance(result.stdout, (bytes, str)) else b""
+    snapshot = _parse_netstat_listener_output(stdout, port)
+    query_status = "success" if result.returncode == 0 else "command_failed"
+    snapshot.update({
+        "query_status": query_status,
+        "query_exit_code": int(result.returncode),
+    })
+    if query_status != "success":
+        snapshot["evidence_incomplete"] = True
+        snapshot["matching_count_complete"] = False
+    return snapshot
+
+
+def _listeners(port: int) -> list[dict[str, str | int | None]]:
+    snapshot = _query_listener_snapshot(port)
+    if snapshot["query_status"] == "unavailable":
         raise E2EBlocked("netstat_unavailable_for_port_ownership_check")
-    result = subprocess.run([netstat, "-ano", "-p", "tcp"], capture_output=True, timeout=10, check=False)
-    if result.returncode != 0:
+    if snapshot["query_status"] != "success":
         raise E2EBlocked("netstat_port_ownership_query_failed")
-    matches: list[dict[str, str | int]] = []
-    for line in result.stdout.decode("utf-8", "replace").splitlines():
-        fields = line.split()
-        if len(fields) < 5 or fields[0].upper() != "TCP" or fields[3].upper() != "LISTENING":
-            continue
-        local = fields[1]
-        if local.rsplit(":", 1)[-1] == str(port):
-            try:
-                pid = int(fields[4])
-            except ValueError:
-                pid = -1
-            matches.append({"local_address": local, "pid": pid})
-    return matches
+    if snapshot["evidence_incomplete"]:
+        raise E2EBlocked("netstat_port_ownership_output_invalid")
+    return list(snapshot["matching_listeners"])
 
 
-def _assert_owned_loopback_listener(port: int, pid: int, name: str) -> dict[str, str | int]:
-    matches = _listeners(port)
-    if len(matches) != 1:
-        raise E2EBlocked(f"{name}_listener_count_invalid")
+def _listener_validation_outcome(snapshot: dict[str, Any], port: int, expected_pid: int) -> str:
+    if snapshot.get("query_status") == "unavailable":
+        return "query_unavailable"
+    if snapshot.get("query_status") != "success":
+        return "query_failed"
+    if snapshot.get("evidence_incomplete"):
+        return "query_incomplete"
+    if snapshot.get("total_matching_listeners") != 1:
+        return "listener_count_invalid"
+    matches = snapshot.get("matching_listeners")
+    if not isinstance(matches, list) or len(matches) != 1:
+        return "query_incomplete"
     owner = matches[0]
-    if owner["local_address"] != f"127.0.0.1:{port}" or owner["pid"] != pid:
+    if (
+        owner.get("local_address") != f"127.0.0.1:{port}"
+        or owner.get("address_family") != "ipv4"
+        or owner.get("pid") != expected_pid
+    ):
+        return "listener_ownership_or_bind_invalid"
+    return "owned_loopback_listener"
+
+
+def _listener_observation_record(
+    snapshot: dict[str, Any], port: int, pid: int, name: str, outcome: str,
+) -> dict[str, Any]:
+    safe_name = name if re.fullmatch(r"[a-zA-Z0-9_]{1,40}", name) else "service_redacted"
+    source_entries = snapshot.get("matching_listeners")
+    source_entries = source_entries if isinstance(source_entries, list) else []
+    entries: list[dict[str, Any]] = []
+    for item in source_entries[:LISTENER_EVIDENCE_ENTRY_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        address = item.get("local_address")
+        if not isinstance(address, str) or not re.fullmatch(r"[0-9A-Fa-f:.%_\-\[\]]+", address):
+            address = "address_redacted"
+        item_pid = item.get("pid")
+        if not isinstance(item_pid, int) or isinstance(item_pid, bool) or item_pid < 0:
+            item_pid = None
+        family = item.get("address_family")
+        if family not in {"ipv4", "ipv6", "unknown"}:
+            family = "unknown"
+        entries.append({"local_address": address, "pid": item_pid, "address_family": family})
+    total_matches = snapshot.get("total_matching_listeners")
+    if not isinstance(total_matches, int) or isinstance(total_matches, bool) or total_matches < 0:
+        total_matches = len(entries)
+    query_status = snapshot.get("query_status")
+    if query_status not in {"success", "unavailable", "timeout", "launch_failed", "command_failed"}:
+        query_status = "unknown"
+    exit_code = snapshot.get("query_exit_code")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        exit_code = None
+    output_bytes = snapshot.get("query_output_bytes", 0)
+    if not isinstance(output_bytes, int) or isinstance(output_bytes, bool) or output_bytes < 0:
+        output_bytes = 0
+    malformed_rows = snapshot.get("malformed_tcp_rows", 0)
+    if not isinstance(malformed_rows, int) or isinstance(malformed_rows, bool) or malformed_rows < 0:
+        malformed_rows = 0
+    return {
+        "observed_utc": _utc_now(),
+        "service_label": safe_name,
+        "selected_port": int(port),
+        "expected_managed_child_pid": int(pid),
+        "netstat_query_status": query_status,
+        "netstat_exit_code": exit_code,
+        "query_output_bytes": output_bytes,
+        "total_matching_listener_count": total_matches,
+        "matching_count_complete": bool(snapshot.get("matching_count_complete", False)),
+        "matching_listeners": entries,
+        "parsed_local_addresses": [item["local_address"] for item in entries],
+        "parsed_pids": [item["pid"] for item in entries],
+        "parsed_address_families": [item["address_family"] for item in entries],
+        "validation_outcome": outcome,
+        "evidence_truncated": bool(snapshot.get("evidence_truncated", False))
+        or total_matches > len(entries),
+        "evidence_incomplete": bool(snapshot.get("evidence_incomplete", False)),
+        "malformed_tcp_rows": malformed_rows,
+    }
+
+
+def _assert_owned_loopback_listener(
+    port: int,
+    pid: int,
+    name: str,
+    *,
+    evidence_dir: Path,
+    query_snapshot: dict[str, Any] | None = None,
+) -> dict[str, str | int | None]:
+    snapshot = _query_listener_snapshot(port) if query_snapshot is None else query_snapshot
+    outcome = _listener_validation_outcome(snapshot, port, pid)
+    observation = _listener_observation_record(snapshot, port, pid, name, outcome)
+    try:
+        _append_jsonl(evidence_dir / "listener-observations.jsonl", observation)
+    except Exception as exc:
+        raise E2EBlocked("listener_evidence_capture_failed") from exc
+
+    if outcome == "query_unavailable":
+        raise E2EBlocked("netstat_unavailable_for_port_ownership_check")
+    if outcome == "query_failed":
+        raise E2EBlocked("netstat_port_ownership_query_failed")
+    if outcome == "query_incomplete":
+        raise E2EBlocked(f"{name}_listener_query_output_invalid")
+    if outcome == "listener_count_invalid":
+        raise E2EBlocked(f"{name}_listener_count_invalid")
+    if outcome == "listener_ownership_or_bind_invalid":
         raise E2EBlocked(f"{name}_listener_ownership_or_bind_invalid")
-    return owner
+    owner = snapshot["matching_listeners"][0]
+    return {"local_address": owner["local_address"], "pid": owner["pid"]}
 
 
 def _spawn(name: str, argv: list[str], cwd: Path, env: dict[str, str], log_path: Path,
@@ -702,7 +934,7 @@ def _http_json(url: str, timeout: float = 2.0) -> tuple[int, dict[str, Any]]:
 
 
 def _wait_health(child: ChildProcess, url: str, port: int, deadline: float, label: str,
-                 sample_resources: Any) -> dict[str, str | int]:
+                 sample_resources: Any, evidence_dir: Path) -> dict[str, str | int | None]:
     while time.monotonic() < deadline:
         sample_resources()
         if child.process.poll() is not None:
@@ -713,7 +945,9 @@ def _wait_health(child: ChildProcess, url: str, port: int, deadline: float, labe
             time.sleep(0.15)
             continue
         if status == 200 and payload.get("status") == "ok":
-            return _assert_owned_loopback_listener(port, child.process.pid, label)
+            return _assert_owned_loopback_listener(
+                port, child.process.pid, label, evidence_dir=evidence_dir
+            )
         time.sleep(0.15)
     raise E2EBlocked(f"{label}_readiness_timeout")
 
@@ -1186,11 +1420,11 @@ def _run(
 
         listener_records["ordinary_backend"] = _wait_health(
             ordinary, f"http://127.0.0.1:{ordinary_port}/health", ordinary_port,
-            min(deadline, time.monotonic() + 35), "ordinary_backend", sample_resources,
+            min(deadline, time.monotonic() + 35), "ordinary_backend", sample_resources, attempt.evidence_dir,
         )
         listener_records["bootstrap_backend"] = _wait_health(
             bootstrap, f"http://127.0.0.1:{bootstrap_port}/health", bootstrap_port,
-            min(deadline, time.monotonic() + 35), "bootstrap_backend", sample_resources,
+            min(deadline, time.monotonic() + 35), "bootstrap_backend", sample_resources, attempt.evidence_dir,
         )
 
         vite = _spawn("vite", [node, str(vite_entry), "--host", "127.0.0.1", "--port", str(vite_port), "--strictPort"],
@@ -1198,12 +1432,14 @@ def _run(
         processes.append(vite)
         listener_records["vite"] = _wait_health(
             vite, f"http://127.0.0.1:{vite_port}/health", vite_port,
-            min(deadline, time.monotonic() + 35), "vite", sample_resources,
+            min(deadline, time.monotonic() + 35), "vite", sample_resources, attempt.evidence_dir,
         )
         status, _ = _http_json(f"http://127.0.0.1:{vite_port}/bootstrap-api/health")
         if status != 200:
             raise E2EBlocked("vite_bootstrap_proxy_readiness_failed")
-        _assert_owned_loopback_listener(vite_port, vite.process.pid, "vite")
+        _assert_owned_loopback_listener(
+            vite_port, vite.process.pid, "vite", evidence_dir=attempt.evidence_dir
+        )
 
         playwright_env = dict(baseline_env)
         playwright_env.update({

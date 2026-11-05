@@ -494,3 +494,154 @@ def test_main_routes_preflight_option_without_changing_default_execution_mode(
     assert json.loads(capsys.readouterr().out)["classification"] == (
         "PREFLIGHT_READY_NO_BROWSER" if expected_preflight_only else "synthetic_normal_path"
     )
+
+
+def _netstat_row(local, pid="4321", *, foreign="0.0.0.0:0", state="LISTENING", protocol="TCP"):
+    return f"{protocol} {local} {foreign} {state} {pid}\r\n"
+
+
+def _listener_snapshot(text, port):
+    snapshot = launcher._parse_netstat_listener_output(text, port)
+    snapshot.update({"query_status": "success", "query_exit_code": 0})
+    return snapshot
+
+
+def test_listener_parser_and_ownership_reject_no_matching_listener():
+    snapshot = _listener_snapshot(_netstat_row("127.0.0.1:44001"), 44002)
+    assert snapshot["total_matching_listeners"] == 0
+    assert snapshot["evidence_incomplete"] is False
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "listener_count_invalid"
+
+
+def test_listener_parser_accepts_one_owned_ipv4_loopback_entry():
+    snapshot = _listener_snapshot(_netstat_row("127.0.0.1:44002", "4321"), 44002)
+    assert snapshot["matching_listeners"] == [{
+        "local_address": "127.0.0.1:44002",
+        "pid": 4321,
+        "address_family": "ipv4",
+    }]
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "owned_loopback_listener"
+
+
+def test_listener_parser_rejects_a_different_listener_pid():
+    snapshot = _listener_snapshot(_netstat_row("127.0.0.1:44002", "9999"), 44002)
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "listener_ownership_or_bind_invalid"
+
+
+def test_listener_parser_rejects_multiple_listeners_even_if_one_is_owned():
+    text = _netstat_row("127.0.0.1:44002", "4321") + _netstat_row("127.0.0.1:44002", "9999")
+    snapshot = _listener_snapshot(text, 44002)
+    assert snapshot["total_matching_listeners"] == 2
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "listener_count_invalid"
+
+
+def test_listener_parser_rejects_ipv4_wildcard_bind():
+    snapshot = _listener_snapshot(_netstat_row("0.0.0.0:44002", "4321"), 44002)
+    assert snapshot["matching_listeners"][0]["address_family"] == "ipv4"
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "listener_ownership_or_bind_invalid"
+
+
+@pytest.mark.parametrize("local_address", ["[::1]:44002", "[::]:44002"])
+def test_listener_parser_rejects_ipv6_loopback_or_wildcard(local_address):
+    snapshot = _listener_snapshot(_netstat_row(local_address, "4321"), 44002)
+    assert snapshot["matching_listeners"][0]["address_family"] == "ipv6"
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "listener_ownership_or_bind_invalid"
+
+
+def test_listener_parser_ignores_valid_non_listening_tcp_rows():
+    snapshot = _listener_snapshot(
+        _netstat_row("127.0.0.1:44002", "4321", state="ESTABLISHED"), 44002
+    )
+    assert snapshot["total_matching_listeners"] == 0
+    assert snapshot["evidence_incomplete"] is False
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "listener_count_invalid"
+
+
+def test_listener_parser_marks_malformed_pid_incomplete_and_fails_closed():
+    snapshot = _listener_snapshot(_netstat_row("127.0.0.1:44002", "not-a-pid"), 44002)
+    assert snapshot["total_matching_listeners"] == 1
+    assert snapshot["matching_listeners"][0]["pid"] is None
+    assert snapshot["evidence_incomplete"] is True
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "query_incomplete"
+
+
+@pytest.mark.parametrize("row", [
+    "TCP 127.0.0.1:44002 LISTENING\r\n",
+    "TCP [::1:44002 0.0.0.0:0 LISTENING 4321\r\n",
+    "TCP 127.0.0.1:44002 0.0.0.0:0 LISTENING 4321 extra\r\n",
+])
+def test_listener_parser_marks_malformed_or_unexpected_tcp_rows_incomplete(row):
+    snapshot = _listener_snapshot(row, 44002)
+    assert snapshot["evidence_incomplete"] is True
+    assert snapshot["malformed_tcp_rows"] > 0
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "query_incomplete"
+
+
+def test_listener_parser_does_not_deduplicate_duplicate_rows():
+    row = _netstat_row("127.0.0.1:44002", "4321")
+    snapshot = _listener_snapshot(row + row, 44002)
+    assert snapshot["total_matching_listeners"] == 2
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "listener_count_invalid"
+
+
+def test_listener_evidence_is_bounded_and_records_truncation(tmp_path):
+    attempt = _attempt(tmp_path)
+    text = "".join(_netstat_row(f"127.0.0.1:44002", str(5000 + index)) for index in range(40))
+    snapshot = _listener_snapshot(text, 44002)
+    with pytest.raises(launcher.E2EBlocked) as error:
+        launcher._assert_owned_loopback_listener(
+            44002, 4321, "ordinary_backend", evidence_dir=attempt.evidence_dir,
+            query_snapshot=snapshot,
+        )
+    assert error.value.code == "ordinary_backend_listener_count_invalid"
+    record = json.loads((attempt.evidence_dir / "listener-observations.jsonl").read_text(encoding="utf-8"))
+    assert record["total_matching_listener_count"] == 40
+    assert len(record["matching_listeners"]) == 32
+    assert record["evidence_truncated"] is True
+    assert record["validation_outcome"] == "listener_count_invalid"
+
+
+def test_listener_failure_observation_is_flushed_and_excludes_foreign_output(tmp_path):
+    attempt = _attempt(tmp_path)
+    row = _netstat_row("127.0.0.1:44002", "9999", foreign=SECRET_SENTINEL)
+    snapshot = _listener_snapshot(row, 44002)
+    with pytest.raises(launcher.E2EBlocked) as error:
+        launcher._assert_owned_loopback_listener(
+            44002, 4321, "ordinary_backend", evidence_dir=attempt.evidence_dir,
+            query_snapshot=snapshot,
+        )
+    assert error.value.code == "ordinary_backend_listener_ownership_or_bind_invalid"
+    path = attempt.evidence_dir / "listener-observations.jsonl"
+    assert path.is_file() and path.stat().st_size > 0
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["netstat_query_status"] == "success"
+    assert record["total_matching_listener_count"] == 1
+    assert record["parsed_local_addresses"] == ["127.0.0.1:44002"]
+    assert record["parsed_pids"] == [9999]
+    assert record["validation_outcome"] == "listener_ownership_or_bind_invalid"
+    assert SECRET_SENTINEL not in path.read_text(encoding="utf-8")
+
+
+def test_listener_observation_write_failure_blocks_ownership_check(tmp_path, monkeypatch):
+    attempt = _attempt(tmp_path)
+    snapshot = _listener_snapshot(_netstat_row("127.0.0.1:44002", "4321"), 44002)
+
+    def fail_write(*args, **kwargs):
+        raise OSError(SECRET_SENTINEL)
+
+    monkeypatch.setattr(launcher, "_append_jsonl", fail_write)
+    with pytest.raises(launcher.E2EBlocked) as error:
+        launcher._assert_owned_loopback_listener(
+            44002, 4321, "ordinary_backend", evidence_dir=attempt.evidence_dir,
+            query_snapshot=snapshot,
+        )
+    assert error.value.code == "listener_evidence_capture_failed"
+    assert not (attempt.evidence_dir / "listener-observations.jsonl").exists()
+
+
+def test_listener_query_failure_status_is_distinguished_without_raw_output(monkeypatch):
+    monkeypatch.setattr(launcher.shutil, "which", lambda name: None)
+    snapshot = launcher._query_listener_snapshot(44002)
+    assert snapshot["query_status"] == "unavailable"
+    assert launcher._listener_validation_outcome(snapshot, 44002, 4321) == "query_unavailable"
+    assert SECRET_SENTINEL not in json.dumps(snapshot)
