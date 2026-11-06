@@ -1,7 +1,9 @@
 import fs from "node:fs";
-import { expect, test, type Page, type Request, type TestInfo } from "@playwright/test";
+import { expect, test, type Page, type Request, type Response, type TestInfo } from "@playwright/test";
+import { BOOTSTRAP_STATUS_PATH, createBootstrapStatusWitness, recordBootstrapStatusEvent,
+  recordBootstrapStatusResponse, waitForBootstrapStatusResponse, type BootstrapStatusWitness } from "./bootstrap-status-witness";
+import { apiPolicyViolations, type AuthRole } from "./request-policy";
 
-type AuthRole = "none" | "ordinary" | "bootstrap" | "invalid" | "other";
 type E2EPhase =
   | "browser_page_navigation"
   | "initial_disconnected_state"
@@ -31,6 +33,7 @@ interface SafetyRecorder {
   requests: ApiObservation[];
   violations: string[];
   checks: string[];
+  bootstrapStatusWitness: BootstrapStatusWitness;
   flush: () => Promise<void>;
 }
 
@@ -119,16 +122,17 @@ async function attachSafetyGuards(page: Page): Promise<SafetyRecorder> {
   const requests: ApiObservation[] = [];
   const violations = new Set<string>();
   const checks: string[] = [];
+  const bootstrapStatusWitness = createBootstrapStatusWitness();
   const byRequest = new WeakMap<Request, ApiObservation>();
   const pending: Promise<void>[] = [];
-  const allowedPosts = new Set([
-    "/bootstrap-api/v1/bootstrap/preview",
-    "/bootstrap-api/v1/bootstrap/index-inventory",
-  ]);
 
   page.on("request", (request) => {
     try {
       const url = new URL(request.url());
+      if (url.pathname === BOOTSTRAP_STATUS_PATH) {
+        recordBootstrapStatusEvent(bootstrapStatusWitness,
+          request.method().toUpperCase() === "GET" ? "browser_request_observed" : "browser_request_non_get");
+      }
       if (["http:", "https:", "ws:", "wss:"].includes(url.protocol) && !isLoopback(url.hostname)) {
         violations.add("non_loopback_request");
       }
@@ -174,8 +178,11 @@ async function attachSafetyGuards(page: Page): Promise<SafetyRecorder> {
     }
     const path = url.pathname;
     const method = request.method().toUpperCase();
+    const isBootstrapStatus = path === BOOTSTRAP_STATUS_PATH;
+    if (isBootstrapStatus) recordBootstrapStatusEvent(bootstrapStatusWitness, "route_handler_entered");
     const authorization = await request.headerValue("authorization");
     const role = tokenRole(authorization);
+    if (isBootstrapStatus) recordBootstrapStatusEvent(bootstrapStatusWitness, `route_role_${role}`);
     const isApi = path === "/health" || path.startsWith("/api/") || path.startsWith("/bootstrap-api/");
     const observation: ApiObservation | undefined = isApi
       ? { method, path, auth_role: role, status: null }
@@ -190,20 +197,8 @@ async function attachSafetyGuards(page: Page): Promise<SafetyRecorder> {
       violations.add("request_outside_test_origin");
       blocked = true;
     }
-    if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method) && !(method === "POST" && allowedPosts.has(path))) {
-      violations.add(`mutation_blocked:${method}:${path}`);
-      blocked = true;
-    }
-    if (path.startsWith("/bootstrap-api/v1/") &&
-        (role === "ordinary" || role === "other" || role === "none" ||
-         (role === "invalid" && path !== "/bootstrap-api/v1/bootstrap/status"))) {
-      violations.add("bootstrap_auth_scope_violation");
-      blocked = true;
-    }
-    if (path.startsWith("/api/v1/") &&
-        (role === "bootstrap" || role === "other" || role === "none" ||
-         (role === "invalid" && path !== "/api/v1/runtime/models"))) {
-      violations.add("ordinary_auth_scope_violation");
+    for (const violation of apiPolicyViolations(path, method, role)) {
+      violations.add(violation === "mutation_blocked" ? `mutation_blocked:${method}:${path}` : violation);
       blocked = true;
     }
     if (tokens.some((token) => request.url().includes(token))) {
@@ -212,14 +207,23 @@ async function attachSafetyGuards(page: Page): Promise<SafetyRecorder> {
     }
 
     if (blocked) {
+      if (isBootstrapStatus) recordBootstrapStatusEvent(bootstrapStatusWitness, "route_rejected");
       await route.abort();
       return;
     }
+    if (isBootstrapStatus) recordBootstrapStatusEvent(bootstrapStatusWitness, "route_allowed");
     await route.continue();
   });
 
   page.on("response", (response) => {
     const request = response.request();
+    try {
+      if (new URL(response.url()).pathname === BOOTSTRAP_STATUS_PATH) {
+        recordBootstrapStatusResponse(bootstrapStatusWitness, response.status());
+      }
+    } catch {
+      // Do not retain or report an unparseable URL.
+    }
     const observation = byRequest.get(request);
     if (!observation) return;
     observation.status = response.status();
@@ -235,14 +239,26 @@ async function attachSafetyGuards(page: Page): Promise<SafetyRecorder> {
   });
 
   page.on("requestfailed", (request) => {
+    try {
+      if (new URL(request.url()).pathname === BOOTSTRAP_STATUS_PATH) {
+        recordBootstrapStatusEvent(bootstrapStatusWitness, "request_failed");
+      }
+    } catch {
+      // Do not retain or report an unparseable URL.
+    }
     const observation = byRequest.get(request);
     if (observation) observation.failed = true;
+  });
+
+  page.on("pageerror", () => {
+    recordBootstrapStatusEvent(bootstrapStatusWitness, "browser_page_error_observed");
   });
 
   const recorder: SafetyRecorder = {
     requests,
     violations: [],
     checks,
+    bootstrapStatusWitness,
     async flush() {
       await Promise.all(pending);
       recorder.violations = [...violations].sort();
@@ -286,18 +302,30 @@ function markPhase(testInfo: TestInfo, phase: E2EPhase): void {
   testInfo.annotations.push({ type: "e2e_phase", description: phase });
 }
 
-async function waitForApiResponse(page: Page, path: string, method: string) {
+function waitForApiResponse(page: Page, path: string, method: string): Promise<Response> {
   return page.waitForResponse((response) => {
     const request = response.request();
     return new URL(response.url()).pathname === path && request.method() === method;
   });
 }
 
+async function requestBootstrapStatus(page: Page, candidate: string, recorder: SafetyRecorder): Promise<Response> {
+  const tokenInput = page.getByLabel("Bootstrap bearer token");
+  await tokenInput.fill(candidate);
+  expect((await tokenInput.inputValue()).length).toBeGreaterThan(0);
+  recordBootstrapStatusEvent(recorder.bootstrapStatusWitness, "input_filled");
+  const submit = page.getByRole("button", { name: "Connect to bootstrap" });
+  await expect(submit).toBeEnabled();
+  recordBootstrapStatusEvent(recorder.bootstrapStatusWitness, "submit_attempted");
+  return waitForBootstrapStatusResponse(
+    page,
+    () => submit.click(),
+    recorder.bootstrapStatusWitness,
+  );
+}
+
 async function connectBootstrap(page: Page, validToken = bootstrapToken): Promise<void> {
-  const statusResponse = waitForApiResponse(page, "/bootstrap-api/v1/bootstrap/status", "GET");
-  await page.getByLabel("Bootstrap bearer token").fill(validToken);
-  await page.getByRole("button", { name: "Connect to bootstrap" }).click();
-  const response = await statusResponse;
+  const response = await requestBootstrapStatus(page, validToken, recorderFor(page));
   expect(response.status()).toBe(200);
   const status = await response.json() as { mode: string; accepting_jobs: boolean };
   expect(status.mode).toBe("bootstrap");
@@ -358,6 +386,7 @@ test.afterEach(async ({ page }, testInfo) => {
     requests: recorder.requests,
     guard_violations: recorder.violations,
     checks: recorder.checks,
+    bootstrap_status_events: recorder.bootstrapStatusWitness.events,
   };
   const descriptor = fs.openSync(evidenceFile, "a");
   try {
@@ -388,14 +417,13 @@ test.describe("authenticated local workbench workflows", () => {
     recorder.checks.push("disconnected_preview_blocked");
 
     markPhase(testInfo, "invalid_bootstrap_authentication");
-    const invalidStatus = waitForApiResponse(page, "/bootstrap-api/v1/bootstrap/status", "GET");
-    await page.getByLabel("Bootstrap bearer token").fill(invalidToken);
-    await page.getByRole("button", { name: "Connect to bootstrap" }).click();
-    const rejected = await invalidStatus;
+    const rejected = await requestBootstrapStatus(page, invalidToken, recorder);
     expect(rejected.status()).toBe(401);
     const rejectionMessage = await page.getByRole("alert").innerText();
     expect(rejectionMessage).toContain("Authentication failed");
     expect(rejectionMessage).not.toContain(invalidToken);
+    recordBootstrapStatusEvent(recorder.bootstrapStatusWitness, "ui_authentication_error_observed");
+    await expect(bootstrapPanel.getByText("Disconnected", { exact: true })).toBeVisible();
     recorder.checks.push("invalid_bootstrap_token_rejected_without_secret_echo");
     await assertNoSecretPersistence(page);
 

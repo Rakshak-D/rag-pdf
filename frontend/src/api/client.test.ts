@@ -1,9 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, WorkbenchApiClient } from "./client";
+import { ApiError, BootstrapApiClient, WorkbenchApiClient } from "./client";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("WorkbenchApiClient", () => {
+  it("sends bootstrap status to the fixed endpoint with the candidate token and preserves HTTP 401", async () => {
+    const token = "synthetic-invalid-bootstrap-token";
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(
+      { error: { code: "authentication_required" } }, { status: 401 },
+    ));
+    const client = new BootstrapApiClient({ token, fetcher });
+
+    await expect(client.getStatus()).rejects.toMatchObject({
+      kind: "http", code: "authentication_required", status: 401,
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+    const [url, init] = fetcher.mock.calls[0] ?? [];
+    expect(String(url)).toBe("/bootstrap-api/v1/bootstrap/status");
+    expect(init?.method).toBe("GET");
+    expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${token}`);
+    expect(String(url)).not.toContain(token);
+  });
+
   it("validates and returns the six ordered canonical ablation overrides", async () => {
     const variants = [
       { variant_id: "1_Dense_only", overrides: { retrieval_mode: "semantic", use_reranker: false } },

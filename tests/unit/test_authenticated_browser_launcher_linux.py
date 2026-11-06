@@ -686,6 +686,7 @@ def _playwright_observation(title: str, status: str = "passed", violations: list
         "requests": [],
         "guard_violations": violations or [],
         "checks": [],
+        "bootstrap_status_events": [],
     }
 
 
@@ -822,6 +823,29 @@ def test_browser_failure_evidence_keeps_only_allowlisted_guard_summary(tmp_path:
     assert '"guard_violations":["mutation_blocked"]' in output
     assert "/private/value" not in output
     assert "hidden" not in output
+
+
+def test_bootstrap_status_witness_keeps_request_route_response_and_waiter_boundaries_distinct() -> None:
+    result, observations = _playwright_result()
+    observations[0]["bootstrap_status_events"] = [
+        "input_filled", "submit_attempted", "response_wait_registered", "browser_request_observed",
+        "route_handler_entered", "route_role_invalid", "route_allowed", "http_response_401",
+        "response_wait_matched", "submit_click_completed", "ui_authentication_error_observed",
+    ]
+    linux.assert_browser_result(result, observations)
+    assert observations[0]["bootstrap_status_events"][2] == "response_wait_registered"
+    assert observations[0]["bootstrap_status_events"][3] == "browser_request_observed"
+
+
+@pytest.mark.parametrize("events", [
+    ["browser_request_observed", "Bearer synthetic-secret"],
+    [{"event": "browser_request_observed", "url": "http://127.0.0.1/?token=secret"}],
+    ["browser_request_observed"] * 33,
+])
+def test_bootstrap_status_witness_rejects_unbounded_or_untrusted_values(events: list[object]) -> None:
+    _result, observations = _playwright_result()
+    observations[0]["bootstrap_status_events"] = events
+    assert not linux._validate_observation_record(observations[0])
 
 
 def test_failure_classification_separates_behavior_from_security_and_setup() -> None:

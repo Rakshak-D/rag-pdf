@@ -1723,6 +1723,15 @@ PLAYWRIGHT_GUARD_LABELS = {
     "unparseable_request_url", "unparseable_route_url", "bootstrap_auth_scope_violation",
     "ordinary_auth_scope_violation",
 }
+BOOTSTRAP_STATUS_EVENTS = {
+    "input_filled", "submit_attempted", "submit_click_completed", "submit_click_failed",
+    "browser_request_observed", "browser_request_non_get", "route_handler_entered",
+    "route_role_invalid", "route_role_bootstrap", "route_role_ordinary", "route_role_none", "route_role_other",
+    "route_allowed", "route_rejected", "request_failed", "http_response_401",
+    "http_response_success", "http_response_other", "response_wait_registered",
+    "response_wait_matched", "response_wait_timed_out", "response_wait_failed",
+    "ui_authentication_error_observed", "browser_page_error_observed",
+}
 
 
 def _safe_report_int(value: object, *, minimum: int, maximum: int) -> bool:
@@ -1772,7 +1781,10 @@ def _valid_failure_summary(value: object) -> bool:
 def _validate_observation_record(value: object) -> bool:
     if not isinstance(value, dict):
         return False
-    required = {"test", "status", "duration_ms", "browser_version", "requests", "guard_violations", "checks"}
+    required = {
+        "test", "status", "duration_ms", "browser_version", "requests", "guard_violations", "checks",
+        "bootstrap_status_events",
+    }
     if set(value) != required:
         return False
     test_title = value.get("test")
@@ -1843,6 +1855,11 @@ def _validate_observation_record(value: object) -> bool:
     checks = value.get("checks")
     if not isinstance(checks, list) or len(checks) > 20 or any(
         not isinstance(item, str) or item not in PLAYWRIGHT_CHECKS for item in checks
+    ):
+        return False
+    status_events = value.get("bootstrap_status_events")
+    if not isinstance(status_events, list) or len(status_events) > 32 or any(
+        not isinstance(item, str) or item not in BOOTSTRAP_STATUS_EVENTS for item in status_events
     ):
         return False
     return True

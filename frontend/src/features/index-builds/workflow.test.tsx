@@ -129,6 +129,37 @@ describe("bootstrap index-build workflow", () => {
     expect(fetcher.mock.calls.every(([url]) => !String(url).includes("wrong-service-token"))).toBe(true);
   });
 
+  it("keeps bootstrap disconnected after the real client receives an HTTP 401", async () => {
+    const invalidToken = "synthetic-bootstrap-invalid-token";
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      if (String(input) === "/bootstrap-api/v1/bootstrap/status") {
+        return json({ error: { code: "authentication_required" } }, 401);
+      }
+      return responseFor(String(input), init);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup(); mount();
+    const bootstrapPanel = screen.getByRole("region", { name: "Bootstrap API connection" });
+    const ordinaryPanel = screen.getByRole("region", { name: "Ordinary runtime connection" });
+    const tokenInput = screen.getByLabelText("Bootstrap bearer token");
+    await user.type(tokenInput, invalidToken);
+    const connect = screen.getByRole("button", { name: "Connect to bootstrap" });
+    expect(connect).toBeEnabled();
+    await user.click(connect);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Authentication failed");
+    expect(within(bootstrapPanel).getByText("Disconnected", { exact: true })).toBeInTheDocument();
+    expect(within(ordinaryPanel).getByText("Disconnected", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText(/Authenticated bootstrap mode/)).not.toBeInTheDocument();
+    const statusCall = fetcher.mock.calls.find(([url]) => String(url) === "/bootstrap-api/v1/bootstrap/status");
+    expect(statusCall).toBeDefined();
+    expect(statusCall?.[1]?.method).toBe("GET");
+    expect(new Headers(statusCall?.[1]?.headers).get("Authorization")).toBe(`Bearer ${invalidToken}`);
+    expect(String(statusCall?.[0])).not.toContain(invalidToken);
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+  });
+
   it("keeps bootstrap inventory and ordinary selection credentials on their own routes", async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => responseFor(String(input), init));
     vi.stubGlobal("fetch", fetcher);
