@@ -219,7 +219,10 @@ function isChatModelCatalog(value: unknown): value is ChatModelCatalog {
     typeof value.configured_model_available === "boolean" && Array.isArray(value.available_models) &&
     value.available_models.length <= 128 && value.available_models.every((model) => typeof model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model)) &&
     (value.error_code === null || value.error_code === "ollama_unavailable") &&
-    (value.availability === "available" ? value.error_code === null : value.error_code === "ollama_unavailable");
+    (value.availability === "available"
+      ? value.error_code === null && new Set(value.available_models).size === value.available_models.length &&
+        value.configured_model_available === value.available_models.includes(value.configured_model)
+      : value.error_code === "ollama_unavailable" && value.available_models.length === 0 && !value.configured_model_available);
 }
 
 function isGeneralChatResponse(value: unknown): value is GeneralChatResponse {
@@ -483,7 +486,13 @@ export class WorkbenchApiClient {
   async generalChat(input: GeneralChatRequest, signal?: AbortSignal): Promise<GeneralChatResponse> {
     if (!input || typeof input.question !== "string" || !input.question.trim() || input.question.length > 4000 ||
       !Array.isArray(input.history) || input.history.length > 8 || input.history.some((turn) => !turn ||
-        typeof turn.user !== "string" || typeof turn.assistant !== "string")) {
+        typeof turn.user !== "string" || typeof turn.assistant !== "string") ||
+      (input.model !== undefined && (typeof input.model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(input.model))) ||
+      (input.generation !== undefined && (!input.generation ||
+        typeof input.generation.temperature !== "number" || !Number.isFinite(input.generation.temperature) ||
+        input.generation.temperature < 0 || input.generation.temperature > 2 ||
+        typeof input.generation.max_output_tokens !== "number" || !Number.isInteger(input.generation.max_output_tokens) ||
+        input.generation.max_output_tokens < 32 || input.generation.max_output_tokens > 2048))) {
       throw new ApiError("malformed_response", "chat_request_invalid");
     }
     const value = await this.request("/api/v1/chat", {

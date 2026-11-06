@@ -6,7 +6,7 @@ import threading
 import httpx
 import pytest
 
-from backend.services.general_chat import GeneralChatError, GeneralChatService
+from backend.services.general_chat import GeneralChatError, GeneralChatGenerationOptions, GeneralChatService
 
 
 @dataclass
@@ -74,6 +74,38 @@ def test_chat_uses_server_prompt_model_parameters_and_validated_history():
         {"role": "user", "content": "Follow up?"},
     ]
     assert "citation" in request["messages"][0]["content"]
+
+
+def test_request_scoped_generation_options_are_forwarded_without_shared_state_leakage():
+    client = FakeOllama()
+    service = GeneralChatService("gemma4:e2b", client_factory=lambda: client)
+    first = GeneralChatGenerationOptions(temperature=0.2, max_output_tokens=768)
+    second = GeneralChatGenerationOptions(temperature=1.4, max_output_tokens=128)
+
+    service.chat("First", [], generation=first)
+    service.chat("Second", [], generation=second)
+    service.chat("Default", [])
+
+    assert [item["options"] for item in client.chat_requests] == [
+        {"temperature": 0.2, "num_predict": 768},
+        {"temperature": 1.4, "num_predict": 128},
+        {"temperature": 0.7, "num_predict": 512},
+    ]
+    assert service._default_generation == GeneralChatGenerationOptions()
+    with pytest.raises((AttributeError, TypeError)):
+        first.temperature = 0.8
+
+
+@pytest.mark.parametrize("temperature", [True, "0.5", float("nan"), float("inf"), -0.01, 2.01])
+def test_generation_temperature_is_finite_numeric_and_bounded(temperature):
+    with pytest.raises(ValueError, match="chat_temperature_invalid"):
+        GeneralChatGenerationOptions(temperature=temperature)
+
+
+@pytest.mark.parametrize("output_tokens", [True, 31, 2049, 32.0, "512"])
+def test_generation_output_tokens_are_integers_and_bounded(output_tokens):
+    with pytest.raises(ValueError, match="chat_output_limit_invalid"):
+        GeneralChatGenerationOptions(max_output_tokens=output_tokens)
 
 
 def test_unavailable_ollama_and_missing_model_have_stable_errors():

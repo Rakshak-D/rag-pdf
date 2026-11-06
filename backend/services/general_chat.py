@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+import math
 import re
 import threading
 from typing import Any, Callable
@@ -20,6 +22,29 @@ _SYSTEM_MESSAGE = (
     "conversation provided. You are not reading the user's documents. Do not "
     "claim document grounding or invent citations. If unsure, say so."
 )
+
+
+@dataclass(frozen=True)
+class GeneralChatGenerationOptions:
+    """Validated request-scoped options for General Chat inference."""
+
+    temperature: float = 0.7
+    max_output_tokens: int = 512
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.temperature, bool)
+            or not isinstance(self.temperature, (int, float))
+            or not math.isfinite(self.temperature)
+            or not 0 <= self.temperature <= 2
+        ):
+            raise ValueError("chat_temperature_invalid")
+        if (
+            isinstance(self.max_output_tokens, bool)
+            or not isinstance(self.max_output_tokens, int)
+            or not 32 <= self.max_output_tokens <= 2048
+        ):
+            raise ValueError("chat_output_limit_invalid")
 
 
 class GeneralChatError(RuntimeError):
@@ -55,8 +80,7 @@ class GeneralChatService:
             raise ValueError("chat_output_limit_invalid")
         self.configured_model = configured_model
         self._client_factory = client_factory or create_local_ollama_client
-        self._temperature = float(temperature)
-        self._output_tokens = output_tokens
+        self._default_generation = GeneralChatGenerationOptions(float(temperature), output_tokens)
         self._capacity = threading.BoundedSemaphore(max_concurrent)
 
     @staticmethod
@@ -98,10 +122,14 @@ class GeneralChatService:
         question: str,
         history: Sequence[Mapping[str, str]],
         model: str | None = None,
+        generation: GeneralChatGenerationOptions | None = None,
     ) -> dict[str, Any]:
         if not self._capacity.acquire(blocking=False):
             raise GeneralChatError("chat_capacity_exhausted", 429)
         try:
+            options = self._default_generation if generation is None else generation
+            if not isinstance(options, GeneralChatGenerationOptions):
+                raise GeneralChatError("chat_generation_invalid", 400)
             selected = self.configured_model if model is None else model
             if not isinstance(selected, str) or not _MODEL_NAME.fullmatch(selected):
                 raise GeneralChatError("chat_model_invalid", 400)
@@ -123,7 +151,10 @@ class GeneralChatService:
                     model=selected,
                     messages=messages,
                     stream=False,
-                    options={"temperature": self._temperature, "num_predict": self._output_tokens},
+                    options={
+                        "temperature": options.temperature,
+                        "num_predict": options.max_output_tokens,
+                    },
                 )
             except Exception as exc:
                 status = getattr(exc, "status_code", None)
@@ -150,4 +181,4 @@ class GeneralChatService:
             self._capacity.release()
 
 
-__all__ = ["GeneralChatService", "GeneralChatError"]
+__all__ = ["GeneralChatService", "GeneralChatError", "GeneralChatGenerationOptions"]

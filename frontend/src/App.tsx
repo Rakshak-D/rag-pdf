@@ -15,6 +15,11 @@ import { IndexBuildsPage } from "./features/index-builds/IndexBuildsPage";
 import { DocumentsPage } from "./features/documents/DocumentsPage";
 import { ChatPage } from "./features/chat/ChatPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
+import {
+  loadGeneralChatPreferences,
+  saveGeneralChatPreferences,
+} from "./features/settings/preferences";
+import type { GeneralChatPreferences } from "./features/settings/preferences";
 
 type DataState = "disconnected" | "loading" | "ready" | "error";
 const localGateway = import.meta.env.VITE_RAG_LOCAL_GATEWAY === "true";
@@ -40,7 +45,8 @@ export default function App() {
   const [dataError, setDataError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
-  const [selectedChatModel, setSelectedChatModel] = useState<string | null>(null);
+  const [generalChatPreferenceState, setGeneralChatPreferenceState] = useState(loadGeneralChatPreferences);
+  const generalChatPreferences = generalChatPreferenceState.preferences;
   const client = useMemo(() => new WorkbenchApiClient({ token }), [token]);
   const location = useLocation();
   const connected = token !== null;
@@ -84,6 +90,19 @@ export default function App() {
   }, []);
 
   const refresh = useCallback(() => setRefreshVersion((version) => version + 1), []);
+
+  const saveChatPreferences = useCallback((preferences: GeneralChatPreferences): boolean => {
+    const saved = saveGeneralChatPreferences(preferences);
+    setGeneralChatPreferenceState({ preferences, status: saved ? "saved" : "unavailable" });
+    return saved;
+  }, []);
+
+  const resetUnavailableChatModel = useCallback(() => {
+    if (generalChatPreferences.selectedModel === null) return;
+    const preferences = { ...generalChatPreferences, selectedModel: null };
+    const saved = saveGeneralChatPreferences(preferences);
+    setGeneralChatPreferenceState({ preferences, status: saved ? "saved" : "unavailable" });
+  }, [generalChatPreferences]);
 
   useEffect(() => {
     let active = true;
@@ -147,8 +166,8 @@ export default function App() {
   return <AppShell>
     {!localGateway && !location.pathname.startsWith("/index-builds") && location.pathname !== "/documents" ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
     <Routes>
-      <Route path="/" element={<ChatPage token={token} selectedModel={selectedChatModel} />} />
-      <Route path="/settings" element={<SettingsPage token={token} selectedModel={selectedChatModel} onSelectModel={setSelectedChatModel} />} />
+      <Route path="/" element={<ChatPage token={token} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onResetUnavailableModel={resetUnavailableChatModel} />} />
+      <Route path="/settings" element={<SettingsPage token={token} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onSave={saveChatPreferences} onResetUnavailableModel={resetUnavailableChatModel} />} />
       <Route path="/documents" element={<DocumentsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} />} />
       <Route path="/artifacts" element={<ArtifactsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/artifacts/:artifactId" element={<ArtifactDetailPage key={location.pathname} client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />

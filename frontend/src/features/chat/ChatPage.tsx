@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { Link, useSearchParams } from "react-router-dom";
 import { ApiError, WorkbenchApiClient } from "../../api/client";
 import type { AskResponse, ChatModelCatalog, ChatTurn, IndexSelectionState } from "../../api/types";
+import type { GeneralChatPreferences, PreferenceLoadStatus } from "../settings/preferences";
+import { resolveChatModel } from "../settings/preferences";
 import { boundedChatHistory } from "./history";
 
 type Mode = "general" | "document";
@@ -16,7 +18,9 @@ type Message = {
 
 interface Props {
   token: string | null;
-  selectedModel: string | null;
+  preferences: GeneralChatPreferences;
+  preferenceLoadStatus: PreferenceLoadStatus;
+  onResetUnavailableModel: () => void;
 }
 
 const errorText: Record<string, string> = {
@@ -62,7 +66,7 @@ function pageName(page: number | null): string {
   return page === null ? "Page not identified" : `Page ${page}`;
 }
 
-export function ChatPage({ token, selectedModel }: Props) {
+export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnavailableModel }: Props) {
   const client = useMemo(() => new WorkbenchApiClient({ token }), [token]);
   const [searchParams] = useSearchParams();
   const [mode, setMode] = useState<Mode>(() => searchParams.get("mode") === "document" ? "document" : "general");
@@ -79,6 +83,7 @@ export function ChatPage({ token, selectedModel }: Props) {
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({});
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const [unavailableModelNotice, setUnavailableModelNotice] = useState<string | null>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const scrollRegion = useRef<HTMLDivElement>(null);
   const requestSequence = useRef(0);
@@ -86,7 +91,9 @@ export function ChatPage({ token, selectedModel }: Props) {
   const imageControllers = useRef<Set<AbortController>>(new Set());
   const objectUrls = useRef<Set<string>>(new Set());
 
-  const generalModel = selectedModel ?? catalog?.configured_model ?? null;
+  const modelResolution = resolveChatModel(preferences, catalog);
+  const generalModel = modelResolution.model;
+  const modelIsVerified = catalog?.availability === "available" && generalModel !== null;
   const hasIndex = selection?.selection_status === "selected" && selection.selection !== null;
 
   const releaseImages = useCallback((clearState = true) => {
@@ -107,6 +114,15 @@ export function ChatPage({ token, selectedModel }: Props) {
     });
     return () => { active = false; controller.abort(); };
   }, [client]);
+
+  useEffect(() => {
+    if (modelResolution.status !== "saved-model-unavailable" || !preferences.selectedModel) return;
+    const previous = preferences.selectedModel;
+    const fallback = catalog?.configured_model_available ? `Using configured default ${catalog.configured_model}.` :
+      `Configured default ${catalog?.configured_model ?? ""} is also not installed.`;
+    setUnavailableModelNotice(`Saved model ${previous} is no longer installed. ${fallback}`);
+    onResetUnavailableModel();
+  }, [catalog, modelResolution.status, onResetUnavailableModel, preferences.selectedModel]);
 
   useEffect(() => {
     let active = true;
@@ -194,6 +210,10 @@ export function ChatPage({ token, selectedModel }: Props) {
           question: normalized,
           history: boundedChatHistory(generalTurns),
           ...(generalModel ? { model: generalModel } : {}),
+          generation: {
+            temperature: preferences.temperature,
+            max_output_tokens: preferences.maxOutputTokens,
+          },
         }, controller.signal);
         if (sequence !== requestSequence.current) return;
         setMessages((current) => [...current, { id: newId(), role: "assistant", mode: "general", text: response.answer }]);
@@ -258,9 +278,12 @@ export function ChatPage({ token, selectedModel }: Props) {
           <h1>Chat</h1>
           <p>{mode === "general" ? "Talk with your local model, without document retrieval." : "Ask about the documents behind your selected index."}</p>
         </div>
-        <button className="chat-new" type="button" onClick={clearConversation} disabled={!messages.length && !question} aria-label="New chat">
-          <span aria-hidden="true">＋</span> New chat
-        </button>
+        <div className="chat-heading__actions">
+          {mode === "general" ? <Link className="chat-settings-link" to="/settings">Settings</Link> : null}
+          <button className="chat-new" type="button" onClick={clearConversation} disabled={!messages.length && !question} aria-label="New chat">
+            <span aria-hidden="true">＋</span> New chat
+          </button>
+        </div>
       </header>
 
       <div className="chat-mode-row">
@@ -269,9 +292,12 @@ export function ChatPage({ token, selectedModel }: Props) {
           <button type="button" disabled={busy} aria-pressed={mode === "document"} className={mode === "document" ? "is-active" : ""} onClick={() => selectMode("document")}>Documents</button>
         </div>
         <div className="chat-context-label" aria-live="polite">
-          {mode === "general" ? <><span className="chat-dot" /> General Chat</> : hasIndex ? <><span className="chat-dot chat-dot--rust" /> {selection?.selection?.build_id?.slice(0, 8)} selected</> : <><span className="chat-dot chat-dot--muted" /> No usable index</>}
+          {mode === "general" ? <><span className={`chat-dot${modelIsVerified ? "" : " chat-dot--muted"}`} /> General Chat{modelIsVerified ? ` · ${generalModel}` : !catalog ? " · checking models" : ""}</> : hasIndex ? <><span className="chat-dot chat-dot--rust" /> {selection?.selection?.build_id?.slice(0, 8)} selected</> : <><span className="chat-dot chat-dot--muted" /> No usable index</>}
         </div>
       </div>
+
+      {mode === "general" && unavailableModelNotice ? <p className="chat-settings-notice" role="status">{unavailableModelNotice}</p> : null}
+      {mode === "general" && preferenceLoadStatus === "invalid" ? <p className="chat-settings-notice" role="status">Saved General Chat preferences were invalid. Safe defaults are active.</p> : null}
 
       {mode === "document" && !hasIndex ? <div className="chat-no-index" role={selectionError ? "alert" : "status"}>
         <div className="chat-no-index__mark" aria-hidden="true">▤</div>
@@ -286,7 +312,7 @@ export function ChatPage({ token, selectedModel }: Props) {
           <div className="chat-empty__glyph" aria-hidden="true"><span /><span /><span /></div>
           <h2>{mode === "general" ? "What would you like to explore?" : "Ask a question about your PDFs"}</h2>
           <p>{mode === "general" ? "General Chat uses the configured local Ollama model. It does not read or cite your documents." : hasIndex ? "Answers use only evidence selected from your compatible index." : "Select an index to begin, or switch to General Chat."}</p>
-          {mode === "general" ? <p className="chat-model-status">{catalogError ?? (catalog?.availability === "unavailable" ? "Ollama is currently unavailable. You can still open Settings to inspect model availability." : catalog?.configured_model_available ? `Using ${generalModel}.` : catalog?.configured_model ? `Configured model: ${catalog.configured_model} · not installed or unavailable.` : "Checking the configured model…")}</p> : null}
+          {mode === "general" ? <p className="chat-model-status">{catalogError ?? (catalog?.availability === "unavailable" ? "Ollama is currently unavailable. You can still open Settings to inspect model availability." : modelResolution.status === "configured-default-unavailable" ? `Configured default ${catalog?.configured_model} is not installed. Select an installed model in Settings.` : modelResolution.status === "checking" ? "Checking installed models…" : generalModel ? `Using ${generalModel}.` : "Select an installed model in Settings to begin.")}</p> : null}
         </div> : messages.map((message) => <article className={`chat-message chat-message--${message.role}${message.error ? " chat-message--error" : ""}`} key={message.id}>
           <div className="chat-message__meta"><span className={`chat-avatar chat-avatar--${message.mode}`} aria-hidden="true">{message.role === "user" ? "Y" : "R"}</span><strong>{message.role === "user" ? "You" : "RAG-PDF"}</strong><span>{message.mode === "general" ? "General Chat" : "Document Chat"}</span></div>
           <div className="chat-message__body">
@@ -306,7 +332,7 @@ export function ChatPage({ token, selectedModel }: Props) {
         <textarea ref={textarea} id="chat-question" value={question} maxLength={4000} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleKeyDown}
           placeholder={mode === "general" ? "Message your local model…" : "Ask about the selected documents…"} disabled={busy || (mode === "document" && !hasIndex)} rows={3} />
         <div className="chat-composer__foot">
-          <span>{mode === "general" ? generalModel ? `Local model · ${generalModel}` : "Checking local model" : "Document answers are grounded in retrieved evidence"}</span>
+          <span>{mode === "general" ? modelIsVerified ? `Local model · ${generalModel}` : catalog?.availability === "unavailable" ? "Ollama unavailable" : "Checking local model" : "Document answers are grounded in retrieved evidence"}</span>
           <div><small>{question.length}/4000</small><button type="submit" className="chat-send" disabled={!question.trim() || busy || (mode === "document" && !hasIndex)} aria-label="Send message"><span aria-hidden="true">↑</span></button></div>
         </div>
       </form>

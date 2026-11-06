@@ -34,6 +34,23 @@ describe("local gateway and general chat clients", () => {
     expect(new Headers(init?.headers).has("Authorization")).toBe(false);
   });
 
+  it("sends supported generation preferences as dedicated fields without raw Ollama options", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ mode: "general", answer: "Configured reply.", model: "qwen2.5:3b" }));
+    const client = new WorkbenchApiClient({ token: null, fetcher, localGateway: true });
+    await client.generalChat({
+      question: "Explain embeddings",
+      history: [],
+      model: "qwen2.5:3b",
+      generation: { temperature: 0.4, max_output_tokens: 768 },
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      question: "Explain embeddings",
+      history: [],
+      model: "qwen2.5:3b",
+      generation: { temperature: 0.4, max_output_tokens: 768 },
+    });
+  });
+
   it("preserves bearer mode for independent development and rejects malformed chat responses", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ mode: "unknown", answer: "hi", model: "x" }));
     const client = new WorkbenchApiClient({ token: "dev-token", fetcher, localGateway: false });

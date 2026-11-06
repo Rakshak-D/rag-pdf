@@ -45,7 +45,7 @@ from backend.services.job_manager import (
 from backend.services.index_readiness import IndexReadinessInputError
 from backend.services.index_selection import IndexSelectionError
 from backend.services.ask_service import AskError, AskService
-from backend.services.general_chat import GeneralChatError, GeneralChatService
+from backend.services.general_chat import GeneralChatError, GeneralChatGenerationOptions, GeneralChatService
 
 from .schemas import (
     AblationRequest,
@@ -414,6 +414,7 @@ async def chat_message(request: Request) -> JSONResponse:
             model.question,
             [turn.model_dump(mode="python") for turn in model.history],
             model.model,
+            GeneralChatGenerationOptions(**model.generation.model_dump(mode="python")) if model.generation is not None else None,
         )
         response_model = ChatResponse.model_validate(result)
         response = JSONResponse(response_model.model_dump(mode="json"))

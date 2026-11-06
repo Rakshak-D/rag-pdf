@@ -51,10 +51,12 @@ def _runtime(tmp_path: Path, chat_service: GeneralChatService, *, body_limit: in
     return build_runtime(settings, chat_service=chat_service)
 
 
-def test_authenticated_chat_api_uses_local_chat_and_never_opens_retrieval(tmp_path: Path):
+def test_authenticated_chat_api_uses_local_chat_and_never_opens_retrieval(tmp_path: Path, monkeypatch):
     ollama = FakeOllama()
     service = GeneralChatService("gemma4:e2b", client_factory=lambda: ollama)
     runtime = _runtime(tmp_path, service)
+    assert runtime.ask_service is not None
+    monkeypatch.setattr(runtime.ask_service, "ask", lambda *args, **kwargs: pytest.fail("General Chat must not invoke AskService"))
     with TestClient(runtime.app) as client:
         assert client.get("/api/v1/chat/models").status_code == 401
         catalog = client.get("/api/v1/chat/models", headers={"Authorization": f"Bearer {TOKEN}"})
@@ -67,6 +69,7 @@ def test_authenticated_chat_api_uses_local_chat_and_never_opens_retrieval(tmp_pa
             "question": "What should I remember?",
             "history": [{"user": "Earlier question", "assistant": "Earlier answer"}],
             "model": "qwen2.5:3b",
+            "generation": {"temperature": 0.35, "max_output_tokens": 768},
         })
         assert response.status_code == 200
         assert response.json()["mode"] == "general"
@@ -74,12 +77,17 @@ def test_authenticated_chat_api_uses_local_chat_and_never_opens_retrieval(tmp_pa
         assert set(response.json()) == {"mode", "answer", "model"}
         assert response.headers["cache-control"] == "no-store"
         assert ollama.requests[0]["model"] == "qwen2.5:3b"
+        assert ollama.requests[0]["options"] == {"temperature": 0.35, "num_predict": 768}
         assert ollama.requests[0]["messages"][1:3] == [
             {"role": "user", "content": "Earlier question"},
             {"role": "assistant", "content": "Earlier answer"},
         ]
         assert runtime.model_registry.snapshot().components == ()
         assert runtime.ask_service is not None
+
+        defaulted = client.post("/api/v1/chat", headers={"Authorization": f"Bearer {TOKEN}"}, json={"question": "Defaults?"})
+        assert defaulted.status_code == 200
+        assert ollama.requests[1]["options"] == {"temperature": 0.7, "num_predict": 512}
 
 
 def test_chat_api_rejects_invalid_and_oversized_requests_before_ollama(tmp_path: Path):
@@ -90,6 +98,12 @@ def test_chat_api_rejects_invalid_and_oversized_requests_before_ollama(tmp_path:
         assert client.post("/api/v1/chat", headers=headers, json={"question": "  "}).status_code == 400
         assert client.post("/api/v1/chat", headers=headers, json={"question": "Hello", "model": "C:\\secret\\model"}).status_code == 400
         assert client.post("/api/v1/chat", headers=headers, json={"question": "Hello", "system": "override"}).status_code == 400
+        assert client.post("/api/v1/chat", headers=headers, json={"question": "Hello", "generation": {
+            "temperature": True, "max_output_tokens": 512,
+        }}).status_code == 400
+        assert client.post("/api/v1/chat", headers=headers, json={"question": "Hello", "generation": {
+            "temperature": 0.5, "max_output_tokens": 512, "tools": ["read_file"],
+        }}).status_code == 400
         too_many_turns = [{"user": "q", "assistant": "a"}] * 9
         assert client.post("/api/v1/chat", headers=headers, json={"question": "Hello", "history": too_many_turns}).status_code == 400
         oversized = client.post("/api/v1/chat", headers={**headers, "Content-Type": "application/json"}, content=b"{" + b" " * 2100)
