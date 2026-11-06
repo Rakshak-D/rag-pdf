@@ -75,6 +75,8 @@ def test_generation_is_lazy_and_preserves_provenance(tmp_path):
     assert result.response == "Answer [T1]."
     assert result.attempts == 1
     assert client.requests[0]["model"] == plan.resolved_config().llm_model
+    assert client.requests[0]["keep_alive"] == 0
+    assert client.requests[0]["think"] is False
     assert {message["role"] for message in client.requests[0]["messages"]} == {"system", "user"}
     assert "What is shown?" in client.requests[0]["messages"][1]["content"]
 

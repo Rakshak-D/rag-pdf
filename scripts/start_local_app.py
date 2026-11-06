@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import secrets
+import signal
 import shutil
 import subprocess
 import sys
@@ -211,17 +212,32 @@ def _wait_http(name: str, process: subprocess.Popen, url: str, *, expected: int,
 
 def _start(name: str, command: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.Popen:
     try:
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
         process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  creationflags=creationflags)
     except OSError as exc:
         raise StartupError(f"{name}_start_failed") from exc
     return process
 
 
+def _request_stop(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        break_event = getattr(signal, "CTRL_BREAK_EVENT", None)
+        if break_event is not None:
+            try:
+                process.send_signal(break_event)
+                return
+            except OSError:
+                pass
+    process.terminate()
+
+
 def _stop_owned(processes: list[subprocess.Popen]) -> None:
     for process in reversed(processes):
-        if process.poll() is None:
-            process.terminate()
+        _request_stop(process)
     for process in reversed(processes):
         if process.poll() is None:
             try:

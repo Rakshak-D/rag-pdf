@@ -4,6 +4,18 @@ import { ApiError, BootstrapApiClient, WorkbenchApiClient } from "./client";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("WorkbenchApiClient", () => {
+  it("binds the browser fetch fallback for both API clients", async () => {
+    const fetcher = vi.fn(function (this: unknown) {
+      expect(this).toBe(globalThis);
+      return Promise.resolve(Response.json({ status: "ok", api_version: "v1" }));
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(new WorkbenchApiClient().getHealth()).resolves.toEqual({ status: "ok", api_version: "v1" });
+    await expect(new BootstrapApiClient().getHealth()).resolves.toEqual({ status: "ok", api_version: "v1" });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it("sends bootstrap status to the fixed endpoint with the candidate token and preserves HTTP 401", async () => {
     const token = "synthetic-invalid-bootstrap-token";
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(

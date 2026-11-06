@@ -28,6 +28,9 @@ class FakeOllama:
             raise ConnectionError("private host information")
         return {"models": [ModelRecord("gemma4:e2b"), ModelRecord("qwen2.5:3b")]}
 
+    def show(self, model: str):
+        return {"capabilities": ["completion", "thinking"]}
+
     def chat(self, **request):
         self.requests.append(request)
         return {"message": {"content": "A real service boundary with deterministic test output."}}
@@ -78,6 +81,8 @@ def test_authenticated_chat_api_uses_local_chat_and_never_opens_retrieval(tmp_pa
         assert response.headers["cache-control"] == "no-store"
         assert ollama.requests[0]["model"] == "qwen2.5:3b"
         assert ollama.requests[0]["options"] == {"temperature": 0.35, "num_predict": 768}
+        assert ollama.requests[0]["think"] is False
+        assert ollama.requests[0]["keep_alive"] == 0
         assert ollama.requests[0]["messages"][1:3] == [
             {"role": "user", "content": "Earlier question"},
             {"role": "assistant", "content": "Earlier answer"},

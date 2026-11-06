@@ -14,7 +14,9 @@ starts the ordinary API, bootstrap API, credential-holding gateway, and Vite
 only on `127.0.0.1`; the UI is at `http://127.0.0.1:5173`. It preserves the
 configured source, index, SQLite, and artifact locations and does not load
 embedding or reranking models. Stop the services with Ctrl+C. The launcher
-stops only child processes it created.
+stops only child processes it created. On Windows, Ctrl+C is sent as a console
+break to those owned services and shutdown is bounded; the launcher never
+stops Ollama or unrelated processes.
 
 Set `RAG_WORKBENCH_DATA_DIR` and `RAG_WORKBENCH_INDEX_STORAGE_ROOT` to the
 existing trusted source and index roots. They must be absolute, non-overlapping
@@ -96,3 +98,6 @@ continues to the existing document workflow; Results opens persisted artifacts.
 Existing `/index-builds`, `/jobs`, `/experiments/*`, artifact-detail, and legacy
 `/ask` routes remain available for the workflows that have not yet been
 consolidated into the chat-first interface.
+
+For the verified local text-RAG example and its resource limits, see
+[`docs/DEMO.md`](../DEMO.md).

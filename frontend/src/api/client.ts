@@ -343,7 +343,7 @@ export class WorkbenchApiClient {
   constructor(options: { token?: string | null; baseUrl?: string; fetcher?: FetchLike; localGateway?: boolean } = {}) {
     this.token = options.token ?? null;
     this.baseUrl = options.baseUrl ?? "";
-    this.fetcher = options.fetcher ?? fetch;
+    this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     this.localGateway = options.localGateway ?? DEFAULT_LOCAL_GATEWAY;
   }
 
@@ -821,7 +821,7 @@ export class BootstrapApiClient {
 
   constructor(options: { token?: string | null; fetcher?: FetchLike; prefix?: string; localGateway?: boolean } = {}) {
     this.token = options.token ?? null;
-    this.fetcher = options.fetcher ?? fetch;
+    this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     this.prefix = options.prefix ?? "/bootstrap-api";
     this.localGateway = options.localGateway ?? DEFAULT_LOCAL_GATEWAY;
   }

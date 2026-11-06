@@ -16,6 +16,7 @@ from backend.engine.generation import create_local_ollama_client
 
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _MAX_MODELS = 128
+_MAX_MODEL_CAPABILITIES = 32
 _MAX_ANSWER_CHARS = 16_000
 _SYSTEM_MESSAGE = (
     "You are RAG-PDF General Chat. Answer clearly and helpfully using the "
@@ -98,6 +99,15 @@ class GeneralChatService:
                 names.append(value)
         return names
 
+    @staticmethod
+    def _model_capabilities(response: Any) -> tuple[str, ...] | None:
+        raw = response.get("capabilities") if isinstance(response, Mapping) else getattr(response, "capabilities", None)
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or len(raw) > _MAX_MODEL_CAPABILITIES:
+            return None
+        if any(not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", value) for value in raw):
+            return None
+        return tuple(dict.fromkeys(raw))
+
     def models(self) -> dict[str, Any]:
         try:
             names = self._model_names(self._client_factory().list())
@@ -141,21 +151,35 @@ class GeneralChatService:
             if selected not in installed:
                 raise GeneralChatError("chat_model_unavailable", 409)
 
+            try:
+                capabilities = self._model_capabilities(client.show(selected))
+            except Exception as exc:
+                raise GeneralChatError("chat_model_capabilities_unavailable", 503) from exc
+            if capabilities is None:
+                raise GeneralChatError("chat_model_capabilities_unavailable", 503)
+
             messages: list[dict[str, str]] = [{"role": "system", "content": _SYSTEM_MESSAGE}]
             for turn in history:
                 messages.append({"role": "user", "content": turn["user"]})
                 messages.append({"role": "assistant", "content": turn["assistant"]})
             messages.append({"role": "user", "content": question})
             try:
-                response = client.chat(
-                    model=selected,
-                    messages=messages,
-                    stream=False,
-                    options={
+                request: dict[str, Any] = {
+                    "model": selected,
+                    "messages": messages,
+                    "stream": False,
+                    "keep_alive": 0,
+                    "options": {
                         "temperature": options.temperature,
                         "num_predict": options.max_output_tokens,
                     },
-                )
+                }
+                # Some local models default to spending the entire short output
+                # budget on hidden reasoning. Prefer a user-facing answer when
+                # the installed model explicitly advertises thinking support.
+                if "thinking" in capabilities:
+                    request["think"] = False
+                response = client.chat(**request)
             except Exception as exc:
                 status = getattr(exc, "status_code", None)
                 if status == 404:

@@ -274,7 +274,7 @@ class LocalGenerationAdapter:
         for attempt in range(config.llm_retries + 1):
             attempts = attempt + 1
             try:
-                request: dict[str, Any] = {"model": config.llm_model, "messages": messages, "stream": False, "options": {"temperature": config.llm_temperature, "num_predict": config.llm_max_tokens}, "think": config.llm_think_mode}
+                request: dict[str, Any] = {"model": config.llm_model, "messages": messages, "stream": False, "keep_alive": 0, "options": {"temperature": config.llm_temperature, "num_predict": config.llm_max_tokens}, "think": config.llm_think_mode}
                 if images:
                     request["messages"][1]["images"] = images
                 response = client.chat(**request)

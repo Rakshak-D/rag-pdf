@@ -1,10 +1,86 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import signal
 
 import pytest
 
 from scripts import start_local_app
+
+
+def test_windows_services_start_in_private_process_groups(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(start_local_app.os, "name", "nt")
+    calls = {}
+
+    class Process:
+        pass
+
+    def fake_popen(command, **kwargs):
+        calls["command"] = command
+        calls.update(kwargs)
+        return Process()
+
+    monkeypatch.setattr(start_local_app.subprocess, "Popen", fake_popen)
+    process = start_local_app._start("ordinary_api", ["python", "-m", "backend.app"], cwd=tmp_path, env={})
+
+    assert isinstance(process, Process)
+    assert calls["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+def test_windows_shutdown_sends_ctrl_break_before_waiting(monkeypatch):
+    monkeypatch.setattr(start_local_app.os, "name", "nt")
+    events = []
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def send_signal(self, value):
+            events.append(("signal", value))
+
+        def terminate(self):
+            raise AssertionError("graceful process-group signal should be used")
+
+        def wait(self, timeout):
+            events.append(("wait", timeout))
+            self.returncode = 0
+
+    process = Process()
+    start_local_app._stop_owned([process])
+
+    assert events == [
+        ("signal", signal.CTRL_BREAK_EVENT),
+        ("wait", 8),
+    ]
+
+
+def test_shutdown_falls_back_to_owned_process_termination_after_timeout(monkeypatch):
+    monkeypatch.setattr(start_local_app.os, "name", "posix")
+    events = []
+
+    class Process:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            events.append("terminate")
+
+        def wait(self, timeout):
+            events.append(("wait", timeout))
+            if len([event for event in events if isinstance(event, tuple)]) == 1:
+                raise subprocess.TimeoutExpired("owned-child", timeout)
+            self.returncode = -9
+
+        def kill(self):
+            events.append("kill")
+
+    start_local_app._stop_owned([Process()])
+    assert events == ["terminate", ("wait", 8), "kill", ("wait", 5)]
 
 
 def test_launcher_generates_distinct_server_credentials_and_preserves_configured_roots(tmp_path: Path, monkeypatch):

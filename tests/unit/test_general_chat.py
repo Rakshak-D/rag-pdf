@@ -25,16 +25,25 @@ class ChatResult:
 
 
 class FakeOllama:
-    def __init__(self, answer: str = "A general answer.", *, on_chat=None, failure=None):
+    def __init__(self, answer: str = "A general answer.", *, on_chat=None, failure=None, capabilities=("completion", "thinking"), show_failure=None):
         self.answer = answer
         self.on_chat = on_chat
         self.failure = failure
+        self.capabilities = capabilities
+        self.show_failure = show_failure
         self.chat_requests: list[dict] = []
         self.list_count = 0
+        self.show_requests: list[str] = []
 
     def list(self):
         self.list_count += 1
         return {"models": [ModelRecord("gemma4:e2b"), ModelRecord("qwen2.5:3b"), ModelRecord("bad model name")]}
+
+    def show(self, model):
+        self.show_requests.append(model)
+        if self.show_failure:
+            raise self.show_failure
+        return {"capabilities": list(self.capabilities)}
 
     def chat(self, **request):
         self.chat_requests.append(request)
@@ -66,6 +75,9 @@ def test_chat_uses_server_prompt_model_parameters_and_validated_history():
     assert result["answer"] == "A clear answer."
     assert request["model"] == "qwen2.5:3b"
     assert request["options"] == {"temperature": 0.7, "num_predict": 512}
+    assert request["think"] is False
+    assert request["keep_alive"] == 0
+    assert client.show_requests == ["qwen2.5:3b"]
     assert request["messages"][0]["role"] == "system"
     assert "not reading the user's documents" in request["messages"][0]["content"]
     assert request["messages"][1:] == [
@@ -74,6 +86,22 @@ def test_chat_uses_server_prompt_model_parameters_and_validated_history():
         {"role": "user", "content": "Follow up?"},
     ]
     assert "citation" in request["messages"][0]["content"]
+
+
+def test_non_thinking_models_keep_their_default_request_contract():
+    client = FakeOllama(capabilities=("completion", "tools"))
+    GeneralChatService("gemma4:e2b", client_factory=lambda: client).chat("Hello", [])
+    assert "think" not in client.chat_requests[0]
+
+
+def test_unverified_model_capabilities_fail_closed_before_generation():
+    client = FakeOllama(show_failure=RuntimeError("C:\\private\\model-cache"))
+    service = GeneralChatService("gemma4:e2b", client_factory=lambda: client)
+    with pytest.raises(GeneralChatError, match="chat_model_capabilities_unavailable") as error:
+        service.chat("Hello", [])
+    assert error.value.status_code == 503
+    assert client.chat_requests == []
+    assert "private" not in str(error.value)
 
 
 def test_request_scoped_generation_options_are_forwarded_without_shared_state_leakage():

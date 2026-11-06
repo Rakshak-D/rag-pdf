@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "pdf": "Orbit_Field_Notes.pdf",
+  "sha256": "65ba3e145dcb1ab75a6d89717bc46791fda88b1957b4d63c258c044f5ad7a77c",
+  "page_count": 3,
+  "embedded_image_objects": 0,
+  "expected_facts": [
+    {
+      "page": 1,
+      "fact": "The ORBIT test solar panel produced 184 watts on 12 May 2025 at 10:00 a.m. at East Ridge using instrument XR-4."
+    },
+    {
+      "page": 2,
+      "fact": "The ORBIT project archive identifier is Juniper-47."
+    },
+    {
+      "page": 3,
+      "fact": "The East Ridge greenhouse uses 37 liters of water each day."
+    }
+  ]
+}

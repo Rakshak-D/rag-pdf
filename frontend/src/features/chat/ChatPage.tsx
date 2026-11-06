@@ -26,6 +26,7 @@ interface Props {
 const errorText: Record<string, string> = {
   ollama_unavailable: "Ollama is not responding. Start the configured local Ollama service and try again.",
   chat_model_unavailable: "That model is not installed in the configured local Ollama service.",
+  chat_model_capabilities_unavailable: "Ollama could not verify this model's response capabilities. Check the local service and try again.",
   ollama_capacity_unavailable: "Ollama cannot accept another generation right now. Try again shortly.",
   chat_capacity_exhausted: "A local chat request is already running. Wait for it to finish, then try again.",
   chat_generation_timeout: "The local model request timed out. The service may still be finishing work; check before retrying.",
