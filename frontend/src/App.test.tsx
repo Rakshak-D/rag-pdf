@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ const originalCreateObjectURL = Object.getOwnPropertyDescriptor(URL, "createObje
 const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL");
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 afterEach(() => {
+  window.localStorage.clear();
   vi.unstubAllGlobals();
   if (originalCreateObjectURL) Object.defineProperty(URL, "createObjectURL", originalCreateObjectURL);
   else delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
@@ -208,6 +209,9 @@ describe("chat-first local application", () => {
   });
 
   it("uses selected-index Ask evidence and authenticated image references in Document Chat", async () => {
+    window.localStorage.setItem("rag-pdf.general-chat-preferences", JSON.stringify({
+      version: 1, selectedModel: "qwen2.5:3b", temperature: 1.2, maxOutputTokens: 128,
+    }));
     const fetcher = defaultFetch();
     fetcher.mockImplementation(async (input) => {
       const path = String(input);
@@ -228,6 +232,7 @@ describe("chat-first local application", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     vi.stubGlobal("fetch", fetcher);
     mount("/?mode=document");
+    expect(await screen.findByText(/c{8} selected/)).toBeInTheDocument();
     const input = await screen.findByRole("textbox", { name: "Message" });
     await user.type(input, "What does the figure show?");
     await user.keyboard("{Enter}");
@@ -239,11 +244,14 @@ describe("chat-first local application", () => {
     const imageCall = fetcher.mock.calls.find(([url]) => String(url).includes("/api/v1/ask/images/"));
     expect(imageCall).toBeDefined();
     expect(new Headers(imageCall?.[1]?.headers).has("Authorization")).toBe(false);
+    const askCall = fetcher.mock.calls.find(([url]) => String(url) === "/api/v1/ask");
+    expect(JSON.parse(String(askCall?.[1]?.body))).toEqual({ question: "What does the figure show?" });
+    expect(fetcher.mock.calls.some(([url]) => String(url) === "/api/v1/chat")).toBe(false);
     await user.click(within(screen.getByRole("complementary", { name: "Document evidence" })).getByRole("button", { name: "Close evidence" }));
     expect(revoke).toHaveBeenCalledWith("blob:document-evidence");
   });
 
-  it("applies an installed Settings model to the next General Chat request", async () => {
+  it("saves installed model and generation preferences for the next General Chat request", async () => {
     const fetcher = defaultFetch();
     fetcher.mockImplementation(async (input, init) => {
       const path = String(input);
@@ -259,13 +267,88 @@ describe("chat-first local application", () => {
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup();
     const router = mount("/settings");
-    await user.selectOptions(await screen.findByRole("combobox", { name: "Installed model" }), "qwen2.5:3b");
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Use this installed model" }), "qwen2.5:3b");
+    fireEvent.change(screen.getByRole("slider", { name: "Temperature" }), { target: { value: "0.4" } });
+    const tokenLimit = screen.getByRole("spinbutton", { name: "Maximum answer length" });
+    await user.clear(tokenLimit);
+    await user.type(tokenLimit, "768");
+    expect(screen.queryByLabelText(/Thinking/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/context window/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save preferences" }));
+    expect(await screen.findByText("Preferences saved in this browser.")).toBeInTheDocument();
     await router.navigate("/");
     await user.type(await screen.findByRole("textbox", { name: "Message" }), "Hello");
     await user.keyboard("{Enter}");
     expect(await screen.findByText("A local answer.")).toBeInTheDocument();
     const call = fetcher.mock.calls.find(([url]) => String(url) === "/api/v1/chat");
-    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ model: "qwen2.5:3b" });
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      model: "qwen2.5:3b",
+      generation: { temperature: 0.4, max_output_tokens: 768 },
+    });
+    expect(window.localStorage.getItem("rag-pdf.general-chat-preferences")).toContain("qwen2.5:3b");
+  });
+
+  it("resets a previously saved model that is no longer installed and reports the fallback", async () => {
+    window.localStorage.setItem("rag-pdf.general-chat-preferences", JSON.stringify({
+      version: 1, selectedModel: "removed:latest", temperature: 0.9, maxOutputTokens: 900,
+    }));
+    vi.stubGlobal("fetch", defaultFetch());
+    mount("/settings");
+    expect(await screen.findByText(/Saved model removed:latest is no longer installed/)).toHaveTextContent(/Using configured default gemma4:e2b/);
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Use this installed model" })).toHaveValue("gemma4:e2b");
+      expect(window.localStorage.getItem("rag-pdf.general-chat-preferences")).toContain('"selectedModel":null');
+    });
+  });
+
+  it("shows the unavailable Ollama state separately from an uninstalled default model", async () => {
+    const fetcher = defaultFetch();
+    fetcher.mockImplementation(async (input) => {
+      if (String(input) === "/api/v1/chat/models") return jsonResponse({
+        ...models, availability: "unavailable", configured_model_available: false, available_models: [], error_code: "ollama_unavailable",
+      });
+      if (String(input) === "/health") return jsonResponse(health);
+      return jsonResponse({ error: { code: "not_found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    mount("/settings");
+    expect(await screen.findByText(/Ollama is unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(/configured default is/)).toHaveTextContent("gemma4:e2b");
+    expect(screen.queryByRole("combobox", { name: "Use this installed model" })).not.toBeInTheDocument();
+  });
+
+  it("shows an invalid saved-record message and starts from safe defaults", async () => {
+    window.localStorage.setItem("rag-pdf.general-chat-preferences", "{broken");
+    vi.stubGlobal("fetch", defaultFetch());
+    mount("/settings");
+    expect(await screen.findByText(/Saved General Chat preferences were invalid/)).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Temperature" })).toHaveValue("0.7");
+    expect(screen.getByRole("spinbutton", { name: "Maximum answer length" })).toHaveValue(512);
+    expect(window.localStorage.getItem("rag-pdf.general-chat-preferences")).toBeNull();
+  });
+
+  it("announces invalid answer limits and blocks saving until corrected", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", defaultFetch());
+    mount("/settings");
+    const tokenLimit = await screen.findByRole("spinbutton", { name: "Maximum answer length" });
+    await user.clear(tokenLimit);
+    await user.type(tokenLimit, "31");
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a whole number from 32 to 2048.");
+    expect(screen.getByRole("button", { name: "Save preferences" })).toBeDisabled();
+  });
+
+  it("resets preferences from the keyboard and persists the General Chat defaults", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", defaultFetch());
+    mount("/settings");
+    const reset = await screen.findByRole("button", { name: "Reset to defaults" });
+    reset.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByText("General Chat defaults restored and saved in this browser.")).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem("rag-pdf.general-chat-preferences") ?? "null")).toEqual({
+      version: 1, selectedModel: null, temperature: 0.7, maxOutputTokens: 512,
+    });
   });
 
   it("closes the mobile navigation with Escape and restores focus", async () => {

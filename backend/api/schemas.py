@@ -118,10 +118,16 @@ class ChatTurnInput(_StrictModel):
         return normalized
 
 
+class ChatGenerationInput(_StrictModel):
+    temperature: float = Field(ge=0, le=2, allow_inf_nan=False)
+    max_output_tokens: int = Field(ge=32, le=2048)
+
+
 class ChatRequest(_StrictModel):
     question: str = Field(min_length=1, max_length=4000)
     history: list[ChatTurnInput] = Field(default_factory=list, max_length=8)
     model: str | None = Field(default=None, min_length=1, max_length=128)
+    generation: ChatGenerationInput | None = None
 
     @field_validator("question")
     @classmethod
@@ -166,7 +172,11 @@ class ChatModelsResponse(_StrictModel):
             raise ValueError("chat_model_catalog_invalid")
         if self.availability == "available" and self.error_code is not None:
             raise ValueError("chat_model_catalog_invalid")
+        if self.availability == "available" and self.configured_model_available != (self.configured_model in self.available_models):
+            raise ValueError("chat_model_catalog_invalid")
         if self.availability == "unavailable" and self.error_code != "ollama_unavailable":
+            raise ValueError("chat_model_catalog_invalid")
+        if self.availability == "unavailable" and (self.available_models or self.configured_model_available):
             raise ValueError("chat_model_catalog_invalid")
         return self
 

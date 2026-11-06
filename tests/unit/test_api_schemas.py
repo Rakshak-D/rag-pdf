@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from backend.api.schemas import BenchmarkSuiteRequest, EvaluationRequest, RunPlanPreparationRequest, parse_json_object
+from backend.api.schemas import BenchmarkSuiteRequest, ChatRequest, EvaluationRequest, RunPlanPreparationRequest, parse_json_object
 
 
 def _case(case_id="case-1"):
@@ -66,3 +66,38 @@ def test_run_plan_preparation_request_is_strict_and_normalizes_sha256():
             "expected_manifest_hash": "a" * 64,
             "source_root": "C:/private",
         })
+
+
+def test_general_chat_request_keeps_legacy_fields_and_validates_generation_options():
+    legacy = ChatRequest.model_validate({"question": "Hello"})
+    assert legacy.history == []
+    assert legacy.model is None
+    assert legacy.generation is None
+
+    configured = ChatRequest.model_validate({
+        "question": "Hello",
+        "history": [{"user": "Earlier", "assistant": "Reply"}],
+        "model": "installed:latest",
+        "generation": {"temperature": 0.5, "max_output_tokens": 768},
+    })
+    assert configured.generation is not None
+    assert configured.generation.model_dump() == {"temperature": 0.5, "max_output_tokens": 768}
+
+    for invalid_temperature in (True, "0.5", float("nan"), float("inf"), -0.01, 2.01):
+        with pytest.raises(ValidationError):
+            ChatRequest.model_validate({"question": "Hello", "generation": {
+                "temperature": invalid_temperature, "max_output_tokens": 512,
+            }})
+
+    for invalid_limit in (True, "512", 32.5, 31, 2049):
+        with pytest.raises(ValidationError):
+            ChatRequest.model_validate({"question": "Hello", "generation": {
+                "temperature": 0.7, "max_output_tokens": invalid_limit,
+            }})
+
+    with pytest.raises(ValidationError):
+        ChatRequest.model_validate({"question": "Hello", "generation": {
+            "temperature": 0.7, "max_output_tokens": 512, "num_ctx": 4096,
+        }})
+    with pytest.raises(ValidationError):
+        ChatRequest.model_validate({"question": "Hello", "system": "override"})

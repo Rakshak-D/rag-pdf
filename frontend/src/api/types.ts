@@ -354,10 +354,16 @@ export interface ChatTurn {
   assistant: string;
 }
 
+export interface GeneralChatGenerationOptions {
+  temperature: number;
+  max_output_tokens: number;
+}
+
 export interface GeneralChatRequest {
   question: string;
   history: ChatTurn[];
   model?: string;
+  generation?: GeneralChatGenerationOptions;
 }
 
 export interface GeneralChatResponse {
