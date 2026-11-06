@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+import gc
 from pathlib import Path
 from time import perf_counter
 import threading
@@ -12,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from backend.config.schema import ResolvedRunConfig
+from backend.model_lifecycle import ModelLifecycleCoordinator, ModelLifecycleError, lifecycle_scoped
 
 
 @dataclass(frozen=True)
@@ -156,6 +158,7 @@ class ImageEmbeddingAdapter:
         config: ResolvedRunConfig,
         *,
         model_loader: ImageModelLoader | None = None,
+        lifecycle: ModelLifecycleCoordinator | None = None,
     ) -> None:
         if not isinstance(config, ResolvedRunConfig):
             raise TypeError("ImageEmbeddingAdapter requires ResolvedRunConfig")
@@ -164,6 +167,7 @@ class ImageEmbeddingAdapter:
         except Exception as exc:
             raise ImageEmbeddingInputError("image embedding configuration failed validation") from exc
         self._model_loader = model_loader or _default_loader
+        self._lifecycle = lifecycle
         self._components: ImageModelComponents | None = None
         self._device: str | None = None
         self._load_lock = threading.Lock()
@@ -195,8 +199,44 @@ class ImageEmbeddingAdapter:
     def runtime_error_code(self) -> str | None:
         return self._error_code
 
+    def configure_lifecycle(self, lifecycle: ModelLifecycleCoordinator) -> None:
+        if (not isinstance(lifecycle, ModelLifecycleCoordinator) or self._components is not None
+                or self._state != "unloaded" or (self._lifecycle is not None and self._lifecycle is not lifecycle)):
+            raise ModelLifecycleError("model_lifecycle_adapter_invalid")
+        self._lifecycle = lifecycle
+
+    def _mark_lifecycle_error(self, code: str) -> None:
+        self._state = "failed"
+        self._error_code = code
+
+    @staticmethod
+    def _resource_device() -> str:
+        return _default_device()
+
+    def _release_loaded_model(self) -> None:
+        with self._load_lock:
+            components = self._components
+            device = self._device
+            self._components = None
+            self._device = None
+            if self._state != "failed":
+                self._state = "unloaded"
+                self._error_code = None
+        if components is None:
+            return
+        del components
+        gc.collect()
+        if device == "cuda":
+            import torch
+
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
     def load(self) -> ImageModelComponents:
         """Load and validate OpenCLIP components exactly once."""
+
+        if self._lifecycle is not None and not self._lifecycle.is_active_for(self):
+            raise ModelLifecycleError("model_scoped_use_required")
 
         if self._components is not None:
             return self._components
@@ -216,6 +256,8 @@ class ImageEmbeddingAdapter:
                 self._device = None
                 self._state = "failed"
                 self._error_code = "image_model_load_failed"
+                if self._lifecycle is not None:
+                    self._lifecycle.note_load_uncertain(self)
                 if isinstance(exc, ImageEmbeddingLoadError):
                     raise
                 raise ImageEmbeddingLoadError(f"failed to load OpenCLIP model {self.model_name!r} with pretrained {self.pretrained!r}") from exc
@@ -223,6 +265,8 @@ class ImageEmbeddingAdapter:
             self._components = components
             self._state = "ready"
             self._error_code = None
+            if self._lifecycle is not None:
+                self._lifecycle.note_model_loaded(self)
             return components
 
     @staticmethod
@@ -258,6 +302,7 @@ class ImageEmbeddingAdapter:
             dimension=components.dimension,
         )[0]
 
+    @lifecycle_scoped("image")
     def embed_images(self, image_objects: Any) -> ImageEmbeddingBatchResult:
         """Embed valid image objects while reporting per-item load/caption issues."""
 
@@ -391,6 +436,7 @@ class ImageEmbeddingAdapter:
             issues=tuple(issues),
         )
 
+    @lifecycle_scoped("image")
     def embed_query(self, query: str) -> np.ndarray:
         """Tokenize and L2-normalize one OpenCLIP text query."""
 

@@ -351,9 +351,13 @@ def test_bootstrap_settings_environment_requires_all_trusted_roots(tmp_path):
         "RAG_WORKBENCH_BOOTSTRAP_INDEX_STORAGE_ROOT": str(tmp_path / "storage"),
         "RAG_WORKBENCH_BOOTSTRAP_STATE_DIR": str(state),
         "RAG_WORKBENCH_BOOTSTRAP_API_PORT": "70000",
+        "RAG_WORKBENCH_BOOTSTRAP_MODEL_LIFECYCLE_POLICY": "transient_serialized",
     }
     with pytest.raises(BootstrapConfigurationError, match="bootstrap_port_invalid"):
         BootstrapSettings.from_environment(env)
+    env["RAG_WORKBENCH_BOOTSTRAP_API_PORT"] = "8010"
+    configured = BootstrapSettings.from_environment(env)
+    assert configured.model_lifecycle_policy == "transient_serialized"
 
 
 def test_bootstrap_settings_reject_symlinked_trusted_roots(tmp_path):

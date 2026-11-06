@@ -20,6 +20,7 @@ from backend.embeddings import (
 from backend.engine import build_index
 from backend.engine.index_builder import IndexBuildError
 from backend.engine.manifest import ManifestMismatchError, build_document_manifest
+from backend.model_lifecycle import ModelResourceAdmission, ResourceMeasurements
 from backend.experiments import build_run_plan
 from backend.vectorstore import ChromaVectorStore
 from notebooks.config import Config
@@ -289,6 +290,86 @@ def _valid_text_adapter(config):
 
 def _valid_image_adapter(config, image_count=1):
     return StubImageAdapter(config, np.tile(np.asarray([[0.0, 1.0, 0.0]], dtype=np.float32), (image_count, 1)))
+
+
+def test_transient_internal_adapters_release_text_before_image_phase(tmp_path, monkeypatch):
+    import backend.engine.index_builder as builder
+
+    pdf_dir, config, plan = _plan_with_text_and_optional_image(tmp_path, with_image=True)
+    monkeypatch.setattr("backend.embeddings.text._default_device", lambda: "cpu")
+    monkeypatch.setattr("backend.embeddings.image._default_device", lambda: "cpu")
+    mib = 1024 * 1024
+    admission = ModelResourceAdmission(
+        observer=lambda _device: ResourceMeasurements(8 * mib, 8 * mib, 8 * mib),
+        min_available_ram_bytes=1,
+        min_commit_headroom_bytes=1,
+        min_cuda_free_bytes=1,
+    )
+    loaded = {}
+
+    def text_factory(value, *, lifecycle):
+        adapter = TextEmbeddingAdapter(
+            value,
+            model_loader=lambda _name, _device: FakeTextModel([]),
+            lifecycle=lifecycle,
+        )
+        loaded["text"] = adapter
+        return adapter
+
+    def image_factory(value, *, lifecycle):
+        assert loaded["text"]._model is None
+        assert loaded["text"].runtime_state == "unloaded"
+        components = ImageModelComponents(
+            FakeImageModel(),
+            lambda _image: torch.ones(3, 2, 2),
+            lambda values: FakeTokens(values),
+            3,
+        )
+        adapter = ImageEmbeddingAdapter(
+            value,
+            model_loader=lambda *_args: components,
+            lifecycle=lifecycle,
+        )
+        loaded["image"] = adapter
+        return adapter
+
+    class Store:
+        def __init__(self):
+            self.entries = {"text": [], "image": []}
+            self.closed = False
+
+        def upsert_text(self, ids, _vectors, _documents, _metadata):
+            self.entries["text"].extend(ids)
+
+        def upsert_image(self, ids, _vectors, _metadata):
+            self.entries["image"].extend(ids)
+
+        def count(self, modality):
+            return len(self.entries[modality])
+
+        def ids(self, modality):
+            return list(self.entries[modality])
+
+        def close(self):
+            self.closed = True
+
+    store = Store()
+    monkeypatch.setattr(builder, "TextEmbeddingAdapter", text_factory)
+    monkeypatch.setattr(builder, "ImageEmbeddingAdapter", image_factory)
+    monkeypatch.setattr(builder.ChromaVectorStore, "open", lambda *_args, **_kwargs: store)
+    result = builder.build_index(
+        plan,
+        pdf_dir,
+        tmp_path / "owned",
+        model_lifecycle_policy="transient_serialized",
+        model_resource_admission=admission,
+    )
+    assert result.status == "completed", result.to_serializable_dict()
+    assert result.text_vectors_written == 1
+    assert result.image_vectors_written == 1
+    assert store.closed is True
+    assert loaded["text"].runtime_state == loaded["image"].runtime_state == "unloaded"
+    assert loaded["text"]._model is None and loaded["image"]._components is None
 
 
 def test_text_adapter_failure_is_reported_at_text_embedding_stage(tmp_path):

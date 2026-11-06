@@ -45,6 +45,7 @@ from backend.engine.retrieval import (
 from backend.experiments.run_plan import RunPlan
 from backend.services.index_selection import IndexSelectionError, IndexSelectionService, PinnedIndexReport
 from backend.services.model_registry import ModelAdapterRegistry, ModelRuntimeError
+from backend.model_lifecycle import find_model_lifecycle_error
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -282,7 +283,7 @@ class AskService:
             raise ValueError("ask_paths_invalid")
         if not isinstance(selection_service, IndexSelectionService) or not isinstance(model_registry, ModelAdapterRegistry):
             raise ValueError("ask_services_invalid")
-        if not isinstance(context_formatter, ContextFormatter) or not isinstance(generation_adapter, LocalGenerationAdapter):
+        if not callable(getattr(context_formatter, "format", None)) or not callable(getattr(generation_adapter, "generate", None)):
             raise ValueError("ask_pipeline_invalid")
         if isinstance(max_concurrent_queries, bool) or not isinstance(max_concurrent_queries, int) or not 1 <= max_concurrent_queries <= 4:
             raise ValueError("ask_concurrency_invalid")
@@ -554,8 +555,14 @@ class AskService:
                 code = "index_store_unavailable" if isinstance(exc, (RetrievalReportUnavailable, RetrievalStoreError)) else "selected_report_incompatible"
                 raise AskError(code, 503 if code == "index_store_unavailable" else 409) from exc
             except SemanticRetrievalError as exc:
+                lifecycle_error = find_model_lifecycle_error(exc)
+                if lifecycle_error is not None:
+                    raise AskError(lifecycle_error.error_code, 503) from exc
                 raise AskError("retrieval_failed", 502) from exc
             except Exception as exc:
+                lifecycle_error = find_model_lifecycle_error(exc)
+                if lifecycle_error is not None:
+                    raise AskError(lifecycle_error.error_code, 503) from exc
                 raise AskError("retrieval_failed", 502) from exc
             result = self._validate_retrieval(raw_result, question, plan)
             self._selection.validate_pinned(plan, pinned)

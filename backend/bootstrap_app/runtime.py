@@ -20,6 +20,7 @@ from backend.services.bootstrap_jobs import BootstrapJobManager
 from backend.services.index_inventory import IndexInventoryService
 from backend.api.experiments import ExperimentSecurityMiddleware
 from backend.api.bootstrap import build_bootstrap_routes
+from backend.model_lifecycle import ModelLifecycleError, validate_model_lifecycle_policy
 
 
 _DEFAULT_HOST = "127.0.0.1"
@@ -36,6 +37,7 @@ _ENV = {
     "port": "RAG_WORKBENCH_BOOTSTRAP_API_PORT",
     "max_request_body_bytes": "RAG_WORKBENCH_BOOTSTRAP_MAX_REQUEST_BODY_BYTES",
     "queue_capacity": "RAG_WORKBENCH_BOOTSTRAP_QUEUE_CAPACITY",
+    "model_lifecycle_policy": "RAG_WORKBENCH_BOOTSTRAP_MODEL_LIFECYCLE_POLICY",
 }
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,6 +97,7 @@ class BootstrapSettings:
     port: int = _DEFAULT_PORT
     max_request_body_bytes: int = _DEFAULT_BODY_LIMIT
     queue_capacity: int = 2
+    model_lifecycle_policy: str = "cached"
 
     def __post_init__(self) -> None:
         if (not isinstance(self.api_token, str) or len(self.api_token) < 32 or len(self.api_token) > 4096
@@ -110,6 +113,10 @@ class BootstrapSettings:
             raise BootstrapConfigurationError("bootstrap_request_limit_invalid")
         if isinstance(self.queue_capacity, bool) or not isinstance(self.queue_capacity, int) or not 1 <= self.queue_capacity <= 32:
             raise BootstrapConfigurationError("bootstrap_queue_capacity_invalid")
+        try:
+            validate_model_lifecycle_policy(self.model_lifecycle_policy)
+        except ModelLifecycleError as exc:
+            raise BootstrapConfigurationError(exc.error_code) from exc
         self.validate_paths()
 
     @classmethod
@@ -127,6 +134,7 @@ class BootstrapSettings:
             port=_integer(values.get(_ENV["port"], str(_DEFAULT_PORT)), 65535, "bootstrap_port_invalid"),
             max_request_body_bytes=_integer(values.get(_ENV["max_request_body_bytes"], str(_DEFAULT_BODY_LIMIT)), _MAX_BODY_LIMIT, "bootstrap_request_limit_invalid"),
             queue_capacity=_integer(values.get(_ENV["queue_capacity"], "2"), 32, "bootstrap_queue_capacity_invalid"),
+            model_lifecycle_policy=values.get(_ENV["model_lifecycle_policy"], "cached"),
         )
 
     @property
@@ -177,6 +185,7 @@ def build_bootstrap_runtime(settings: BootstrapSettings | None = None, *, adapte
         selected.storage_root,
         capacity=selected.queue_capacity,
         adapter_factory=adapter_factory,
+        model_lifecycle_policy=selected.model_lifecycle_policy,
     )
     inventory_service = IndexInventoryService(selected.source_root, selected.storage_root)
 

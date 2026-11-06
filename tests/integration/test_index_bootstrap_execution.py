@@ -16,8 +16,8 @@ def test_confirmed_fresh_build_uses_real_chroma_with_fake_embeddings(tmp_path, m
     config_path.write_text(json.dumps(config.model_dump(mode="json")), encoding="utf-8")
     selected = preview(config_path, source, storage)
 
-    def injected(plan, input_dir, storage_root, *, creation_policy):
-        return build_index(plan, input_dir, storage_root, text_adapter=_valid_text_adapter(config), creation_policy=creation_policy)
+    def injected(plan, input_dir, storage_root, *, creation_policy, model_lifecycle_policy="cached"):
+        return build_index(plan, input_dir, storage_root, text_adapter=_valid_text_adapter(config), creation_policy=creation_policy, model_lifecycle_policy=model_lifecycle_policy)
 
     monkeypatch.setattr("backend.engine.index_builder.build_index", injected)
     result = execute_build(config_path, source, storage, expected_manifest_hash=selected.plan.document_manifest_hash, expected_index_fingerprint=selected.plan.index_fingerprint)
@@ -52,8 +52,8 @@ def test_failed_build_preserves_failure_report_without_claiming_success(tmp_path
     config_path.write_text(json.dumps(config.model_dump(mode="json")), encoding="utf-8")
     selected = preview(config_path, source, storage)
 
-    def injected(plan, input_dir, storage_root, *, creation_policy):
-        return build_index(plan, input_dir, storage_root, text_adapter=StubTextAdapter(config, error=RuntimeError("private")), creation_policy=creation_policy)
+    def injected(plan, input_dir, storage_root, *, creation_policy, model_lifecycle_policy="cached"):
+        return build_index(plan, input_dir, storage_root, text_adapter=StubTextAdapter(config, error=RuntimeError("private")), creation_policy=creation_policy, model_lifecycle_policy=model_lifecycle_policy)
 
     monkeypatch.setattr("backend.engine.index_builder.build_index", injected)
     result = execute_build(config_path, source, storage, expected_manifest_hash=selected.plan.document_manifest_hash, expected_index_fingerprint=selected.plan.index_fingerprint)
@@ -72,8 +72,8 @@ def test_cli_requires_both_confirmations_and_reports_actual_success(tmp_path, mo
     assert main(args + ["--execute"]) == 2 and not storage.exists()
     assert "confirmations_required" in capsys.readouterr().err
 
-    def injected(plan, input_dir, storage_root, *, creation_policy):
-        return build_index(plan, input_dir, storage_root, text_adapter=_valid_text_adapter(config), creation_policy=creation_policy)
+    def injected(plan, input_dir, storage_root, *, creation_policy, model_lifecycle_policy="cached"):
+        return build_index(plan, input_dir, storage_root, text_adapter=_valid_text_adapter(config), creation_policy=creation_policy, model_lifecycle_policy=model_lifecycle_policy)
 
     monkeypatch.setattr("backend.engine.index_builder.build_index", injected)
     assert main(args + ["--execute", "--expected-manifest-hash", selected.plan.document_manifest_hash, "--expected-index-fingerprint", selected.plan.index_fingerprint]) == 0

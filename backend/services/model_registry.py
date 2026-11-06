@@ -14,6 +14,7 @@ from backend.config.schema import ResolvedRunConfig
 from backend.embeddings.image import ImageEmbeddingAdapter
 from backend.embeddings.text import TextEmbeddingAdapter
 from backend.engine.reranking import CrossEncoderReranker
+from backend.model_lifecycle import ModelLifecycleCoordinator, ModelLifecycleError, ModelResourceAdmission, validate_model_lifecycle_policy
 
 
 _KINDS = {"text", "image", "reranker"}
@@ -82,6 +83,8 @@ class ModelAdapterRegistry:
         text_factory: Callable[[ResolvedRunConfig], TextEmbeddingAdapter] | None = None,
         image_factory: Callable[[ResolvedRunConfig], ImageEmbeddingAdapter] | None = None,
         reranker_factory: Callable[[ResolvedRunConfig], CrossEncoderReranker] | None = None,
+        lifecycle_policy: str = "cached",
+        resource_admission: ModelResourceAdmission | None = None,
     ) -> None:
         self._text_factory = text_factory or TextEmbeddingAdapter
         self._image_factory = image_factory or ImageEmbeddingAdapter
@@ -89,10 +92,22 @@ class ModelAdapterRegistry:
         if not all(callable(factory) for factory in (self._text_factory, self._image_factory, self._reranker_factory)):
             raise ModelRuntimeError("adapter_factory_invalid")
         self._lock = threading.RLock()
+        try:
+            self._lifecycle_policy = validate_model_lifecycle_policy(lifecycle_policy)
+        except ModelLifecycleError as exc:
+            raise ModelRuntimeError(exc.error_code) from exc
+        self._lifecycle = (
+            ModelLifecycleCoordinator(resource_admission)
+            if self._lifecycle_policy == "transient_serialized" else None
+        )
         self._text: dict[tuple[str, int], TextEmbeddingAdapter] = {}
         self._image: dict[tuple[str, str, int, float], ImageEmbeddingAdapter] = {}
         self._reranker: dict[tuple[str, float, float, float], CrossEncoderReranker] = {}
         self._warmed: set[tuple[str, object]] = set()
+
+    @property
+    def lifecycle_policy(self) -> str:
+        return self._lifecycle_policy
 
     @staticmethod
     def _config(config: ResolvedRunConfig) -> ResolvedRunConfig:
@@ -115,6 +130,7 @@ class ModelAdapterRegistry:
                     raise ModelRuntimeError("text_adapter_creation_failed") from exc
                 if not isinstance(adapter, TextEmbeddingAdapter) and not all(hasattr(adapter, name) for name in ("load", "embed_query", "encode_text")):
                     raise ModelRuntimeError("text_adapter_invalid")
+                self._configure_lifecycle(adapter, "text")
                 self._text[key] = adapter
             return adapter
 
@@ -130,6 +146,7 @@ class ModelAdapterRegistry:
                     raise ModelRuntimeError("image_adapter_creation_failed") from exc
                 if not isinstance(adapter, ImageEmbeddingAdapter) and not all(hasattr(adapter, name) for name in ("load", "embed_query")):
                     raise ModelRuntimeError("image_adapter_invalid")
+                self._configure_lifecycle(adapter, "image")
                 self._image[key] = adapter
             return adapter
 
@@ -147,8 +164,20 @@ class ModelAdapterRegistry:
                     raise ModelRuntimeError("reranker_creation_failed") from exc
                 if not isinstance(adapter, CrossEncoderReranker) and not all(hasattr(adapter, name) for name in ("load", "score_pairs")):
                     raise ModelRuntimeError("reranker_invalid")
+                self._configure_lifecycle(adapter, "reranker")
                 self._reranker[key] = adapter
             return adapter
+
+    def _configure_lifecycle(self, adapter: object, component: str) -> None:
+        if self._lifecycle is None:
+            return
+        configure = getattr(adapter, "configure_lifecycle", None)
+        if not callable(configure):
+            raise ModelRuntimeError(f"{component}_adapter_lifecycle_unsupported")
+        try:
+            configure(self._lifecycle)
+        except ModelLifecycleError as exc:
+            raise ModelRuntimeError(exc.error_code) from exc
 
     def get_bundle(self, config: ResolvedRunConfig) -> ModelAdapterBundle:
         config = self._config(config)
@@ -172,6 +201,8 @@ class ModelAdapterRegistry:
         return self.get_reranker(config)
 
     def preload(self, config: ResolvedRunConfig, *, components: tuple[str, ...]) -> ModelRuntimeSnapshot:
+        if self._lifecycle is not None:
+            raise ModelRuntimeError("model_preload_disabled_by_policy")
         config = self._config(config)
         if not isinstance(components, tuple) or not components or len(set(components)) != len(components):
             raise ModelRuntimeError("components_invalid")

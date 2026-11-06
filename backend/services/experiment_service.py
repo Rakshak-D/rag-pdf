@@ -26,6 +26,7 @@ from backend.experiments.evaluation_runner import EvaluationCaseOutcome, Evaluat
 from backend.experiments.run_plan import RunPlan
 from backend.experiments.tracing import QueryTrace
 from backend.services.model_registry import ModelAdapterRegistry
+from backend.model_lifecycle import find_model_lifecycle_error
 from backend.services.index_selection import IndexSelectionError, IndexSelectionService, PinnedIndexReport
 
 
@@ -368,6 +369,9 @@ class ExperimentService:
         except ExperimentServiceError:
             raise
         except Exception as exc:
+            lifecycle_error = find_model_lifecycle_error(exc)
+            if lifecycle_error is not None:
+                raise ServiceExecutionError(lifecycle_error.error_code) from exc
             raise ServiceExecutionError("evaluation_execution_failed") from exc
         _validate_evaluation_result(result, run_plan, benchmark_suite)
         try:
@@ -425,6 +429,9 @@ class ExperimentService:
         except ExperimentServiceError:
             raise
         except Exception as exc:
+            lifecycle_error = find_model_lifecycle_error(exc)
+            if lifecycle_error is not None:
+                raise ServiceExecutionError(lifecycle_error.error_code) from exc
             raise ServiceExecutionError("ablation_execution_failed") from exc
         _validate_ablation_result(result, ablation_plan, benchmark_suite)
         try:

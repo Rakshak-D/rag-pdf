@@ -25,6 +25,7 @@ trusted source setting. HTTP clients cannot select filesystem paths.
 | `RAG_WORKBENCH_BOOTSTRAP_API_PORT` | No | `8010`; range 1–65535. |
 | `RAG_WORKBENCH_BOOTSTRAP_MAX_REQUEST_BODY_BYTES` | No | 2 MiB; range 1 byte–16 MiB. |
 | `RAG_WORKBENCH_BOOTSTRAP_QUEUE_CAPACITY` | No | 2 pending jobs; range 1–32. There is one worker. |
+| `RAG_WORKBENCH_BOOTSTRAP_MODEL_LIFECYCLE_POLICY` | No | `cached` (default) or `transient_serialized`; applies scoped admission/release to internally created build adapters. |
 
 Launch from the repository root:
 
@@ -119,6 +120,19 @@ bounded operational metadata and relative report references; configurations,
 tokens, absolute paths, source contents, and raw tracebacks are not returned.
 Statuses are `queued`, `running`, `succeeded`, `failed`, and `interrupted`.
 Only job-level progress is claimed.
+
+The default adapter policy is cached. For constrained machines, start with
+`RAG_WORKBENCH_BOOTSTRAP_MODEL_LIFECYCLE_POLICY=transient_serialized`. The
+builder serializes internally created model operations and releases text
+weights before loading image weights. Admission checks measured RAM, system
+commit headroom, and applicable CUDA free memory. The gate is process-local and
+point-in-time, not a reservation against a separate ordinary-runtime process;
+avoid concurrent model-backed work when host headroom is tight. Reserve floors
+are generic safety margins, not model-size guarantees; unknown measurements or
+low capacity fail the build with a sanitized stable lifecycle code. Fresh-only ownership,
+report validation, failure-marker preservation, and lease semantics remain
+unchanged. A custom adapter factory is caller-owned and rejected under the
+transient policy.
 
 The manager persists job metadata in SQLite but keeps complete configuration
 payloads transiently. On orderly shutdown queued jobs become interrupted. The

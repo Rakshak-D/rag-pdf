@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import gc
 import math
 from collections.abc import Callable, Sequence
 from numbers import Real
@@ -10,6 +11,8 @@ from typing import Any
 import threading
 
 import numpy as np
+
+from backend.model_lifecycle import ModelLifecycleCoordinator, ModelLifecycleError, lifecycle_scoped
 
 
 class RerankerError(RuntimeError):
@@ -43,11 +46,13 @@ def normalize_scores(values: Sequence[float] | None, *, neutral: float = 0.5) ->
 class CrossEncoderReranker:
     """A lazy, injectable wrapper around ``sentence_transformers.CrossEncoder``."""
 
-    def __init__(self, config: Any, *, loader: Callable[[str], Any] | None = None) -> None:
+    def __init__(self, config: Any, *, loader: Callable[[str], Any] | None = None, lifecycle: ModelLifecycleCoordinator | None = None) -> None:
         self.config = config
         self.model_name = config.reranker_model
         self._loader = loader
+        self._lifecycle = lifecycle
         self._model: Any | None = None
+        self._device: str | None = None
         self._load_lock = threading.Lock()
         self._inference_lock = threading.Lock()
         self._state = "unloaded"
@@ -61,7 +66,44 @@ class CrossEncoderReranker:
     def runtime_error_code(self) -> str | None:
         return self._error_code
 
+    def configure_lifecycle(self, lifecycle: ModelLifecycleCoordinator) -> None:
+        if (not isinstance(lifecycle, ModelLifecycleCoordinator) or self._model is not None
+                or self._state != "unloaded" or (self._lifecycle is not None and self._lifecycle is not lifecycle)):
+            raise ModelLifecycleError("model_lifecycle_adapter_invalid")
+        self._lifecycle = lifecycle
+
+    def _mark_lifecycle_error(self, code: str) -> None:
+        self._state = "failed"
+        self._error_code = code
+
+    @staticmethod
+    def _resource_device() -> str:
+        from backend.embeddings.text import _default_device
+
+        return _default_device()
+
+    def _release_loaded_model(self) -> None:
+        with self._load_lock:
+            model = self._model
+            device = self._device
+            self._model = None
+            self._device = None
+            if self._state != "failed":
+                self._state = "unloaded"
+                self._error_code = None
+        if model is None:
+            return
+        del model
+        gc.collect()
+        if isinstance(device, str) and device.startswith("cuda"):
+            import torch
+
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+
     def load(self) -> Any:
+        if self._lifecycle is not None and not self._lifecycle.is_active_for(self):
+            raise ModelLifecycleError("model_scoped_use_required")
         if self._model is not None:
             return self._model
         with self._load_lock:
@@ -76,16 +118,27 @@ class CrossEncoderReranker:
                     model = CrossEncoder(self.model_name)
                 if model is None or not callable(getattr(model, "predict", None)):
                     raise RerankerLoadError("reranker loader returned an invalid model")
+                try:
+                    device = str(model.device)
+                except Exception:
+                    from backend.embeddings.text import _default_device
+
+                    device = _default_device()
             except Exception as exc:
                 self._model = None
                 self._state = "failed"
                 self._error_code = "reranker_model_load_failed"
+                if self._lifecycle is not None:
+                    self._lifecycle.note_load_uncertain(self)
                 if isinstance(exc, RerankerLoadError):
                     raise
                 raise RerankerLoadError(f"could not load configured reranker {self.model_name!r}") from exc
             self._model = model
+            self._device = device
             self._state = "ready"
             self._error_code = None
+            if self._lifecycle is not None:
+                self._lifecycle.note_model_loaded(self)
             return model
 
     @staticmethod
@@ -97,6 +150,7 @@ class CrossEncoderReranker:
             raise RerankerInputError("candidate texts must be non-empty strings")
         return values
 
+    @lifecycle_scoped("reranker")
     def score_pairs(self, query: str, texts: Sequence[str]) -> list[float]:
         if not isinstance(query, str) or not query.strip():
             raise RerankerInputError("reranker query must be a non-empty string")

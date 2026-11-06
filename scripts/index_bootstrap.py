@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -76,7 +77,7 @@ def preview(config_path: str | Path, source_root: str | Path, storage_root: str 
         raise BootstrapError("preview_invalid") from exc
 
 
-def execute_build(config_path: str | Path, source_root: str | Path, storage_root: str | Path, *, expected_manifest_hash: str | None, expected_index_fingerprint: str | None):
+def execute_build(config_path: str | Path, source_root: str | Path, storage_root: str | Path, *, expected_manifest_hash: str | None, expected_index_fingerprint: str | None, model_lifecycle_policy: str = "cached"):
     """Run one confirmed fresh build; the builder revalidates under its lease."""
     if expected_manifest_hash is None or expected_index_fingerprint is None:
         raise BootstrapError("confirmations_required")
@@ -96,7 +97,13 @@ def execute_build(config_path: str | Path, source_root: str | Path, storage_root
     from backend.engine.retrieval import _validate_build_report
 
     try:
-        result = build_index(selected.plan, source_root, storage_root, creation_policy="fresh_only")
+        result = build_index(
+            selected.plan,
+            source_root,
+            storage_root,
+            creation_policy="fresh_only",
+            model_lifecycle_policy=model_lifecycle_policy,
+        )
         if not isinstance(result, IndexBuildResult) or not result.report_path.is_file():
             raise BootstrapError("build_report_unavailable")
         _absolute_safe_path(result.report_path)
@@ -131,6 +138,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", required=True)
     parser.add_argument("--storage-root", required=True)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--model-lifecycle-policy",
+        choices=("cached", "transient_serialized"),
+        default=os.environ.get("RAG_WORKBENCH_MODEL_LIFECYCLE_POLICY", "cached"),
+        help="Use cached adapters (default) or serialize model use and release each internally owned model after its operation.",
+    )
     parser.add_argument("--expected-manifest-hash")
     parser.add_argument("--expected-index-fingerprint")
     args = parser.parse_args(argv)
@@ -141,7 +154,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Index fingerprint: {result.plan.index_fingerprint}")
         print(f"Existing index: {'yes' if result.index_exists else 'no'}")
         if args.execute:
-            built = execute_build(args.config, args.source, args.storage_root, expected_manifest_hash=args.expected_manifest_hash, expected_index_fingerprint=args.expected_index_fingerprint)
+            built = execute_build(
+                args.config,
+                args.source,
+                args.storage_root,
+                expected_manifest_hash=args.expected_manifest_hash,
+                expected_index_fingerprint=args.expected_index_fingerprint,
+                model_lifecycle_policy=args.model_lifecycle_policy,
+            )
             print(f"Build ID: {built.build_id}")
             print(f"Build status: {built.status}")
             print(f"Extracted pages: {built.extracted_pages}")

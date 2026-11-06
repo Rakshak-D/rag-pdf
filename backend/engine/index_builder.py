@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 from time import perf_counter
 from typing import Any, Literal
 import uuid
@@ -16,6 +17,7 @@ import numpy as np
 from backend.config.paths import PathContainmentError, resolve_disjoint_paths, resolve_owned_path
 from backend.config.schema import ResolvedRunConfig
 from backend.config.writer_lease import WriterLease
+from backend.model_lifecycle import ModelLifecycleCoordinator, ModelLifecycleError, ModelResourceAdmission, validate_model_lifecycle_policy
 from backend.embeddings.image import ImageEmbeddingAdapter, ImageEmbeddingBatchResult
 from backend.embeddings.text import EmbeddingBatchResult, TextEmbeddingAdapter
 from backend.experiments.run_plan import RunPlan
@@ -326,7 +328,9 @@ def _validate_embedding_result(
 
 def _safe_failure_message(stage: FailureStage, exc: BaseException) -> str:
     """Return a bounded report message without exposing arbitrary exception text."""
-
+    error_code = getattr(exc, "error_code", None)
+    if isinstance(error_code, str) and re.fullmatch(r"[a-z][a-z0-9_]{1,63}", error_code):
+        return f"{stage} failed ({error_code})"
     return f"{stage} failed ({type(exc).__name__})"
 
 
@@ -420,10 +424,18 @@ def build_index(
     text_adapter: Any | None = None,
     image_adapter: Any | None = None,
     creation_policy: Literal["legacy", "fresh_only"] = "legacy",
+    model_lifecycle_policy: str = "cached",
+    model_resource_admission: ModelResourceAdmission | None = None,
 ) -> IndexBuildResult:
     """Build under exclusive writer ownership without active-index promotion."""
     if creation_policy not in {"legacy", "fresh_only"}:
         raise ValueError("creation_policy_invalid")
+    try:
+        lifecycle_policy = validate_model_lifecycle_policy(model_lifecycle_policy)
+    except ModelLifecycleError as exc:
+        raise IndexBuildError(exc.error_code) from exc
+    if lifecycle_policy == "transient_serialized" and (text_adapter is not None or image_adapter is not None):
+        raise IndexBuildError("model_lifecycle_adapter_ownership_unverified")
     if not isinstance(run_plan, RunPlan):
         raise TypeError("build_index requires a RunPlan")
     run_plan.verify_integrity()
@@ -446,7 +458,12 @@ def build_index(
                 pass
             else:
                 raise FreshIndexExistsError("index_already_exists")
-        return _build_index_owned(run_plan, input_dir, storage_root, text_adapter=text_adapter, image_adapter=image_adapter, lease=lease, creation_policy=creation_policy)
+        return _build_index_owned(
+            run_plan, input_dir, storage_root, text_adapter=text_adapter,
+            image_adapter=image_adapter, lease=lease, creation_policy=creation_policy,
+            model_lifecycle_policy=lifecycle_policy,
+            model_resource_admission=model_resource_admission,
+        )
 
 
 def _build_index_owned(
@@ -458,6 +475,8 @@ def _build_index_owned(
     image_adapter: Any | None,
     lease: WriterLease,
     creation_policy: Literal["legacy", "fresh_only"],
+    model_lifecycle_policy: str = "cached",
+    model_resource_admission: ModelResourceAdmission | None = None,
 ) -> IndexBuildResult:
     """Run the existing build pipeline with the caller's writer capability."""
 
@@ -474,6 +493,7 @@ def _build_index_owned(
             f"plan={run_plan.document_manifest_hash}, current={manifest.content_hash}"
         )
     _validate_adapter_configuration(text_adapter, image_adapter, config)
+    lifecycle = ModelLifecycleCoordinator(model_resource_admission) if model_lifecycle_policy == "transient_serialized" else None
 
     build_id = uuid.uuid4().hex
     artifact_root, image_root = _build_artifact_paths(owned_root, build_id)
@@ -552,7 +572,7 @@ def _build_index_owned(
 
         if text_ids:
             stage = "text_embedding"
-            adapter = text_adapter or TextEmbeddingAdapter(config)
+            adapter = text_adapter or TextEmbeddingAdapter(config, lifecycle=lifecycle)
             text_result = adapter.embed_documents(chunks)
             text_seconds = max(0.0, float(text_result.elapsed_time))
             stage = "embedding_validation"
@@ -566,7 +586,7 @@ def _build_index_owned(
             text_embeddings = None
         if image_objects:
             stage = "image_embedding"
-            adapter = image_adapter or ImageEmbeddingAdapter(config)
+            adapter = image_adapter or ImageEmbeddingAdapter(config, lifecycle=lifecycle)
             image_result = adapter.embed_images(image_objects)
             image_seconds = max(0.0, float(image_result.elapsed_time))
             image_failures = int(image_result.failed_loads)

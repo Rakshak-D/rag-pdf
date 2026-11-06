@@ -8,6 +8,7 @@ from pathlib import Path
 import threading
 
 import pymupdf
+import numpy as np
 import pytest
 from starlette.testclient import TestClient
 
@@ -19,6 +20,9 @@ from backend.engine.manifest import build_document_manifest
 from backend.engine.retrieval import HybridHit, HybridRetrievalResult, query_id_for
 from backend.experiments.run_plan import build_run_plan
 from backend.services.ask_service import AskError, AskImageReferenceRegistry, AskService
+from backend.services.model_registry import ModelAdapterRegistry
+from backend.model_lifecycle import ModelResourceAdmission, ResourceMeasurements
+from backend.embeddings.text import TextEmbeddingAdapter
 from backend.engine.context import SelectedImageEvidence
 from notebooks.config import Config
 
@@ -38,14 +42,17 @@ class WordEncoder:
 
 
 class FakeOllama:
-    def __init__(self, answer: str = "The supplied passage supports this answer [T1] [I1] [T99].", fail: bool = False, failure: Exception | None = None):
+    def __init__(self, answer: str = "The supplied passage supports this answer [T1] [I1] [T99].", fail: bool = False, failure: Exception | None = None, on_chat=None):
         self.answer = answer
         self.fail = fail
         self.failure = failure
+        self.on_chat = on_chat
         self.calls: list[dict[str, object]] = []
 
     def chat(self, **request):
         self.calls.append(request)
+        if self.on_chat is not None:
+            self.on_chat()
         if self.failure is not None:
             raise self.failure
         if self.fail:
@@ -223,6 +230,57 @@ def test_authenticated_ask_returns_pinned_text_and_image_evidence(tmp_path: Path
         assert image_response.headers["x-content-type-options"] == "nosniff"
         assert client.get("/api/v1/jobs", headers=_auth()).json()["jobs"] == []
         assert client.get("/api/v1/artifacts", headers=_auth()).json()["artifacts"] == []
+
+
+def test_transient_registry_releases_retrieval_model_before_generation(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("backend.embeddings.text._default_device", lambda: "cpu")
+    settings, config, manifest, _image = _fixture(tmp_path)
+    settings = replace(settings, model_lifecycle_policy="transient_serialized")
+    mib = 1024 * 1024
+    admission = ModelResourceAdmission(
+        observer=lambda _device: ResourceMeasurements(8 * mib, 8 * mib, 8 * mib),
+        min_available_ram_bytes=1,
+        min_commit_headroom_bytes=1,
+        min_cuda_free_bytes=1,
+    )
+
+    class EmbedModel:
+        def encode(self, **kwargs):
+            value = kwargs["sentences"]
+            if isinstance(value, list):
+                return np.ones((len(value), 3), dtype=np.float32)
+            return np.ones(3, dtype=np.float32)
+
+    registry = ModelAdapterRegistry(
+        text_factory=lambda value: TextEmbeddingAdapter(value, model_loader=lambda *_: EmbedModel()),
+        lifecycle_policy="transient_serialized",
+        resource_admission=admission,
+    )
+    holder = {"registry": registry}
+
+    def retrieval(question, plan, storage_root, **kwargs):
+        kwargs["text_adapter"].embed_query(question)
+        return _retrieval_for(include_image=False)(question, plan, storage_root, **kwargs)
+
+    def generation_boundary():
+        assert holder["registry"]._lifecycle.active_uses == 0
+        assert holder["registry"]._lifecycle.residency_state == "clear"
+        assert all(item.state == "unloaded" for item in holder["registry"].snapshot().components)
+
+    ollama = FakeOllama(on_chat=generation_boundary)
+    runtime = build_runtime(
+        settings,
+        model_registry=registry,
+        context_formatter=ContextFormatter(encoder=WordEncoder()),
+        generation_adapter=LocalGenerationAdapter(client_factory=lambda _host: ollama, encoder=WordEncoder()),
+        ask_retrieval_callable=retrieval,
+    )
+    with TestClient(runtime.app) as client:
+        _select(client, config, manifest.content_hash)
+        response = client.post("/api/v1/ask", headers=_auth(), json={"question": "What is described?"})
+        assert response.status_code == 200, response.text
+        assert response.json()["outcome"] == "answered"
+        assert len(ollama.calls) == 1
 
 
 def test_no_usable_evidence_skips_generation(tmp_path: Path):

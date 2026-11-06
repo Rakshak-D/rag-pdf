@@ -61,6 +61,7 @@ def _environment(settings: LocalRuntimeSettings) -> dict[str, str]:
         "RAG_WORKBENCH_CATALOG_DB_PATH": str(settings.catalog_db_path),
         "RAG_WORKBENCH_JOBS_DB_PATH": str(settings.jobs_db_path),
         "RAG_WORKBENCH_INDEX_STORAGE_ROOT": str(settings.index_storage_root),
+        "RAG_WORKBENCH_MODEL_LIFECYCLE_POLICY": settings.model_lifecycle_policy,
     }
     if settings.build_report_path is not None:
         values["RAG_WORKBENCH_BUILD_REPORT_PATH"] = str(settings.build_report_path)
@@ -75,6 +76,7 @@ def test_environment_settings_require_paths_and_default_to_loopback(tmp_path: Pa
     assert loaded.max_request_body_bytes == 24 * 1024 * 1024
     assert loaded.worker_count == 1
     assert loaded.max_pending_jobs == 10
+    assert loaded.model_lifecycle_policy == "cached"
     assert "test-local-token" not in repr(loaded)
 
     missing = _environment(settings)
@@ -105,6 +107,7 @@ def test_environment_settings_require_paths_and_default_to_loopback(tmp_path: Pa
         ({"port": True}, "api_port_invalid"),
         ({"max_request_body_bytes": 64 * 1024 * 1024 + 1}, "request_limit_invalid"),
         ({"worker_count": 33}, "worker_count_invalid"),
+        ({"model_lifecycle_policy": "transient"}, "model_lifecycle_policy_invalid"),
     ],
 )
 def test_runtime_settings_reject_invalid_values(tmp_path: Path, changes, code):
@@ -142,6 +145,13 @@ def test_path_overlap_and_missing_report_fail_before_artifact_creation(tmp_path:
         build_runtime(bad_report_path)
     assert error.value.error_code == "build_report_path_invalid"
     assert not settings.artifact_store_dir.exists()
+
+
+def test_transient_lifecycle_policy_is_opt_in_and_startup_remains_lazy(tmp_path: Path):
+    settings = replace(_settings(tmp_path), model_lifecycle_policy="transient_serialized")
+    runtime = build_runtime(settings)
+    assert runtime.model_registry.lifecycle_policy == "transient_serialized"
+    assert runtime.model_registry.snapshot().components == ()
 
 
 def test_symlinked_runtime_roots_are_rejected_before_side_effects(tmp_path: Path):

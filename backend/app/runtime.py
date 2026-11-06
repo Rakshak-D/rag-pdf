@@ -24,6 +24,7 @@ from backend.services.ask_service import AskService
 from backend.services.job_manager import ExperimentJobManager
 from backend.services.model_registry import ModelAdapterRegistry
 from backend.services.index_readiness import IndexReadinessService
+from backend.model_lifecycle import ModelLifecycleError, validate_model_lifecycle_policy
 from .main import create_app
 
 
@@ -44,6 +45,7 @@ _ENV = {
     "max_request_body_bytes": "RAG_WORKBENCH_MAX_REQUEST_BODY_BYTES",
     "worker_count": "RAG_WORKBENCH_WORKER_COUNT",
     "max_pending_jobs": "RAG_WORKBENCH_MAX_PENDING_JOBS",
+    "model_lifecycle_policy": "RAG_WORKBENCH_MODEL_LIFECYCLE_POLICY",
 }
 
 
@@ -100,6 +102,7 @@ class LocalRuntimeSettings:
     max_request_body_bytes: int = _DEFAULT_BODY_LIMIT
     worker_count: int = 1
     max_pending_jobs: int = 10
+    model_lifecycle_policy: str = "cached"
 
     def __post_init__(self) -> None:
         if not isinstance(self.api_token, str) or not self.api_token or len(self.api_token) > 4096 or any(char.isspace() for char in self.api_token):
@@ -113,6 +116,10 @@ class LocalRuntimeSettings:
         _positive_int(self.max_request_body_bytes, maximum=_MAX_BODY_LIMIT, code="request_limit_invalid")
         _positive_int(self.worker_count, maximum=32, code="worker_count_invalid")
         _positive_int(self.max_pending_jobs, maximum=1000, code="pending_limit_invalid")
+        try:
+            validate_model_lifecycle_policy(self.model_lifecycle_policy)
+        except ModelLifecycleError as exc:
+            raise RuntimeConfigurationError(exc.error_code) from exc
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> "LocalRuntimeSettings":
@@ -144,6 +151,7 @@ class LocalRuntimeSettings:
             max_request_body_bytes=integer("max_request_body_bytes", _DEFAULT_BODY_LIMIT, _MAX_BODY_LIMIT, "request_limit_invalid"),
             worker_count=integer("worker_count", 1, 32, "worker_count_invalid"),
             max_pending_jobs=integer("max_pending_jobs", 10, 1000, "pending_limit_invalid"),
+            model_lifecycle_policy=values.get(_ENV["model_lifecycle_policy"], "cached"),
         )
 
 
@@ -254,7 +262,9 @@ def build_runtime(
         selected.artifact_store_dir.mkdir(exist_ok=True)
         artifact_store = ExperimentArtifactStore(selected.artifact_store_dir)
         catalog = ExperimentCatalog(selected.catalog_db_path, artifact_store)
-        registry = model_registry if model_registry is not None else ModelAdapterRegistry()
+        registry = model_registry if model_registry is not None else ModelAdapterRegistry(
+            lifecycle_policy=selected.model_lifecycle_policy,
+        )
         formatter = context_formatter if context_formatter is not None else ContextFormatter()
         generator = generation_adapter if generation_adapter is not None else LocalGenerationAdapter()
         selection_service = IndexSelectionService(

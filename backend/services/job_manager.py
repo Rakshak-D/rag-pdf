@@ -19,6 +19,7 @@ from backend.experiments.ablation_plans import AblationPlan
 from backend.experiments.benchmark import BenchmarkSuite
 from backend.experiments.run_plan import RunPlan
 from backend.services.index_selection import PinnedIndexReport
+from backend.model_lifecycle import find_model_lifecycle_error
 
 from .experiment_service import (
     ExperimentService,
@@ -279,6 +280,9 @@ class ExperimentJobManager:
 
     @staticmethod
     def _failure_code(exc: BaseException) -> str:
+        lifecycle_error = find_model_lifecycle_error(exc)
+        if lifecycle_error is not None:
+            return lifecycle_error.error_code
         selection_code = getattr(exc, "code", None)
         if isinstance(selection_code, str) and _CODE_RE.fullmatch(selection_code):
             return selection_code

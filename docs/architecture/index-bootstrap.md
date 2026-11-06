@@ -29,6 +29,15 @@ observations; files can change afterward. Actual execution may load embedding
 models, download weights according to their configured loaders, and consume
 substantial CPU, GPU, memory, and disk resources.
 
+Builds use cached adapters by default. Pass
+`--model-lifecycle-policy transient_serialized` to serialize internally owned
+model use and release each model after its embedding operation. This policy
+checks measured RAM, system commit, and applicable CUDA free memory before
+loading; model identities and numerical embedding behavior do not change. Its
+reserve floors are generic headroom guards, not guarantees of peak capacity or
+OS memory return. Caller-injected adapters are not implicitly released and are
+rejected when transient ownership is requested.
+
 ## Writer ownership and failure
 
 Cooperating repository builders and writable `ChromaVectorStore.open()` calls

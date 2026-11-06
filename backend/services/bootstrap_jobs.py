@@ -18,6 +18,7 @@ from typing import Callable
 from backend.config.schema import ResolvedRunConfig
 from backend.engine.index_builder import IndexBuildResult, build_index
 from backend.engine.manifest import build_document_manifest
+from backend.model_lifecycle import ModelLifecycleError, validate_model_lifecycle_policy
 from backend.experiments.run_plan import RunPlan, build_run_plan
 
 
@@ -63,13 +64,17 @@ def canonical_request_identity(config: ResolvedRunConfig, manifest_hash: str, fi
 class BootstrapJobManager:
     """One-worker process-local queue with SQLite idempotency and restart fencing."""
 
-    def __init__(self, database: str | Path, source: str | Path, storage: str | Path, *, capacity: int = 2, adapter_factory: Callable[[], tuple[object | None, object | None]] | None = None):
+    def __init__(self, database: str | Path, source: str | Path, storage: str | Path, *, capacity: int = 2, adapter_factory: Callable[[], tuple[object | None, object | None]] | None = None, model_lifecycle_policy: str = "cached"):
         self.path = Path(database)
         self.source = Path(source)
         self.storage = Path(storage)
         if isinstance(capacity, bool) or not isinstance(capacity, int) or not 1 <= capacity <= 32:
             raise BootstrapJobError("queue_capacity_invalid")
         self.capacity = capacity
+        try:
+            self.model_lifecycle_policy = validate_model_lifecycle_policy(model_lifecycle_policy)
+        except ModelLifecycleError as exc:
+            raise BootstrapJobError(exc.error_code) from exc
         self.adapter_factory = adapter_factory or (lambda: (None, None))
         self._queue: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=capacity)
         self._completion: dict[str, threading.Event] = {}
@@ -373,7 +378,15 @@ class BootstrapJobManager:
                 self._last_worker_stage = "adapter_factory"
                 text_adapter, image_adapter = self.adapter_factory()
                 self._last_worker_stage = "build"
-                result = build_index(plan, self.source, self.storage, text_adapter=text_adapter, image_adapter=image_adapter, creation_policy="fresh_only")
+                result = build_index(
+                    plan,
+                    self.source,
+                    self.storage,
+                    text_adapter=text_adapter,
+                    image_adapter=image_adapter,
+                    creation_policy="fresh_only",
+                    model_lifecycle_policy=self.model_lifecycle_policy,
+                )
                 status = "succeeded" if result.status in {"completed", "completed_with_warnings"} and not result.partial_persistence else "failed"
                 if status == "succeeded":
                     self._last_worker_stage = "report_validation"
