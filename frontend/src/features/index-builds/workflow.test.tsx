@@ -161,7 +161,14 @@ describe("bootstrap index-build workflow", () => {
   });
 
   it("keeps bootstrap inventory and ordinary selection credentials on their own routes", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => responseFor(String(input), init));
+    let selected = false;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/index/selection") {
+        if (init?.method === "POST") selected = true;
+        return json(selectionResponse(selected));
+      }
+      return responseFor(String(input), init);
+    });
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup(); mount();
     await connectBootstrap(user);

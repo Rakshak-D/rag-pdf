@@ -5,6 +5,8 @@ import type { BootstrapDocumentRecord, BootstrapDocumentsResponse, BootstrapStat
 import { apiErrorText } from "../../components/apiErrorText";
 import { BootstrapConnectionPanel } from "../index-builds/BootstrapConnectionPanel";
 import { PageHeading } from "../shared";
+import { DocumentsIndexWorkflow } from "./DocumentsIndexWorkflow";
+import "./documents-workflow.css";
 
 interface Props {
   token: string | null;
@@ -41,6 +43,11 @@ function documentFailure(error: unknown): string {
   return apiErrorText(error);
 }
 
+function uploadOutcomeUncertain(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.kind === "network" || error.kind === "non_json" ||
+    error.kind === "malformed_response" || error.status === null || error.status >= 500;
+}
+
 function DocumentRow({ document }: { document: BootstrapDocumentRecord }) {
   return <tr>
     <th scope="row"><span className="document-file-mark" aria-hidden="true">PDF</span><span className="document-filename">{document.relative_path}</span></th>
@@ -59,6 +66,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
   const [offset, setOffset] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadNeedsInventoryRefresh, setUploadNeedsInventoryRefresh] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -66,6 +74,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
   const uploadController = useRef<AbortController | null>(null);
   const uploadSerial = useRef(0);
   const submitting = useRef(false);
+  const requiresUploadRefresh = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -76,7 +85,16 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
     }
     setLoading(true); setInventoryError(null);
     void client.listDocuments({ limit: pageSize, offset, signal: controller.signal })
-      .then((result) => { if (active) setInventory(result); })
+      .then((result) => {
+        if (!active) return;
+        setInventory(result);
+        if (requiresUploadRefresh.current) {
+          requiresUploadRefresh.current = false;
+          setUploadNeedsInventoryRefresh(false);
+          setWarning(null);
+          setUploadError(null);
+        }
+      })
       .catch((error: unknown) => { if (active && !controller.signal.aborted) setInventoryError(apiErrorText(error)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; controller.abort(); };
@@ -95,6 +113,8 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
   async function connect(candidate: string): Promise<boolean> {
     const connected = await onConnect(candidate);
     if (connected) {
+      requiresUploadRefresh.current = false;
+      setUploadNeedsInventoryRefresh(false);
       setInventory(null); setInventoryError(null); setUploadError(null); setFeedback(null); setWarning(null); setOffset(0);
     }
     return connected;
@@ -105,6 +125,8 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
     uploadController.current?.abort();
     uploadController.current = null;
     submitting.current = false;
+    requiresUploadRefresh.current = false;
+    setUploadNeedsInventoryRefresh(false);
     setUploading(false); setUploadError(null); setFeedback(null); setWarning(null); setInventory(null); setInventoryError(null);
     clearFile();
     onDisconnect();
@@ -155,10 +177,19 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
         setFeedback(`${result.document.relative_path} is now visible in the source inventory.`);
         setWarning("The import response could not confirm the manifest at publication time; the later inventory now confirms the file.");
       } else {
+        requiresUploadRefresh.current = true;
+        setUploadNeedsInventoryRefresh(true);
         setWarning("The server reports that the PDF was published but could not confirm the updated inventory. Do not upload it again until the inventory is refreshed.");
       }
     } catch (error) {
-      if (serial === uploadSerial.current && !controller.signal.aborted) setUploadError(documentFailure(error));
+      if (serial === uploadSerial.current && !controller.signal.aborted) {
+        setUploadError(documentFailure(error));
+        if (uploadOutcomeUncertain(error)) {
+          requiresUploadRefresh.current = true;
+          setUploadNeedsInventoryRefresh(true);
+          setWarning("The upload response was uncertain. Refresh the source inventory before attempting another upload.");
+        }
+      }
     } finally {
       if (serial === uploadSerial.current) {
         submitting.current = false; setUploading(false); uploadController.current = null;
@@ -171,10 +202,10 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
 
   return <div className="documents-page">
     <PageHeading
-      eyebrow="TRUSTED PDF SOURCE"
+      eyebrow="YOUR DOCUMENTS"
       title="Documents"
-      description="Import PDFs into the bootstrap service’s configured source and review their manifest identities."
-      actions={<Link className="button button--quiet" to="/index-builds">Open Index Builds</Link>}
+      description="Import PDFs, check the current source, and prepare an index when you are ready."
+      actions={<Link className="button button--quiet" to="/index-builds">Advanced job details</Link>}
     />
 
     <BootstrapConnectionPanel
@@ -194,7 +225,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
           id="document-pdf"
           type="file"
           accept="application/pdf,.pdf"
-          disabled={!token || uploading || loading || !inventory}
+          disabled={!token || uploading || loading || !inventory || uploadNeedsInventoryRefresh}
           onChange={(event) => {
             setSelectedFile(event.currentTarget.files?.[0] ?? null);
             setUploadError(null); setFeedback(null); setWarning(null);
@@ -203,7 +234,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
         <p className="documents-filename-help">Use a simple ASCII filename with lowercase <code>.pdf</code>; path characters and Windows device names are rejected.</p>
         {selectedFile ? <p className="documents-selected-file">Selected: <strong>{selectedFile.name}</strong> · {formatBytes(selectedFile.size)}</p> : null}
         <div className="documents-upload-actions">
-          <button className="button button--primary" type="submit" disabled={!token || !inventory || !selectedFile || uploading || loading}>
+          <button className="button button--primary" type="submit" disabled={!token || !inventory || !selectedFile || uploading || loading || uploadNeedsInventoryRefresh}>
             {uploading ? "Importing PDF…" : "Import PDF"}
           </button>
           {uploading ? <span role="status">Validating and publishing the selected PDF.</span> : null}
@@ -238,5 +269,13 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
             </> : null}
       <p className="documents-indexing-note">Source availability does not mean a document has been indexed or can be queried.</p>
     </section>
+
+    <DocumentsIndexWorkflow
+      token={token}
+      status={status}
+      sourceManifestHash={inventory?.manifest_hash ?? null}
+      sourceCount={inventory?.total ?? null}
+      onRefreshDocuments={() => setRefreshVersion((value) => value + 1)}
+    />
   </div>;
 }

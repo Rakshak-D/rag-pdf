@@ -104,11 +104,12 @@ describe("IndexSelectionPanel", () => {
   });
 
   it("selects only a compatible candidate with the ordinary token and confirms report-level state", async () => {
+    let selected = false;
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = String(input);
       if (path !== "/api/v1/index/selection") return json({ error: { code: "unexpected_route" } }, 404);
-      if (init?.method === "POST") return json(state("selected", 1));
-      return json(state());
+      if (init?.method === "POST") { selected = true; return json(state("selected", 1)); }
+      return json(selected ? state("selected", 1) : state());
     });
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup();
@@ -149,6 +150,7 @@ describe("IndexSelectionPanel", () => {
     await user.click(screen.getByRole("button", { name: "Select report" }));
     expect(await screen.findByText("The selection request response was interrupted; the runtime confirms the selected report.")).toBeInTheDocument();
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method !== "POST")).toHaveLength(2);
     expect(reads).toBe(2);
   });
 
@@ -171,10 +173,11 @@ describe("IndexSelectionPanel", () => {
   });
 
   it("prevents duplicate selection submissions while a request is pending", async () => {
+    let selected = false;
     let resolvePost!: (response: Response) => void;
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
-      if (init?.method === "POST") return new Promise<Response>((resolve) => { resolvePost = resolve; });
-      return Promise.resolve(json(state()));
+      if (init?.method === "POST") return new Promise<Response>((resolve) => { resolvePost = (response) => { selected = true; resolve(response); }; });
+      return Promise.resolve(selected ? json(state("selected", 1)) : json(state()));
     });
     vi.stubGlobal("fetch", fetcher);
     mount("ordinary-test-token");

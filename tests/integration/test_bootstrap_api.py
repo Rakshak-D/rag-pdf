@@ -12,6 +12,7 @@ from backend.bootstrap_app.runtime import BootstrapConfigurationError, Bootstrap
 from backend.engine.manifest import build_document_manifest
 from backend.experiments.run_plan import build_run_plan
 from backend.config import ResolvedRunConfig
+from notebooks.config import Config
 from tests.unit.test_experiment_service import _service
 
 
@@ -84,6 +85,53 @@ def test_bootstrap_starts_without_build_report_and_exposes_only_bootstrap_routes
         assert client.post("/api/v1/evaluations", headers=_headers(), json={}).status_code == 404
     assert not storage.exists()
     assert str(tmp_path) not in response.text
+
+
+def test_bootstrap_configuration_is_authenticated_trusted_and_non_destructive(tmp_path, monkeypatch):
+    runtime, source, storage, state, _request_config, _manifest, _plan = _fixture(tmp_path)
+    from backend.vectorstore.chroma_store import ChromaVectorStore
+    from backend.embeddings.image import ImageEmbeddingAdapter
+    from backend.embeddings.text import TextEmbeddingAdapter
+
+    monkeypatch.setattr(ChromaVectorStore, "open", lambda *args, **kwargs: pytest.fail("configuration opened Chroma"))
+    monkeypatch.setattr(ChromaVectorStore, "create_new", lambda *args, **kwargs: pytest.fail("configuration created Chroma"))
+    monkeypatch.setattr(TextEmbeddingAdapter, "__init__", lambda *args, **kwargs: pytest.fail("configuration initialized text model"))
+    monkeypatch.setattr(ImageEmbeddingAdapter, "__init__", lambda *args, **kwargs: pytest.fail("configuration initialized image model"))
+
+    with TestClient(runtime.app) as client:
+        assert client.get("/api/v1/bootstrap/configuration").status_code == 401
+        response = client.get("/api/v1/bootstrap/configuration", headers=_headers())
+
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    payload = response.json()
+    assert payload["schema_version"] == "1"
+    assert payload["configuration_source"] == "trusted_server_defaults"
+    resolved = ResolvedRunConfig.model_validate(payload["resolved_config"])
+    defaults = ResolvedRunConfig.from_legacy(Config())
+    for field in ResolvedRunConfig.model_fields:
+        if field not in {
+            "pdf_dir", "images_dir", "database_dir", "results_dir",
+            "model_comparison_results_dir", "retrieval_results_dir",
+            "reset_collections_on_start", "workbench_policy",
+        }:
+            assert getattr(resolved, field) == getattr(defaults, field), field
+    assert Path(resolved.pdf_dir) == source
+    assert Path(resolved.images_dir) == storage / "build-artifacts"
+    assert Path(resolved.database_dir) == state / "database"
+    assert Path(resolved.results_dir) == state / "results"
+    assert Path(resolved.model_comparison_results_dir) == state / "model-comparison-results"
+    assert Path(resolved.retrieval_results_dir) == state / "retrieval-results"
+    assert resolved.reset_collections_on_start is False
+    assert resolved.workbench_policy.allow_destructive_index_reset is False
+    assert resolved.workbench_policy.allow_collection_delete is False
+    assert not (storage / "build-artifacts").exists()
+    assert not (state / "database").exists()
+    assert TOKEN not in response.text
+    assert all(path.is_relative_to(source) or path.is_relative_to(storage) or path.is_relative_to(state)
+               for path in (Path(resolved.pdf_dir), Path(resolved.images_dir), Path(resolved.database_dir),
+                            Path(resolved.results_dir), Path(resolved.model_comparison_results_dir),
+                            Path(resolved.retrieval_results_dir)))
 
 
 def test_bootstrap_authentication_body_validation_and_source_binding(tmp_path):

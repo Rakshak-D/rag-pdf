@@ -59,6 +59,27 @@ def test_bootstrap_route_uses_separate_credential_and_fixed_upstream():
     assert seen[0].headers["authorization"] != f"Bearer {ORDINARY}"
 
 
+def test_trusted_configuration_route_is_bootstrap_only_and_origin_protected():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"schema_version": "1", "resolved_config": {}})
+
+    with TestClient(_app(handler)) as client:
+        response = client.get("/bootstrap-api/v1/bootstrap/configuration", headers={"Host": HOST})
+        ordinary_attempt = client.get("/api/v1/bootstrap/configuration", headers={"Host": HOST})
+        cross_origin = client.get("/bootstrap-api/v1/bootstrap/configuration", headers={"Host": HOST, "Origin": "http://evil.example"})
+
+    assert response.status_code == 200
+    assert seen[0].url == "http://127.0.0.1:8010/api/v1/bootstrap/configuration"
+    assert seen[0].headers["authorization"] == f"Bearer {BOOTSTRAP}"
+    assert seen[0].headers["authorization"] != f"Bearer {ORDINARY}"
+    assert ordinary_attempt.status_code == 404
+    assert cross_origin.status_code == 403
+    assert len(seen) == 1
+
+
 def test_gateway_enforces_host_origin_csrf_and_fixed_route_map():
     calls = []
     app = _app(lambda request: calls.append(request) or httpx.Response(200, json={"ok": True}))

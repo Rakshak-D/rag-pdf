@@ -56,6 +56,7 @@ _ORDINARY_DYNAMIC = (
 _BOOTSTRAP_EXACT: dict[str, set[str]] = {
     "/health": {"GET"},
     "/api/v1/bootstrap/status": {"GET"},
+    "/api/v1/bootstrap/configuration": {"GET"},
     "/api/v1/bootstrap/documents": {"GET", "POST"},
     "/api/v1/bootstrap/preview": {"POST"},
     "/api/v1/bootstrap/index-inventory": {"POST"},
