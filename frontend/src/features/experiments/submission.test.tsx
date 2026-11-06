@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -81,14 +81,14 @@ async function confirmScope(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("experiment submission workflows", () => {
-  it("navigates to evaluation and ablation workflows using the research navigation", async () => {
+  it("keeps evaluation and ablation workflows reachable from the retained routes", async () => {
     const fetcher = fetchWith(() => jsonResponse({ jobs: [] }));
     vi.stubGlobal("fetch", fetcher);
-    const user = userEvent.setup();
     const router = mount("/");
-    await user.click(screen.getByRole("link", { name: "Evaluations" }));
+    await router.navigate("/experiments/evaluation");
     expect(await screen.findByRole("heading", { name: "Evaluation run" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Evaluation run" })).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("link", { name: "Results" })).toHaveAttribute("aria-current", "page");
+    const user = userEvent.setup();
     await connect(user);
     await router.navigate("/experiments/ablation");
     expect(await screen.findByRole("heading", { name: "2. Resolved configuration" })).toBeInTheDocument();

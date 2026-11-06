@@ -5,6 +5,7 @@ import type {
   AblationVariantCatalog,
   AskRequest,
   AskResponse,
+  ChatModelCatalog,
   ApiErrorEnvelope,
   ArtifactListFilters,
   BootstrapInventoryCandidate,
@@ -35,6 +36,8 @@ import type {
   EvaluationSubmissionResponse,
   ExperimentJobRecord,
   HealthResponse,
+  GeneralChatRequest,
+  GeneralChatResponse,
   JobEnvelope,
   JobListFilters,
   ModelComponentStatus,
@@ -210,6 +213,22 @@ function isModelStatus(value: unknown): value is ModelComponentStatus {
   );
 }
 
+function isChatModelCatalog(value: unknown): value is ChatModelCatalog {
+  return isRecord(value) && (value.availability === "available" || value.availability === "unavailable") &&
+    typeof value.configured_model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value.configured_model) &&
+    typeof value.configured_model_available === "boolean" && Array.isArray(value.available_models) &&
+    value.available_models.length <= 128 && value.available_models.every((model) => typeof model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model)) &&
+    (value.error_code === null || value.error_code === "ollama_unavailable") &&
+    (value.availability === "available" ? value.error_code === null : value.error_code === "ollama_unavailable");
+}
+
+function isGeneralChatResponse(value: unknown): value is GeneralChatResponse {
+  return isRecord(value) && value.mode === "general" && typeof value.answer === "string" && value.answer.length > 0 && value.answer.length <= 16_000 &&
+    typeof value.model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value.model);
+}
+
+const DEFAULT_LOCAL_GATEWAY = import.meta.env.VITE_RAG_LOCAL_GATEWAY === "true";
+
 function isJob(value: unknown): value is ExperimentJobRecord {
   if (!isRecord(value) || !hasStrings(value, ["job_id", "job_type", "status", "created_at", "benchmark_id", "benchmark_version"])) return false;
   const statuses = ["queued", "running", "succeeded", "partial", "failed", "cancelled", "interrupted"];
@@ -316,18 +335,22 @@ export class WorkbenchApiClient {
   private readonly token: string | null;
   private readonly baseUrl: string;
   private readonly fetcher: FetchLike;
+  private readonly localGateway: boolean;
 
-  constructor(options: { token?: string | null; baseUrl?: string; fetcher?: FetchLike } = {}) {
+  constructor(options: { token?: string | null; baseUrl?: string; fetcher?: FetchLike; localGateway?: boolean } = {}) {
     this.token = options.token ?? null;
     this.baseUrl = options.baseUrl ?? "";
     this.fetcher = options.fetcher ?? fetch;
+    this.localGateway = options.localGateway ?? DEFAULT_LOCAL_GATEWAY;
   }
 
   private async request(path: string, options: { method?: string; body?: unknown; protected?: boolean; signal?: AbortSignal; maxResponseBytes?: number; preserveJsonText?: boolean } = {}): Promise<unknown> {
     const headers = new Headers();
     if (options.protected !== false && path.startsWith("/api/v1/")) {
-      if (!this.token) throw new ApiError("http", "authentication_required", 401);
-      headers.set("Authorization", `Bearer ${this.token}`);
+      if (!this.localGateway) {
+        if (!this.token) throw new ApiError("http", "authentication_required", 401);
+        headers.set("Authorization", `Bearer ${this.token}`);
+      }
     }
     const init: RequestInit = {
       method: options.method ?? "GET",
@@ -451,14 +474,35 @@ export class WorkbenchApiClient {
     return value;
   }
 
+  async chatModels(signal?: AbortSignal): Promise<ChatModelCatalog> {
+    const value = await this.request("/api/v1/chat/models", signal ? { signal } : {});
+    if (!isChatModelCatalog(value)) malformed();
+    return value;
+  }
+
+  async generalChat(input: GeneralChatRequest, signal?: AbortSignal): Promise<GeneralChatResponse> {
+    if (!input || typeof input.question !== "string" || !input.question.trim() || input.question.length > 4000 ||
+      !Array.isArray(input.history) || input.history.length > 8 || input.history.some((turn) => !turn ||
+        typeof turn.user !== "string" || typeof turn.assistant !== "string")) {
+      throw new ApiError("malformed_response", "chat_request_invalid");
+    }
+    const value = await this.request("/api/v1/chat", {
+      method: "POST", body: input, ...(signal ? { signal } : {}),
+    });
+    if (!isGeneralChatResponse(value)) malformed();
+    return value;
+  }
+
   async getAskImage(reference: string, signal?: AbortSignal): Promise<Blob> {
-    if (!this.token) throw new ApiError("http", "authentication_required", 401);
+    if (!this.localGateway && !this.token) throw new ApiError("http", "authentication_required", 401);
     if (!/^[0-9a-f]{32}$/.test(reference)) throw new ApiError("malformed_response", "image_reference_invalid");
     let response: Response;
     try {
+      const headers = new Headers();
+      if (!this.localGateway) headers.set("Authorization", `Bearer ${this.token}`);
       response = await this.fetcher(`/api/v1/ask/images/${reference}`, {
         method: "GET",
-        headers: new Headers({ Authorization: `Bearer ${this.token}` }),
+        headers,
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
@@ -764,11 +808,13 @@ export class BootstrapApiClient {
   private readonly token: string | null;
   private readonly fetcher: FetchLike;
   private readonly prefix: string;
+  private readonly localGateway: boolean;
 
-  constructor(options: { token?: string | null; fetcher?: FetchLike; prefix?: string } = {}) {
+  constructor(options: { token?: string | null; fetcher?: FetchLike; prefix?: string; localGateway?: boolean } = {}) {
     this.token = options.token ?? null;
     this.fetcher = options.fetcher ?? fetch;
     this.prefix = options.prefix ?? "/bootstrap-api";
+    this.localGateway = options.localGateway ?? DEFAULT_LOCAL_GATEWAY;
   }
 
   private async request(path: string, options: {
@@ -777,8 +823,10 @@ export class BootstrapApiClient {
   } = {}): Promise<unknown> {
     const headers = new Headers();
     if (options.protected !== false) {
-      if (!this.token) throw new ApiError("http", "authentication_required", 401);
-      headers.set("Authorization", `Bearer ${this.token}`);
+      if (!this.localGateway) {
+        if (!this.token) throw new ApiError("http", "authentication_required", 401);
+        headers.set("Authorization", `Bearer ${this.token}`);
+      }
     }
     const init: RequestInit = { method: options.method ?? "GET", headers };
     if (options.signal) init.signal = options.signal;

@@ -546,7 +546,7 @@ describe("bootstrap index-build workflow", () => {
     const user = userEvent.setup(); const router = mount(); await connectBootstrap(user);
     fireEvent.change(screen.getByRole("textbox", { name: /Resolved configuration JSON/ }), { target: { value: completeConfig() } });
     await user.click(screen.getByRole("button", { name: "Preview index build" }));
-    await user.click(screen.getByRole("link", { name: "Jobs" }));
+    await router.navigate("/jobs");
     expect(await screen.findByRole("heading", { name: "Jobs" })).toBeInTheDocument();
     resolvePreview(json(preview));
     expect(screen.queryByText("Server-computed build identity")).not.toBeInTheDocument();

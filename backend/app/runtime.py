@@ -14,6 +14,7 @@ import re
 from typing import Any, Callable, Mapping
 
 from backend.config.paths import PathContainmentError, resolve_disjoint_paths
+from backend.config.schema import ResolvedRunConfig
 from backend.engine.context import ContextFormatter
 from backend.engine.generation import LocalGenerationAdapter
 from backend.experiments.artifact_store import ExperimentArtifactStore
@@ -21,6 +22,7 @@ from backend.experiments.catalog import ExperimentCatalog
 from backend.services.experiment_service import ExperimentService
 from backend.services.index_selection import IndexSelectionError, IndexSelectionService
 from backend.services.ask_service import AskService
+from backend.services.general_chat import GeneralChatService
 from backend.services.job_manager import ExperimentJobManager
 from backend.services.model_registry import ModelAdapterRegistry
 from backend.services.index_readiness import IndexReadinessService
@@ -32,6 +34,7 @@ _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8000
 _DEFAULT_BODY_LIMIT = 24 * 1024 * 1024
 _MAX_BODY_LIMIT = 64 * 1024 * 1024
+_DEFAULT_CHAT_MODEL = ResolvedRunConfig().llm_model
 _ENV = {
     "api_token": "RAG_WORKBENCH_API_TOKEN",
     "data_dir": "RAG_WORKBENCH_DATA_DIR",
@@ -46,6 +49,7 @@ _ENV = {
     "worker_count": "RAG_WORKBENCH_WORKER_COUNT",
     "max_pending_jobs": "RAG_WORKBENCH_MAX_PENDING_JOBS",
     "model_lifecycle_policy": "RAG_WORKBENCH_MODEL_LIFECYCLE_POLICY",
+    "chat_model": "RAG_WORKBENCH_CHAT_MODEL",
 }
 
 
@@ -103,6 +107,7 @@ class LocalRuntimeSettings:
     worker_count: int = 1
     max_pending_jobs: int = 10
     model_lifecycle_policy: str = "cached"
+    chat_model: str = _DEFAULT_CHAT_MODEL
 
     def __post_init__(self) -> None:
         if not isinstance(self.api_token, str) or not self.api_token or len(self.api_token) > 4096 or any(char.isspace() for char in self.api_token):
@@ -120,6 +125,8 @@ class LocalRuntimeSettings:
             validate_model_lifecycle_policy(self.model_lifecycle_policy)
         except ModelLifecycleError as exc:
             raise RuntimeConfigurationError(exc.error_code) from exc
+        if not isinstance(self.chat_model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", self.chat_model):
+            raise RuntimeConfigurationError("chat_model_invalid")
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> "LocalRuntimeSettings":
@@ -152,6 +159,7 @@ class LocalRuntimeSettings:
             worker_count=integer("worker_count", 1, 32, "worker_count_invalid"),
             max_pending_jobs=integer("max_pending_jobs", 10, 1000, "pending_limit_invalid"),
             model_lifecycle_policy=values.get(_ENV["model_lifecycle_policy"], "cached"),
+            chat_model=values.get(_ENV["chat_model"], _DEFAULT_CHAT_MODEL),
         )
 
 
@@ -170,6 +178,7 @@ class LocalRuntime:
     job_manager: ExperimentJobManager = field(repr=False)
     index_selection_service: IndexSelectionService = field(repr=False)
     ask_service: AskService = field(repr=False)
+    chat_service: GeneralChatService = field(repr=False)
 
 
 def _reject_symlink_components(path: Path) -> None:
@@ -238,6 +247,7 @@ def build_runtime(
     generation_adapter: LocalGenerationAdapter | None = None,
     model_registry: ModelAdapterRegistry | None = None,
     ask_retrieval_callable: Callable[..., Any] | None = None,
+    chat_service: GeneralChatService | None = None,
 ) -> LocalRuntime:
     """Compose the existing API components without starting workers or models.
 
@@ -256,6 +266,8 @@ def build_runtime(
         raise RuntimeConfigurationError("generation_adapter_invalid")
     if ask_retrieval_callable is not None and not callable(ask_retrieval_callable):
         raise RuntimeConfigurationError("ask_retrieval_invalid")
+    if chat_service is not None and not isinstance(chat_service, GeneralChatService):
+        raise RuntimeConfigurationError("chat_service_invalid")
     _validate_paths(selected)
 
     try:
@@ -291,6 +303,7 @@ def build_runtime(
             generator,
             retrieval_callable=ask_retrieval_callable,
         )
+        general_chat_service = chat_service if chat_service is not None else GeneralChatService(selected.chat_model)
         jobs = ExperimentJobManager(
             service,
             selected.jobs_db_path,
@@ -308,13 +321,14 @@ def build_runtime(
                 selection_service=selection_service,
             ),
             ask_service=ask_service,
+            chat_service=general_chat_service,
         )
     except RuntimeConfigurationError:
         raise
     except Exception as exc:
         # Component errors often contain local paths. Keep the CLI boundary safe.
         raise RuntimeConfigurationError("runtime_composition_failed") from exc
-    return LocalRuntime(selected, app, artifact_store, catalog, registry, generator, formatter, service, jobs, selection_service, ask_service)
+    return LocalRuntime(selected, app, artifact_store, catalog, registry, generator, formatter, service, jobs, selection_service, ask_service, general_chat_service)
 
 
 def run_server(runtime: LocalRuntime) -> None:

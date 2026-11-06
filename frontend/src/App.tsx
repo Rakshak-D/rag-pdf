@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { BootstrapApiClient, WorkbenchApiClient } from "./api/client";
 import type { BootstrapStatusResponse, CatalogArtifactRecord, ExperimentJobRecord, HealthResponse, RuntimeModelsResponse } from "./api/types";
 import { AppShell } from "./components/AppShell";
@@ -13,13 +13,17 @@ import { ArtifactsPage } from "./features/artifacts/ArtifactsPage";
 import { ExperimentWorkflowPage } from "./features/experiments/ExperimentWorkflowPage";
 import { IndexBuildsPage } from "./features/index-builds/IndexBuildsPage";
 import { DocumentsPage } from "./features/documents/DocumentsPage";
-import { AskPage } from "./features/ask/AskPage";
+import { ChatPage } from "./features/chat/ChatPage";
+import { SettingsPage } from "./features/settings/SettingsPage";
 
 type DataState = "disconnected" | "loading" | "ready" | "error";
+const localGateway = import.meta.env.VITE_RAG_LOCAL_GATEWAY === "true";
+// This marker represents local gateway access only; it is never a credential.
+const gatewaySessionMarker = "local-gateway-session";
 
 export default function App() {
-  const [token, setToken] = useState<string | null>(null);
-  const [bootstrapToken, setBootstrapToken] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(localGateway ? gatewaySessionMarker : null);
+  const [bootstrapToken, setBootstrapToken] = useState<string | null>(localGateway ? gatewaySessionMarker : null);
   const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatusResponse | null>(null);
   const [bootstrapChecking, setBootstrapChecking] = useState(false);
   const [bootstrapConnectionError, setBootstrapConnectionError] = useState<string | null>(null);
@@ -36,6 +40,7 @@ export default function App() {
   const [dataError, setDataError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [selectedChatModel, setSelectedChatModel] = useState<string | null>(null);
   const client = useMemo(() => new WorkbenchApiClient({ token }), [token]);
   const location = useLocation();
   const connected = token !== null;
@@ -82,6 +87,27 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    if (!connected) return () => { active = false; };
+    void client.getRuntimeModels().then((value) => { if (active) setRuntimeModels(value); }).catch((error: unknown) => {
+      if (active) setConnectionError(apiErrorText(error));
+    });
+    return () => { active = false; };
+  }, [client, connected]);
+
+  useEffect(() => {
+    let active = true;
+    if (!localGateway || !bootstrapToken) return () => { active = false; };
+    setBootstrapChecking(true);
+    void new BootstrapApiClient({ token: bootstrapToken }).getStatus().then((value) => {
+      if (active) { setBootstrapStatus(value); setBootstrapConnectionError(null); }
+    }).catch((error: unknown) => {
+      if (active) setBootstrapConnectionError(apiErrorText(error));
+    }).finally(() => { if (active) setBootstrapChecking(false); });
+    return () => { active = false; };
+  }, [bootstrapToken]);
+
+  useEffect(() => {
+    let active = true;
     if (location.pathname === "/documents") {
       setHealth(null); setHealthError(null);
       return () => { active = false; };
@@ -99,14 +125,13 @@ export default function App() {
       setJobs([]); setEvaluationArtifacts([]); setAblationArtifacts([]); setDataError(null); setDataState("disconnected"); setRefreshing(false);
       return () => { active = false; };
     }
-    if (location.pathname !== "/") {
+    if (location.pathname !== "/overview") {
       setJobs([]); setEvaluationArtifacts([]); setAblationArtifacts([]); setDataError(null); setDataState("disconnected"); setRefreshing(false);
       return () => { active = false; };
     }
     setDataState("loading"); setRefreshing(true); setDataError(null);
     void Promise.all([
-      client.getRuntimeModels(),
-      client.listJobs({ limit: 10 }),
+      client.getRuntimeModels(), client.listJobs({ limit: 10 }),
       client.listArtifacts({ artifact_type: "evaluation_result", limit: 10 }),
       client.listArtifacts({ artifact_type: "ablation_result", limit: 10 }),
     ]).then(([models, recentJobs, evaluations, ablations]) => {
@@ -120,19 +145,21 @@ export default function App() {
   }, [client, connected, location.pathname, refreshVersion]);
 
   return <AppShell>
-    {!location.pathname.startsWith("/index-builds") && location.pathname !== "/documents" ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
+    {!localGateway && !location.pathname.startsWith("/index-builds") && location.pathname !== "/documents" ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
     <Routes>
-      <Route path="/" element={<OverviewPage connected={connected} health={health} healthError={healthError} dataState={dataState} jobs={jobs} evaluationArtifacts={evaluationArtifacts} ablationArtifacts={ablationArtifacts} dataError={dataError} refreshing={refreshing} onRefresh={refresh} />} />
-      <Route path="/jobs" element={<JobsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
-      <Route path="/jobs/:jobId" element={<JobDetailPage key={location.pathname} client={client} connected={connected} onRefresh={refresh} />} />
+      <Route path="/" element={<ChatPage token={token} selectedModel={selectedChatModel} />} />
+      <Route path="/settings" element={<SettingsPage token={token} selectedModel={selectedChatModel} onSelectModel={setSelectedChatModel} />} />
+      <Route path="/documents" element={<DocumentsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} />} />
       <Route path="/artifacts" element={<ArtifactsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/artifacts/:artifactId" element={<ArtifactDetailPage key={location.pathname} client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
+      <Route path="/jobs" element={<JobsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
+      <Route path="/jobs/:jobId" element={<JobDetailPage key={location.pathname} client={client} connected={connected} onRefresh={refresh} />} />
       <Route path="/experiments/:workflow" element={<ExperimentWorkflowPage key={location.pathname} client={client} connected={connected} onAccepted={refresh} />} />
-      <Route path="/documents" element={<DocumentsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} />} />
-      <Route path="/ask" element={<AskPage token={token} />} />
       <Route path="/index-builds" element={<IndexBuildsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} ordinaryToken={token} ordinaryChecking={connectionChecking} ordinaryModels={runtimeModels} ordinaryError={connectionError} onOrdinaryConnect={connect} onOrdinaryDisconnect={disconnect} />} />
       <Route path="/index-builds/:jobId" element={<IndexBuildsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} ordinaryToken={token} ordinaryChecking={connectionChecking} ordinaryModels={runtimeModels} ordinaryError={connectionError} onOrdinaryConnect={connect} onOrdinaryDisconnect={disconnect} />} />
-      <Route path="*" element={<section className="panel not-found"><span className="eyebrow">ROUTE NOT FOUND</span><h1>This page is unavailable</h1><p>Use the workbench navigation to return to a supported view.</p><Link className="button button--primary" to="/">Open overview</Link></section>} />
+      <Route path="/ask" element={<Navigate to="/?mode=document" replace />} />
+      <Route path="/overview" element={<OverviewPage connected={connected} health={health} healthError={healthError} dataState={dataState} jobs={jobs} evaluationArtifacts={evaluationArtifacts} ablationArtifacts={ablationArtifacts} dataError={dataError} refreshing={refreshing} onRefresh={refresh} />} />
+      <Route path="*" element={<section className="not-found-page"><span className="chat-kicker">PAGE NOT FOUND</span><h1>This page isn’t here</h1><p>Choose Chat, Documents, Results or Settings to continue.</p><Link className="button button--primary" to="/">Return to Chat</Link></section>} />
     </Routes>
   </AppShell>;
 }

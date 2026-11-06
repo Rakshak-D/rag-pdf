@@ -14,6 +14,7 @@ interface Props {
 
 export function BootstrapConnectionPanel({ connected, checking, busy, status, error, onConnect, onDisconnect }: Props) {
   const [draftToken, setDraftToken] = useState("");
+  const localGateway = import.meta.env.VITE_RAG_LOCAL_GATEWAY === "true";
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -26,8 +27,8 @@ export function BootstrapConnectionPanel({ connected, checking, busy, status, er
       <StatusBadge status={connected ? "ready" : checking ? "loading" : "unloaded"} label={connected ? "Bootstrap connected" : checking ? "Verifying service" : "Disconnected"} />
     </div>
     {connected ? <div className="connection-panel__connected">
-      <p className="muted">Authenticated bootstrap mode · {status?.accepting_jobs ? "accepting jobs" : "not accepting jobs"} · queue capacity {status?.queue_capacity}. This token is separate from the experiment runtime and stays in memory only.</p>
-      <button className="button button--quiet" type="button" onClick={onDisconnect} disabled={busy}>Disconnect bootstrap</button>
+      <p className="muted">{localGateway ? "Bootstrap access is provided by the local gateway. Its credential stays server-side." : "Authenticated bootstrap mode; its token is separate from the experiment runtime."} {status?.accepting_jobs ? "Accepting jobs" : "Not accepting jobs"} · queue capacity {status?.queue_capacity}.</p>
+      {!localGateway ? <button className="button button--quiet" type="button" onClick={onDisconnect} disabled={busy}>Disconnect bootstrap</button> : null}
       {busy ? <p role="status" className="muted">Wait for the single submission response before disconnecting. If it is lost, the request ID will be needed for history lookup.</p> : null}
     </div> : <form className="connection-form" onSubmit={submit}>
       <label htmlFor="bootstrap-api-token">Bootstrap bearer token</label>

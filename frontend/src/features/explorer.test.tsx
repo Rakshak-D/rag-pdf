@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,30 +74,31 @@ describe("jobs and artifacts explorer", () => {
   it("navigates by URL and responds to browser back and forward", async () => {
     const fetcher = standardFetch((path) => path.startsWith("/api/v1/jobs") ? response({ jobs: [] }) : response({ artifacts: [] }));
     vi.stubGlobal("fetch", fetcher);
-    const router = mount("/");
-    const user = userEvent.setup();
+    const router = mount("/overview");
     expect(await screen.findByRole("heading", { name: "Workbench overview" })).toBeInTheDocument();
-    await user.click(screen.getByRole("link", { name: "Jobs" }));
+    await router.navigate("/jobs");
     expect(await screen.findByRole("heading", { name: "Jobs", level: 1 })).toBeInTheDocument();
     await router.navigate(-1);
     expect(await screen.findByRole("heading", { name: "Workbench overview" })).toBeInTheDocument();
     await router.navigate(1);
     expect(await screen.findByRole("heading", { name: "Jobs", level: 1 })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Jobs" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute("aria-current", "page");
   });
 
   it("exposes evaluations, ablations, and results as working research navigation", async () => {
     const fetcher = standardFetch((path) => path.startsWith("/api/v1/jobs") ? response({ jobs: [] }) : response({ artifacts: [] }));
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup(); const router = mount("/");
-    await user.click(screen.getByRole("link", { name: "Evaluations" }));
+    await router.navigate("/experiments/evaluation");
     expect(await screen.findByRole("heading", { name: "Evaluation run" })).toBeInTheDocument();
     await router.navigate("/experiments/ablation");
     expect(await screen.findByRole("heading", { name: "Ablation run" })).toBeInTheDocument();
     await user.click(screen.getAllByRole("link", { name: "Results" })[0]!);
     expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
     expect(document.querySelector('[aria-disabled="true"]')).toBeNull();
-    expect(screen.queryByRole("link", { name: "Artifacts" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("link")).toHaveLength(4);
+    expect(screen.queryByRole("link", { name: "Evaluations" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Ablations" })).not.toBeInTheDocument();
   });
 
   it("filters jobs, paginates with the bounded API limit, and opens a detail route", async () => {

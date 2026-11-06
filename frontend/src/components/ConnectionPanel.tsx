@@ -15,6 +15,7 @@ interface ConnectionPanelProps {
 
 export function ConnectionPanel({ title = "Backend connection", tokenLabel = "Bearer token", connected, checking, runtimeModels, error, onConnect, onDisconnect }: ConnectionPanelProps) {
   const [token, setToken] = useState("");
+  const localGateway = import.meta.env.VITE_RAG_LOCAL_GATEWAY === "true";
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -33,8 +34,8 @@ export function ConnectionPanel({ title = "Backend connection", tokenLabel = "Be
       </div>
       {connected ? (
         <div className="connection-panel__connected">
-          <p className="muted">Bearer token is held in memory for this page session only.</p>
-          <button className="button button--quiet" onClick={onDisconnect}>Disconnect</button>
+          <p className="muted">{localGateway ? "Connected through the local gateway. Backend credentials remain in local service processes." : "Bearer token is held in memory for this page session only."}</p>
+          {!localGateway ? <button className="button button--quiet" onClick={onDisconnect}>Disconnect</button> : null}
           {runtimeModels?.components.length ? (
             <ul className="model-list" aria-label="Runtime model status">
               {runtimeModels.components.map((model) => (

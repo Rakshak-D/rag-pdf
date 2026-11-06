@@ -105,6 +105,72 @@ class AskRequest(_StrictModel):
         return normalized
 
 
+class ChatTurnInput(_StrictModel):
+    user: str = Field(min_length=1, max_length=4000)
+    assistant: str = Field(min_length=1, max_length=16_000)
+
+    @field_validator("user", "assistant")
+    @classmethod
+    def validate_turn_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any((ord(char) < 32 and char not in "\n\r\t") or ord(char) == 127 for char in normalized):
+            raise ValueError("chat_history_invalid")
+        return normalized
+
+
+class ChatRequest(_StrictModel):
+    question: str = Field(min_length=1, max_length=4000)
+    history: list[ChatTurnInput] = Field(default_factory=list, max_length=8)
+    model: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("question")
+    @classmethod
+    def validate_chat_question(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any((ord(char) < 32 and char not in "\n\r\t") or ord(char) == 127 for char in normalized):
+            raise ValueError("question_invalid")
+        return normalized
+
+    @field_validator("model")
+    @classmethod
+    def validate_chat_model(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", value):
+            raise ValueError("chat_model_invalid")
+        return value
+
+    @model_validator(mode="after")
+    def validate_history_budget(self):
+        if sum(len(turn.user) + len(turn.assistant) for turn in self.history) > 32_000:
+            raise ValueError("chat_history_too_large")
+        return self
+
+
+class ChatResponse(_StrictModel):
+    mode: Literal["general"]
+    answer: str = Field(min_length=1, max_length=16_000)
+    model: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+
+
+class ChatModelsResponse(_StrictModel):
+    availability: Literal["available", "unavailable"]
+    configured_model: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+    configured_model_available: bool
+    available_models: list[str] = Field(max_length=128)
+    error_code: Literal["ollama_unavailable"] | None
+
+    @model_validator(mode="after")
+    def validate_catalog(self):
+        if len(set(self.available_models)) != len(self.available_models):
+            raise ValueError("chat_model_catalog_invalid")
+        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", model) for model in self.available_models):
+            raise ValueError("chat_model_catalog_invalid")
+        if self.availability == "available" and self.error_code is not None:
+            raise ValueError("chat_model_catalog_invalid")
+        if self.availability == "unavailable" and self.error_code != "ollama_unavailable":
+            raise ValueError("chat_model_catalog_invalid")
+        return self
+
+
 class AskTextEvidenceResponse(_StrictModel):
     label: str = Field(pattern=r"^T[1-9][0-9]{0,2}$")
     document_id: str = Field(pattern=r"^doc_[0-9a-f]{64}$")

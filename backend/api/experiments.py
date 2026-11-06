@@ -45,6 +45,7 @@ from backend.services.job_manager import (
 from backend.services.index_readiness import IndexReadinessInputError
 from backend.services.index_selection import IndexSelectionError
 from backend.services.ask_service import AskError, AskService
+from backend.services.general_chat import GeneralChatError, GeneralChatService
 
 from .schemas import (
     AblationRequest,
@@ -56,6 +57,9 @@ from .schemas import (
     IndexSelectionResponse,
     AskRequest,
     AskResponse,
+    ChatModelsResponse,
+    ChatRequest,
+    ChatResponse,
     RunPlanPreparationRequest,
     RunPlanPreparationResponse,
     RunPlanRequest,
@@ -114,6 +118,8 @@ def _map_error(exc: BaseException) -> JSONResponse:
     if isinstance(exc, ApiRequestError):
         return _response_error(exc.code, exc.status_code)
     if isinstance(exc, AskError):
+        return _response_error(exc.code, exc.status_code)
+    if isinstance(exc, GeneralChatError):
         return _response_error(exc.code, exc.status_code)
     if isinstance(exc, (CatalogNotFoundError, ArtifactNotFoundError)):
         return _response_error("artifact_not_found", 404)
@@ -378,6 +384,42 @@ async def ask_image(request: Request) -> Response:
             "Content-Security-Policy": "default-src 'none'; sandbox",
             "Content-Disposition": "inline",
         })
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def chat_models(request: Request) -> JSONResponse:
+    try:
+        service: GeneralChatService | None = getattr(request.app.state, "general_chat_service", None)
+        if service is None:
+            raise GeneralChatError("chat_unavailable", 503)
+        payload = await run_in_threadpool(service.models)
+        response_model = ChatModelsResponse.model_validate(payload)
+        response = JSONResponse(response_model.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+    except Exception as exc:
+        return _map_error(exc)
+
+
+async def chat_message(request: Request) -> JSONResponse:
+    try:
+        service: GeneralChatService | None = getattr(request.app.state, "general_chat_service", None)
+        if service is None:
+            raise GeneralChatError("chat_unavailable", 503)
+        model = _model(ChatRequest, await _read_json(request, request.app.state.max_request_body_bytes))
+        result = await run_in_threadpool(
+            service.chat,
+            model.question,
+            [turn.model_dump(mode="python") for turn in model.history],
+            model.model,
+        )
+        response_model = ChatResponse.model_validate(result)
+        response = JSONResponse(response_model.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
     except Exception as exc:
         return _map_error(exc)
 
@@ -652,6 +694,8 @@ def build_routes(service: ExperimentService, *, max_request_body_bytes: int, job
         Route("/api/v1/index/selection", index_selection, methods=["GET"]),
         Route("/api/v1/index/selection", select_index, methods=["POST"]),
         Route("/api/v1/ask", ask_question, methods=["POST"]),
+        Route("/api/v1/chat", chat_message, methods=["POST"]),
+        Route("/api/v1/chat/models", chat_models, methods=["GET"]),
         Route("/api/v1/ask/images/{reference:str}", ask_image, methods=["GET"]),
         Route("/api/v1/run-plans", prepare_run_plan, methods=["POST"]),
         Route("/api/v1/evaluations", submit_evaluation, methods=["POST"]),

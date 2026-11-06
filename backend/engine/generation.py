@@ -82,10 +82,15 @@ class GenerationResult:
     prompt_fingerprint: str = ""
 
 
-def _default_client_factory(host: str) -> Any:
+def create_local_ollama_client(host: str = OLLAMA_HOST) -> Any:
+    """Construct the configured local Ollama client without loading a model."""
     import ollama
 
     return ollama.Client(host=host)
+
+
+def _default_client_factory(host: str) -> Any:
+    return create_local_ollama_client(host)
 
 
 def _safe_error_code(exc: BaseException) -> str:

@@ -349,6 +349,31 @@ export interface AskRequest {
   question: string;
 }
 
+export interface ChatTurn {
+  user: string;
+  assistant: string;
+}
+
+export interface GeneralChatRequest {
+  question: string;
+  history: ChatTurn[];
+  model?: string;
+}
+
+export interface GeneralChatResponse {
+  mode: "general";
+  answer: string;
+  model: string;
+}
+
+export interface ChatModelCatalog {
+  availability: "available" | "unavailable";
+  configured_model: string;
+  configured_model_available: boolean;
+  available_models: string[];
+  error_code: "ollama_unavailable" | null;
+}
+
 export interface AskResponse {
   query_id: string;
   question: string;
