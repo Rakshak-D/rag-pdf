@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -456,6 +457,23 @@ def test_browser_version_validation_trims_runner_whitespace_and_rejects_unknown_
     assert linux.validate_browser_version("Chromium 156.0.8078.0 \n") == "Chromium 156.0.8078.0"
     with pytest.raises(linux.E2EBlocked, match="linux_chromium_version_unavailable"):
         linux.validate_browser_version("browser version unavailable")
+
+
+def test_script_entrypoint_follows_all_runner_support_definitions() -> None:
+    tree = ast.parse(Path(linux.__file__).read_text(encoding="utf-8"))
+    entrypoints = [
+        node for node in tree.body
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "__name__"
+    ]
+    definitions = [
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+    assert len(entrypoints) == 1
+    assert entrypoints[0].lineno > max(node.end_lineno for node in definitions)
 
 
 def test_linux_prerequisites_require_procfs_and_pidfd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

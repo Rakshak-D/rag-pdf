@@ -848,9 +848,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
 def write_json_fsync(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
@@ -1390,3 +1387,7 @@ def create_workspace_layout(workspace: Path) -> dict[str, Path]:
             if left == right or left in right.parents or right in left.parents:
                 raise E2EBlocked("workspace_roots_overlap")
     return paths
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
