@@ -1,7 +1,22 @@
 import fs from "node:fs";
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, test, type Page, type Request, type TestInfo } from "@playwright/test";
 
 type AuthRole = "none" | "ordinary" | "bootstrap" | "invalid" | "other";
+type E2EPhase =
+  | "browser_page_navigation"
+  | "initial_disconnected_state"
+  | "invalid_bootstrap_authentication"
+  | "valid_bootstrap_authentication"
+  | "bootstrap_preview"
+  | "bootstrap_inventory"
+  | "bootstrap_disconnect"
+  | "bootstrap_reload"
+  | "final_integrity"
+  | "invalid_ordinary_authentication"
+  | "valid_ordinary_authentication"
+  | "ordinary_catalog_navigation"
+  | "ordinary_disconnect"
+  | "ordinary_reload";
 
 interface ApiObservation {
   method: string;
@@ -267,6 +282,10 @@ function recorderFor(page: Page): SafetyRecorder {
   return recorder;
 }
 
+function markPhase(testInfo: TestInfo, phase: E2EPhase): void {
+  testInfo.annotations.push({ type: "e2e_phase", description: phase });
+}
+
 async function waitForApiResponse(page: Page, path: string, method: string) {
   return page.waitForResponse((response) => {
     const request = response.request();
@@ -329,6 +348,7 @@ test.beforeEach(async ({ page }) => {
 test.afterEach(async ({ page }, testInfo) => {
   const recorder = activeRecorders.get(page);
   if (!recorder) return;
+  if (testInfo.status === "passed") markPhase(testInfo, "final_integrity");
   await recorder.flush();
   const record = {
     test: testInfo.title,
@@ -351,17 +371,23 @@ test.afterEach(async ({ page }, testInfo) => {
 test.describe("authenticated local workbench workflows", () => {
   test.describe.configure({ mode: "serial" });
 
-  test("bootstrap authentication and preview stay isolated and ephemeral", async ({ page }) => {
+  test("bootstrap authentication and preview stay isolated and ephemeral", async ({ page }, testInfo) => {
     const recorder = recorderFor(page);
+    markPhase(testInfo, "browser_page_navigation");
     await page.goto("/index-builds");
+    markPhase(testInfo, "initial_disconnected_state");
     await expect(page.getByRole("heading", { name: "Index Builds" })).toBeVisible();
-    await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+    const bootstrapPanel = page.getByRole("region", { name: "Bootstrap API connection" });
+    const ordinaryPanel = page.getByRole("region", { name: "Ordinary runtime connection" });
+    await expect(bootstrapPanel.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(ordinaryPanel.getByText("Disconnected", { exact: true })).toBeVisible();
     const editor = page.getByLabel("Resolved configuration JSON");
     await expect(editor).toBeDisabled();
     await expect(page.getByRole("button", { name: "Preview index build" })).toBeDisabled();
     expect(recorder.requests.filter((item) => item.path.startsWith("/bootstrap-api/v1/")).length).toBe(0);
     recorder.checks.push("disconnected_preview_blocked");
 
+    markPhase(testInfo, "invalid_bootstrap_authentication");
     const invalidStatus = waitForApiResponse(page, "/bootstrap-api/v1/bootstrap/status", "GET");
     await page.getByLabel("Bootstrap bearer token").fill(invalidToken);
     await page.getByRole("button", { name: "Connect to bootstrap" }).click();
@@ -373,8 +399,10 @@ test.describe("authenticated local workbench workflows", () => {
     recorder.checks.push("invalid_bootstrap_token_rejected_without_secret_echo");
     await assertNoSecretPersistence(page);
 
+    markPhase(testInfo, "valid_bootstrap_authentication");
     await connectBootstrap(page);
     recorder.checks.push("valid_bootstrap_token_authenticated_by_status");
+    markPhase(testInfo, "bootstrap_preview");
     await previewBootstrapConfig(page);
     recorder.checks.push("server_preview_identity_matches_synthetic_fixture");
     expect(recorder.requests.filter((item) => item.path === "/bootstrap-api/v1/bootstrap/preview" && item.method === "POST").length).toBe(1);
@@ -382,8 +410,10 @@ test.describe("authenticated local workbench workflows", () => {
     expect(recorder.requests.some((item) => item.path === "/bootstrap-api/v1/bootstrap/jobs" && item.method === "POST")).toBe(false);
     await assertNoSecretPersistence(page);
 
+    markPhase(testInfo, "bootstrap_disconnect");
     await page.getByRole("button", { name: "Disconnect bootstrap" }).click();
-    await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(bootstrapPanel.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(ordinaryPanel.getByText("Disconnected", { exact: true })).toBeVisible();
     await expect(editor).toBeDisabled();
     await expect(editor).toHaveValue("");
     await expect(page.getByRole("heading", { name: "Server-computed build identity" })).toHaveCount(0);
@@ -392,8 +422,10 @@ test.describe("authenticated local workbench workflows", () => {
     recorder.checks.push("disconnect_cleared_bootstrap_session_and_config");
 
     const beforeReload = recorder.requests.length;
+    markPhase(testInfo, "bootstrap_reload");
     await page.reload();
-    await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Bootstrap API connection" }).getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Ordinary runtime connection" }).getByText("Disconnected", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Bootstrap bearer token")).toHaveValue("");
     await expect(editor).toBeDisabled();
     expect(recorder.requests.slice(beforeReload).some((item) => item.path.startsWith("/bootstrap-api/v1/"))).toBe(false);
@@ -402,18 +434,26 @@ test.describe("authenticated local workbench workflows", () => {
     recorder.checks.push("reload_required_bootstrap_authentication");
   });
 
-  test("build report inventory is read-only and empty", async ({ page }) => {
+  test("build report inventory is read-only and empty", async ({ page }, testInfo) => {
     const recorder = recorderFor(page);
+    markPhase(testInfo, "browser_page_navigation");
     await page.goto("/index-builds");
-    await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+    markPhase(testInfo, "initial_disconnected_state");
+    const bootstrapPanel = page.getByRole("region", { name: "Bootstrap API connection" });
+    const ordinaryPanel = page.getByRole("region", { name: "Ordinary runtime connection" });
+    await expect(bootstrapPanel.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(ordinaryPanel.getByText("Disconnected", { exact: true })).toBeVisible();
 
+    markPhase(testInfo, "valid_bootstrap_authentication");
     const jobsResponsePromise = waitForApiResponse(page, "/bootstrap-api/v1/bootstrap/jobs", "GET");
     await connectBootstrap(page);
     const jobsResponse = await jobsResponsePromise;
     expect(jobsResponse.status()).toBe(200);
     expect((await jobsResponse.json() as { jobs: unknown[] }).jobs).toEqual([]);
+    markPhase(testInfo, "bootstrap_preview");
     await previewBootstrapConfig(page);
 
+    markPhase(testInfo, "bootstrap_inventory");
     const inventoryResponsePromise = waitForApiResponse(page, "/bootstrap-api/v1/bootstrap/index-inventory", "POST");
     await page.getByRole("button", { name: "Inspect build reports" }).click();
     const inventoryResponse = await inventoryResponsePromise;
@@ -440,21 +480,27 @@ test.describe("authenticated local workbench workflows", () => {
     await assertNoSecretPersistence(page);
     recorder.checks.push("empty_inventory_store_not_checked_no_mutation");
 
+    markPhase(testInfo, "bootstrap_disconnect");
     await page.getByRole("button", { name: "Disconnect bootstrap" }).click();
     await expect(page.getByLabel("Resolved configuration JSON")).toHaveValue("");
     await expect(page.getByRole("heading", { name: "Build report inventory" })).toHaveCount(0);
-    await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(bootstrapPanel.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(ordinaryPanel.getByText("Disconnected", { exact: true })).toBeVisible();
+    markPhase(testInfo, "bootstrap_reload");
     await page.reload();
-    await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Bootstrap API connection" }).getByText("Disconnected", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Ordinary runtime connection" }).getByText("Disconnected", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Bootstrap bearer token")).toHaveValue("");
     await assertNoSecretPersistence(page);
     await expectNoGuardViolations(recorder);
     recorder.checks.push("inventory_cleared_on_disconnect_and_reload");
   });
 
-  test("ordinary workbench authentication and catalogs use only ordinary API token", async ({ page }) => {
+  test("ordinary workbench authentication and catalogs use only ordinary API token", async ({ page }, testInfo) => {
     const recorder = recorderFor(page);
+    markPhase(testInfo, "browser_page_navigation");
     await page.goto("/");
+    markPhase(testInfo, "initial_disconnected_state");
     await expect(page.getByRole("heading", { name: "Workbench overview" })).toBeVisible();
     await expect(page.getByText("API process is responding")).toBeVisible();
     await expect(page.getByText("Liveness only", { exact: false })).toBeVisible();
@@ -463,6 +509,7 @@ test.describe("authenticated local workbench workflows", () => {
     expect(recorder.requests.some((item) => item.path.startsWith("/api/v1/") && item.auth_role === "none")).toBe(false);
     recorder.checks.push("unauthenticated_liveness_separate_from_readiness");
 
+    markPhase(testInfo, "invalid_ordinary_authentication");
     const invalidModelsPromise = waitForApiResponse(page, "/api/v1/runtime/models", "GET");
     await page.getByLabel("Bearer token").fill(invalidToken);
     await page.getByRole("button", { name: "Connect", exact: true }).click();
@@ -474,6 +521,7 @@ test.describe("authenticated local workbench workflows", () => {
     recorder.checks.push("invalid_ordinary_token_rejected_without_secret_echo");
     await assertNoSecretPersistence(page);
 
+    markPhase(testInfo, "valid_ordinary_authentication");
     const acceptedModelsPromise = waitForApiResponse(page, "/api/v1/runtime/models", "GET");
     await page.getByLabel("Bearer token").fill(ordinaryToken);
     await page.getByRole("button", { name: "Connect", exact: true }).click();
@@ -490,6 +538,7 @@ test.describe("authenticated local workbench workflows", () => {
     await assertNoSecretPersistence(page);
     recorder.checks.push("ordinary_models_and_empty_catalogs_from_server");
 
+    markPhase(testInfo, "ordinary_catalog_navigation");
     const jobsPromise = waitForApiResponse(page, "/api/v1/jobs", "GET");
     await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Jobs", exact: true }).click();
     const jobs = await jobsPromise;
@@ -510,10 +559,12 @@ test.describe("authenticated local workbench workflows", () => {
     await assertNoSecretPersistence(page);
     recorder.checks.push("jobs_and_artifacts_navigation_read_only_and_empty");
 
+    markPhase(testInfo, "ordinary_disconnect");
     await page.getByRole("button", { name: "Disconnect", exact: true }).click();
     await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Bearer token")).toHaveValue("");
     await assertNoSecretPersistence(page);
+    markPhase(testInfo, "ordinary_reload");
     await page.reload();
     await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Bearer token")).toHaveValue("");

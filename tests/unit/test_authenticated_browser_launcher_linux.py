@@ -677,23 +677,151 @@ def test_evidence_bundle_is_bounded_hashed_and_rejects_secrets(tmp_path: Path, m
         )
 
 
-def test_browser_result_requires_exact_three_guard_clean_scenarios() -> None:
-    titles = [
-        "bootstrap authentication and preview stay isolated and ephemeral",
-        "build report inventory is read-only and empty",
-        "ordinary workbench authentication and catalogs use only ordinary API token",
-    ]
-    result = {
-        "status": "passed",
-        "expected_tests": 3,
-        "completed_tests": 3,
-        "tests": [{"title": title, "status": "passed", "retry": 0} for title in titles],
+def _playwright_observation(title: str, status: str = "passed", violations: list[str] | None = None) -> dict[str, object]:
+    return {
+        "test": title,
+        "status": status,
+        "duration_ms": 25,
+        "browser_version": "Chromium 156.0.8078.0",
+        "requests": [],
+        "guard_violations": violations or [],
+        "checks": [],
     }
-    observations = [{"status": "passed", "guard_violations": []} for _ in titles]
+
+
+def _playwright_result(statuses: list[str] | None = None, *, overall: str | None = None) -> tuple[dict[str, object], list[dict[str, object]]]:
+    test_statuses = statuses or ["passed", "passed", "passed"]
+    tests: list[dict[str, object]] = []
+    observations: list[dict[str, object]] = []
+    for title, status in zip(linux.PLAYWRIGHT_SCENARIO_TITLES[:len(test_statuses)], test_statuses, strict=True):
+        row: dict[str, object] = {"title": title, "status": status, "duration_ms": 25, "retry": 0}
+        if status in {"failed", "timedOut", "interrupted"}:
+            row["failure"] = {
+                "category": "locator_ambiguous",
+                "phase": "initial_disconnected_state",
+                "failure_phase": "execution",
+                "source_file": "frontend/e2e/authenticated-workflows.spec.ts",
+                "line": 358,
+                "column": 11,
+            }
+        tests.append(row)
+        observations.append(_playwright_observation(title, status))
+    result = {
+        "schema_version": 1,
+        "status": overall or ("failed" if any(status in {"failed", "timedOut", "interrupted"} for status in test_statuses) else "passed"),
+        "expected_tests": 3,
+        "completed_tests": len(tests),
+        "tests": tests,
+    }
+    return result, observations
+
+
+def test_browser_result_requires_exact_three_guard_clean_scenarios() -> None:
+    result, observations = _playwright_result()
     linux.assert_browser_result(result, observations)
     observations[1]["guard_violations"] = ["token_in_url"]
     with pytest.raises(linux.E2EBlocked, match="browser_network_or_auth_guard_failed"):
         linux.assert_browser_result(result, observations)
+
+
+def test_valid_failed_browser_test_is_classified_with_only_sanitized_failure_fields() -> None:
+    result, observations = _playwright_result(["failed"])
+    with pytest.raises(linux.E2EBlocked, match="playwright_scenario_failed") as captured:
+        linux.assert_browser_result(result, observations)
+    assert captured.value.details == {
+        "scenario_count": 1,
+        "scenarios": [result["tests"][0]],
+        "failed_test": result["tests"][0],
+    }
+    assert linux.classify_failure(
+        "playwright_result_validation", captured.value.code, cleanup_complete=True
+    ) == "LINUX_BROWSER_BEHAVIOR_FAILED"
+
+
+def test_guard_failure_takes_priority_over_a_failed_test() -> None:
+    result, observations = _playwright_result(["failed"])
+    observations[0]["guard_violations"] = ["token_in_url"]
+    observations[0]["requests"] = [{"path": "/malformed-observation"}]
+    with pytest.raises(linux.E2EBlocked, match="browser_network_or_auth_guard_failed"):
+        linux.assert_browser_result(result, observations)
+    assert linux.classify_failure(
+        "playwright_result_validation", "browser_network_or_auth_guard_failed", cleanup_complete=True
+    ) == "INTEGRITY_OR_CLEANUP_BLOCKED"
+
+
+def test_browser_report_with_no_executed_tests_is_not_a_behavior_failure() -> None:
+    result = {
+        "schema_version": 1,
+        "status": "failed",
+        "expected_tests": 3,
+        "completed_tests": 0,
+        "tests": [],
+    }
+    with pytest.raises(linux.E2EBlocked, match="playwright_no_tests_executed") as captured:
+        linux.assert_browser_result(result, [])
+    assert linux.classify_failure(
+        "playwright_result_validation", captured.value.code, cleanup_complete=True
+    ) == "LINUX_BROWSER_EXECUTION_BLOCKED"
+
+
+@pytest.mark.parametrize("mutation", ["unexpected_key", "raw_exception", "invalid_location", "wrong_title", "status_conflict"])
+def test_malformed_browser_failure_evidence_is_not_classified_as_behavior(mutation: str) -> None:
+    result, observations = _playwright_result(["failed"])
+    failure = result["tests"][0]["failure"]
+    if mutation == "unexpected_key":
+        failure["traceback"] = "Bearer MUST_NOT_BE_RETAINED"
+    elif mutation == "raw_exception":
+        failure["message"] = "C:\\Users\\private\\secret.txt"
+    elif mutation == "invalid_location":
+        failure["line"] = 0
+    elif mutation == "status_conflict":
+        result["status"] = "passed"
+    else:
+        result["tests"][0]["title"] = "unknown test"
+    with pytest.raises(linux.E2EBlocked, match="playwright_evidence_invalid") as captured:
+        linux.assert_browser_result(result, observations)
+    assert linux.classify_failure(
+        "playwright_result_validation", captured.value.code, cleanup_complete=True
+    ) == "BROWSER_EVIDENCE_INCOMPLETE"
+
+
+def test_valid_partial_pass_is_execution_incomplete_not_full_acceptance() -> None:
+    result, observations = _playwright_result(["passed"])
+    with pytest.raises(linux.E2EBlocked, match="playwright_scenarios_incomplete") as captured:
+        linux.assert_browser_result(result, observations)
+    assert linux.classify_failure(
+        "playwright_result_validation", captured.value.code, cleanup_complete=True
+    ) == "LINUX_BROWSER_EXECUTION_BLOCKED"
+
+
+def test_missing_or_malformed_browser_report_is_evidence_incomplete(tmp_path: Path) -> None:
+    with pytest.raises(linux.E2EBlocked, match="playwright_evidence_invalid"):
+        linux.load_playwright_result(tmp_path / "missing.json", tmp_path / "missing.jsonl")
+    result_path = tmp_path / "result.json"
+    observations_path = tmp_path / "observations.jsonl"
+    result_path.write_text('{"status":"failed", "message":"Bearer secret"}', encoding="utf-8")
+    observations_path.write_text("\n", encoding="utf-8")
+    with pytest.raises(linux.E2EBlocked, match="playwright_evidence_invalid") as captured:
+        result, observations = linux.load_playwright_result(result_path, observations_path)
+        linux.assert_browser_result(result, observations)
+    assert linux.classify_failure(
+        "playwright_result_validation", captured.value.code, cleanup_complete=True
+    ) == "BROWSER_EVIDENCE_INCOMPLETE"
+
+
+def test_browser_failure_evidence_keeps_only_allowlisted_guard_summary(tmp_path: Path) -> None:
+    result, observations = _playwright_result(["failed"])
+    observations[0]["guard_violations"] = ["mutation_blocked:POST:/private/value?token=hidden"]
+    result_path = tmp_path / "result.json"
+    observations_path = tmp_path / "observations.jsonl"
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    observations_path.write_text(json.dumps(observations[0]) + "\n", encoding="utf-8")
+
+    evidence = linux.copy_sanitized_playwright_files(result_path, observations_path, ("hidden",))
+    output = evidence["api-observations.jsonl"].decode("utf-8")
+    assert '"guard_violations":["mutation_blocked"]' in output
+    assert "/private/value" not in output
+    assert "hidden" not in output
 
 
 def test_failure_classification_separates_behavior_from_security_and_setup() -> None:

@@ -869,6 +869,7 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
         },
         "cleanup": {"complete": False, "processes": {}, "ports_zero_listeners": {}},
         "startup_diagnostic": None,
+        "playwright_failure": None,
         "original_failure_code": None,
         "failure_code": None,
         "evidence_manifest_sha256": None,
@@ -993,13 +994,20 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
 
             report["stage"] = "playwright_result_validation"
             result, observations = load_playwright_result(playwright_result_path, observations_path)
-            report["scenario_count"] = result.get("completed_tests", 0)
+            if has_browser_guard_violation(observations):
+                raise E2EBlocked("browser_network_or_auth_guard_failed")
+            safe_tests, _safe_observations = _validate_playwright_evidence(result, observations)
+            report["scenario_count"] = len(safe_tests)
             report["scenarios"] = [
                 {key: item.get(key) for key in ("title", "status", "retry")}
-                for item in result.get("tests", [])
-                if isinstance(item, dict)
+                for item in safe_tests
             ]
-            assert_browser_result(result, observations)
+            try:
+                assert_browser_result(result, observations)
+            except E2EBlocked as exc:
+                if exc.details is not None:
+                    report["playwright_failure"] = exc.details
+                raise
             if exit_code != 0:
                 raise E2EBlocked("playwright_exit_nonzero")
             evidence_files = copy_sanitized_playwright_files(
@@ -1028,7 +1036,10 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
             first_failure = exc
             report["original_failure_code"] = exc.code
             if exc.details is not None:
-                report["startup_diagnostic"] = exc.details
+                if report["stage"] == "playwright_result_validation":
+                    report["playwright_failure"] = exc.details
+                else:
+                    report["startup_diagnostic"] = exc.details
         except Exception as exc:
             first_failure = E2EBlocked("linux_e2e_internal_error")
             report["original_failure_code"] = first_failure.code
@@ -1670,11 +1681,257 @@ def write_evidence_bundle(
     return hashlib.sha256(manifest).hexdigest()
 
 
+PLAYWRIGHT_SCENARIO_TITLES = (
+    "bootstrap authentication and preview stay isolated and ephemeral",
+    "build report inventory is read-only and empty",
+    "ordinary workbench authentication and catalogs use only ordinary API token",
+)
+PLAYWRIGHT_STATUSES = {"passed", "failed", "timedOut", "skipped", "interrupted"}
+PLAYWRIGHT_FAILURE_CATEGORIES = {
+    "locator_ambiguous", "expectation_timeout", "navigation_failed",
+    "browser_or_context_failed", "test_setup_failed", "assertion_failed",
+    "unknown_test_failure",
+}
+PLAYWRIGHT_PHASES = {
+    "browser_page_navigation", "initial_disconnected_state",
+    "invalid_bootstrap_authentication", "valid_bootstrap_authentication",
+    "bootstrap_preview", "bootstrap_inventory", "bootstrap_disconnect", "bootstrap_reload", "final_integrity",
+    "invalid_ordinary_authentication", "valid_ordinary_authentication",
+    "ordinary_catalog_navigation", "ordinary_disconnect", "ordinary_reload",
+}
+PLAYWRIGHT_CHECKS = {
+    "disconnected_preview_blocked", "invalid_bootstrap_token_rejected_without_secret_echo",
+    "valid_bootstrap_token_authenticated_by_status", "server_preview_identity_matches_synthetic_fixture",
+    "disconnect_cleared_bootstrap_session_and_config", "reload_required_bootstrap_authentication",
+    "empty_inventory_store_not_checked_no_mutation", "inventory_cleared_on_disconnect_and_reload",
+    "unauthenticated_liveness_separate_from_readiness", "invalid_ordinary_token_rejected_without_secret_echo",
+    "ordinary_models_and_empty_catalogs_from_server", "jobs_and_artifacts_navigation_read_only_and_empty",
+    "disconnect_and_reload_cleared_ordinary_authentication",
+}
+PLAYWRIGHT_API_PATHS = {
+    "/health", "/api/v1/runtime/models", "/api/v1/jobs", "/api/v1/artifacts",
+    "/bootstrap-api/v1/bootstrap/status", "/bootstrap-api/v1/bootstrap/preview",
+    "/bootstrap-api/v1/bootstrap/index-inventory", "/bootstrap-api/v1/bootstrap/jobs",
+}
+PLAYWRIGHT_SUMMARY_KEYS = {
+    "component_count", "item_count", "mode", "accepting_jobs", "document_count",
+    "manifest_hash", "index_fingerprint", "run_fingerprint", "fresh_build_eligible",
+    "candidate_count", "total_candidates", "complete", "store_checked", "check_level",
+}
+PLAYWRIGHT_GUARD_LABELS = {
+    "non_loopback_request", "request_outside_test_origin", "token_in_url",
+    "unparseable_request_url", "unparseable_route_url", "bootstrap_auth_scope_violation",
+    "ordinary_auth_scope_violation",
+}
+
+
+def _safe_report_int(value: object, *, minimum: int, maximum: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and minimum <= value <= maximum
+
+
+def has_browser_guard_violation(observations: object) -> bool:
+    if not isinstance(observations, list):
+        return False
+    return any(
+        isinstance(observation, dict)
+        and isinstance(observation.get("guard_violations"), list)
+        and any(isinstance(violation, str) and bool(violation) for violation in observation["guard_violations"])
+        for observation in observations
+    )
+
+
+def _valid_failure_summary(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    required = {"category", "phase", "failure_phase"}
+    allowed = required | {"source_file", "line", "column"}
+    if not required.issubset(value) or not set(value).issubset(allowed):
+        return False
+    category = value.get("category")
+    if not isinstance(category, str) or category not in PLAYWRIGHT_FAILURE_CATEGORIES:
+        return False
+    phase = value.get("phase")
+    if phase is not None and (not isinstance(phase, str) or phase not in PLAYWRIGHT_PHASES):
+        return False
+    failure_phase = value.get("failure_phase")
+    expected_failure_phase = "setup" if phase is None else "teardown" if phase == "final_integrity" else "execution"
+    if failure_phase != expected_failure_phase:
+        return False
+    if "source_file" in value:
+        if value.get("source_file") != "frontend/e2e/authenticated-workflows.spec.ts":
+            return False
+        if not _safe_report_int(value.get("line"), minimum=1, maximum=10000):
+            return False
+        if "column" in value and not _safe_report_int(value.get("column"), minimum=1, maximum=10000):
+            return False
+    elif "line" in value or "column" in value:
+        return False
+    return True
+
+
+def _validate_observation_record(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    required = {"test", "status", "duration_ms", "browser_version", "requests", "guard_violations", "checks"}
+    if set(value) != required:
+        return False
+    test_title = value.get("test")
+    status = value.get("status")
+    if (
+        not isinstance(test_title, str) or test_title not in PLAYWRIGHT_SCENARIO_TITLES
+        or not isinstance(status, str) or status not in PLAYWRIGHT_STATUSES
+    ):
+        return False
+    if not _safe_report_int(value.get("duration_ms"), minimum=0, maximum=1800000):
+        return False
+    browser_version = value.get("browser_version")
+    if not isinstance(browser_version, str) or not re.fullmatch(r"[A-Za-z0-9 ._-]{1,80}", browser_version):
+        return False
+    requests = value.get("requests")
+    if not isinstance(requests, list) or len(requests) > 200:
+        return False
+    for request in requests:
+        if not isinstance(request, dict):
+            return False
+        allowed = {"method", "path", "auth_role", "status", "failed", "response_summary"}
+        required_request = {"method", "path", "auth_role", "status"}
+        if not required_request.issubset(request) or not set(request).issubset(allowed):
+            return False
+        method = request.get("method")
+        request_path = request.get("path")
+        auth_role = request.get("auth_role")
+        if not isinstance(method, str) or method not in {"GET", "HEAD", "OPTIONS", "POST"}:
+            return False
+        if not isinstance(request_path, str) or request_path not in PLAYWRIGHT_API_PATHS:
+            return False
+        if not isinstance(auth_role, str) or auth_role not in {"none", "ordinary", "bootstrap", "invalid", "other"}:
+            return False
+        status = request.get("status")
+        if status is not None and not _safe_report_int(status, minimum=100, maximum=599):
+            return False
+        if "failed" in request and not isinstance(request.get("failed"), bool):
+            return False
+        summary = request.get("response_summary")
+        if summary is not None:
+            if not isinstance(summary, dict) or not set(summary).issubset(PLAYWRIGHT_SUMMARY_KEYS):
+                return False
+            for key, item in summary.items():
+                if item is None:
+                    continue
+                if key in {"mode", "check_level"}:
+                    if not isinstance(item, str) or item not in (
+                        {"bootstrap", "ordinary"} if key == "mode" else {"report", "store"}
+                    ):
+                        return False
+                elif key in {"manifest_hash", "index_fingerprint", "run_fingerprint"}:
+                    if not isinstance(item, str) or not re.fullmatch(r"[a-f0-9]{64}", item):
+                        return False
+                elif key in {"accepting_jobs", "fresh_build_eligible", "complete", "store_checked"}:
+                    if not isinstance(item, bool):
+                        return False
+                elif not _safe_report_int(item, minimum=0, maximum=100000):
+                    return False
+    violations = value.get("guard_violations")
+    if not isinstance(violations, list) or len(violations) > 100:
+        return False
+    if any(
+        not isinstance(item, str) or not item or len(item) > 512
+        or any(ord(char) < 32 or ord(char) > 126 for char in item)
+        for item in violations
+    ):
+        return False
+    checks = value.get("checks")
+    if not isinstance(checks, list) or len(checks) > 20 or any(
+        not isinstance(item, str) or item not in PLAYWRIGHT_CHECKS for item in checks
+    ):
+        return False
+    return True
+
+
+def _validate_playwright_evidence(result: object, observations: object) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not isinstance(result, dict) or set(result) != {
+        "schema_version", "status", "expected_tests", "completed_tests", "tests"
+    }:
+        raise E2EBlocked("playwright_evidence_invalid")
+    if (
+        not _safe_report_int(result.get("schema_version"), minimum=1, maximum=1)
+        or not _safe_report_int(result.get("expected_tests"), minimum=3, maximum=3)
+    ):
+        raise E2EBlocked("playwright_evidence_invalid")
+    result_status = result.get("status")
+    if not isinstance(result_status, str) or result_status not in {"passed", "failed", "timedout", "interrupted"}:
+        raise E2EBlocked("playwright_evidence_invalid")
+    tests = result.get("tests")
+    completed = result.get("completed_tests")
+    if (
+        not isinstance(tests, list) or len(tests) > 3
+        or not _safe_report_int(completed, minimum=0, maximum=3)
+        or completed != len(tests)
+    ):
+        raise E2EBlocked("playwright_evidence_invalid")
+
+    safe_tests: list[dict[str, Any]] = []
+    for index, item in enumerate(tests):
+        if not isinstance(item, dict):
+            raise E2EBlocked("playwright_evidence_invalid")
+        allowed = {"title", "status", "duration_ms", "retry", "failure"}
+        required = {"title", "status", "duration_ms", "retry"}
+        if not required.issubset(item) or not set(item).issubset(allowed):
+            raise E2EBlocked("playwright_evidence_invalid")
+        if item.get("title") != PLAYWRIGHT_SCENARIO_TITLES[index]:
+            raise E2EBlocked("playwright_evidence_invalid")
+        item_status = item.get("status")
+        if not isinstance(item_status, str) or item_status not in PLAYWRIGHT_STATUSES:
+            raise E2EBlocked("playwright_evidence_invalid")
+        if not _safe_report_int(item.get("duration_ms"), minimum=0, maximum=1800000):
+            raise E2EBlocked("playwright_evidence_invalid")
+        if not _safe_report_int(item.get("retry"), minimum=0, maximum=2):
+            raise E2EBlocked("playwright_evidence_invalid")
+        is_failure = item_status in {"failed", "timedOut", "interrupted"}
+        if is_failure != ("failure" in item) or (is_failure and not _valid_failure_summary(item["failure"])):
+            raise E2EBlocked("playwright_evidence_invalid")
+        safe_item = {key: item[key] for key in ("title", "status", "duration_ms", "retry")}
+        if is_failure:
+            safe_item["failure"] = {key: item["failure"][key] for key in item["failure"]}
+        safe_tests.append(safe_item)
+
+    if result_status == "passed" and any(
+        item["status"] in {"failed", "timedOut", "interrupted"} for item in safe_tests
+    ):
+        raise E2EBlocked("playwright_evidence_invalid")
+
+    if not isinstance(observations, list) or len(observations) != len(safe_tests):
+        raise E2EBlocked("playwright_observation_count_invalid")
+    safe_observations: list[dict[str, Any]] = []
+    for index, observation in enumerate(observations):
+        if not _validate_observation_record(observation):
+            raise E2EBlocked("playwright_evidence_invalid")
+        if observation["test"] != safe_tests[index]["title"] or observation["status"] != safe_tests[index]["status"]:
+            raise E2EBlocked("playwright_evidence_invalid")
+        safe_observation = dict(observation)
+        safe_observation["guard_violations"] = [
+            item if item in PLAYWRIGHT_GUARD_LABELS
+            else "mutation_blocked" if item.startswith("mutation_blocked:")
+            else "unclassified_guard_violation"
+            for item in observation["guard_violations"]
+        ]
+        safe_observations.append(safe_observation)
+    return safe_tests, safe_observations
+
+
 def load_playwright_result(result_path: Path, observations_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     try:
-        result = json.loads(result_path.read_text(encoding="utf-8"))
-        observations = [json.loads(line) for line in observations_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    except (OSError, json.JSONDecodeError) as exc:
+        result_bytes = result_path.read_bytes()
+        observation_bytes = observations_path.read_bytes()
+        if len(result_bytes) + len(observation_bytes) > MAX_EVIDENCE_BYTES:
+            raise E2EBlocked("playwright_evidence_size_limit_exceeded")
+        result = json.loads(result_bytes.decode("utf-8"))
+        observations = [
+            json.loads(line) for line in observation_bytes.decode("utf-8").splitlines() if line.strip()
+        ]
+    except E2EBlocked:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise E2EBlocked("playwright_evidence_invalid") from exc
     if not isinstance(result, dict) or not isinstance(observations, list):
         raise E2EBlocked("playwright_evidence_invalid")
@@ -1682,25 +1939,25 @@ def load_playwright_result(result_path: Path, observations_path: Path) -> tuple[
 
 
 def assert_browser_result(result: Mapping[str, Any], observations: Sequence[Mapping[str, Any]]) -> None:
-    if result.get("expected_tests") != 3 or result.get("completed_tests") != 3:
-        raise E2EBlocked("playwright_scenario_count_invalid")
-    tests = result.get("tests")
-    if not isinstance(tests, list) or len(tests) != 3:
-        raise E2EBlocked("playwright_scenario_count_invalid")
-    if result.get("status") != "passed" or any(t.get("status") != "passed" or t.get("retry") != 0 for t in tests):
-        raise E2EBlocked("playwright_scenario_failed")
-    expected = {
-        "bootstrap authentication and preview stay isolated and ephemeral",
-        "build report inventory is read-only and empty",
-        "ordinary workbench authentication and catalogs use only ordinary API token",
-    }
-    if {t.get("title") for t in tests} != expected:
-        raise E2EBlocked("playwright_scenario_set_invalid")
-    if len(observations) != 3:
-        raise E2EBlocked("playwright_observation_count_invalid")
-    for item in observations:
-        if not isinstance(item, dict) or item.get("status") != "passed" or item.get("guard_violations") != []:
-            raise E2EBlocked("browser_network_or_auth_guard_failed")
+    if has_browser_guard_violation(observations):
+        raise E2EBlocked("browser_network_or_auth_guard_failed")
+    tests, safe_observations = _validate_playwright_evidence(result, observations)
+    if any(item["guard_violations"] for item in safe_observations):
+        raise E2EBlocked("browser_network_or_auth_guard_failed")
+    if not tests:
+        raise E2EBlocked("playwright_no_tests_executed")
+    failed = next((item for item in tests if item["status"] in {"failed", "timedOut", "interrupted"}), None)
+    if failed is not None:
+        raise E2EBlocked(
+            "playwright_scenario_failed",
+            details={"scenario_count": len(tests), "scenarios": tests, "failed_test": failed},
+        )
+    if len(tests) != 3 or any(item["status"] != "passed" or item["retry"] != 0 for item in tests):
+        if any(item["retry"] != 0 for item in tests):
+            raise E2EBlocked("playwright_retry_detected")
+        raise E2EBlocked("playwright_scenarios_incomplete")
+    if result.get("status") != "passed":
+        raise E2EBlocked("playwright_run_incomplete")
 
 
 def classify_failure(stage: str, failure_code: str, *, cleanup_complete: bool) -> str:
@@ -1720,6 +1977,14 @@ def classify_failure(stage: str, failure_code: str, *, cleanup_complete: bool) -
     )):
         return "INTEGRITY_OR_CLEANUP_BLOCKED"
     if failure_code == "playwright_scenario_failed":
+        return "LINUX_BROWSER_BEHAVIOR_FAILED"
+    if failure_code in {
+        "playwright_evidence_invalid", "playwright_evidence_size_limit_exceeded",
+        "playwright_observation_count_invalid", "playwright_report_missing",
+        "playwright_run_incomplete",
+    }:
+        return "BROWSER_EVIDENCE_INCOMPLETE"
+    if failure_code == "playwright_retry_detected":
         return "LINUX_BROWSER_BEHAVIOR_FAILED"
     return "LINUX_BROWSER_EXECUTION_BLOCKED"
 
@@ -1743,14 +2008,30 @@ def startup_cause_identified(details: object) -> bool:
 
 def copy_sanitized_playwright_files(result_path: Path, observations_path: Path, tokens: Sequence[str]) -> dict[str, bytes]:
     try:
-        result, observations = result_path.read_bytes(), observations_path.read_bytes()
+        result, observations = load_playwright_result(result_path, observations_path)
     except OSError as exc:
         raise E2EBlocked("playwright_evidence_missing") from exc
-    if contains_secret(result, tokens) or contains_secret(observations, tokens):
+    safe_tests, safe_observations = _validate_playwright_evidence(result, observations)
+    safe_result = json.dumps(
+        {
+            "schema_version": 1,
+            "status": result["status"],
+            "expected_tests": 3,
+            "completed_tests": len(safe_tests),
+            "tests": safe_tests,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8") + b"\n"
+    safe_observation_bytes = b"\n".join(
+        json.dumps(item, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        for item in safe_observations
+    ) + (b"\n" if safe_observations else b"")
+    if contains_secret(safe_result, tokens) or contains_secret(safe_observation_bytes, tokens):
         raise E2EBlocked("playwright_evidence_secret_detected")
-    if len(result) + len(observations) > MAX_EVIDENCE_BYTES:
+    if len(safe_result) + len(safe_observation_bytes) > MAX_EVIDENCE_BYTES:
         raise E2EBlocked("playwright_evidence_size_limit_exceeded")
-    return {"playwright-results.json": result, "api-observations.jsonl": observations}
+    return {"playwright-results.json": safe_result, "api-observations.jsonl": safe_observation_bytes}
 
 
 def assert_no_bootstrap_index_mutation(index_root: Path) -> None:

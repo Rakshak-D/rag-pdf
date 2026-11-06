@@ -102,6 +102,17 @@ async function preparePreview(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("bootstrap index-build workflow", () => {
+  it("exposes independent disconnected states in the named connection panels", () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation(async (input, init) => responseFor(String(input), init)));
+    mount();
+
+    const bootstrapPanel = screen.getByRole("region", { name: "Bootstrap API connection" });
+    const ordinaryPanel = screen.getByRole("region", { name: "Ordinary runtime connection" });
+    expect(within(bootstrapPanel).getByText("Disconnected", { exact: true })).toBeInTheDocument();
+    expect(within(ordinaryPanel).getByText("Disconnected", { exact: true })).toBeInTheDocument();
+    expect(screen.getAllByText("Disconnected", { exact: true })).toHaveLength(2);
+  });
+
   it("uses a separate bootstrap connection and rejects a runtime-shaped response", async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       if (String(input) === "/bootstrap-api/v1/bootstrap/status") return json({ components: [] });
