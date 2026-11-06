@@ -508,6 +508,13 @@ def validate_chromium_executable(value: str | None) -> Path:
     return resolved
 
 
+def validate_browser_version(value: str) -> str:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if not re.fullmatch(r"(?:Chromium|Google Chrome)\s+[0-9A-Za-z.+-]{1,48}", normalized):
+        raise E2EBlocked("linux_chromium_version_unavailable")
+    return normalized
+
+
 def _process_record(process: ManagedProcess) -> dict[str, Any]:
     return {
         "name": process.name,
@@ -543,9 +550,7 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
         if not required.is_file():
             raise E2EBlocked("frontend_dependencies_incomplete")
     browser_executable = validate_chromium_executable(os.environ.get("E2E_BROWSER_EXECUTABLE_PATH"))
-    browser_version = os.environ.get("E2E_BROWSER_VERSION", "")
-    if not re.fullmatch(r"(?:Chromium|Google Chrome)\s+[0-9A-Za-z.+-]{1,48}", browser_version):
-        raise E2EBlocked("linux_chromium_version_unavailable")
+    browser_version = validate_browser_version(os.environ.get("E2E_BROWSER_VERSION", ""))
 
     external_evidence = (
         evidence_dir.resolve(strict=False)

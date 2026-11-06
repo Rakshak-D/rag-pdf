@@ -452,6 +452,12 @@ def test_linux_runner_rejects_other_platform_before_process_work(tmp_path: Path)
         linux.validate_linux_primitives("win32", tmp_path)
 
 
+def test_browser_version_validation_trims_runner_whitespace_and_rejects_unknown_output() -> None:
+    assert linux.validate_browser_version("Chromium 156.0.8078.0 \n") == "Chromium 156.0.8078.0"
+    with pytest.raises(linux.E2EBlocked, match="linux_chromium_version_unavailable"):
+        linux.validate_browser_version("browser version unavailable")
+
+
 def test_linux_prerequisites_require_procfs_and_pidfd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(linux.os, "pidfd_open", lambda pid, flags: 1, raising=False)
     monkeypatch.setattr(linux.signal, "pidfd_send_signal", lambda fd, sig: None, raising=False)
