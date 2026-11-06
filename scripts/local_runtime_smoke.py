@@ -18,6 +18,8 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+_SYNTHETIC_BUILD_ID = "a" * 32
+
 from backend.config.schema import ResolvedRunConfig
 from backend.engine.manifest import build_document_manifest
 from backend.experiments.run_plan import RunPlan, build_run_plan
@@ -110,9 +112,9 @@ def run_smoke(*, vite: bool = False, timeout: float = 30, port: int | None = Non
         config = ResolvedRunConfig.from_legacy(Config(reset_collections_on_start=False, pdf_dir="synthetic/source", images_dir="synthetic/images", database_dir="synthetic/database", results_dir="synthetic/results", model_comparison_results_dir="synthetic/comparison", retrieval_results_dir="synthetic/retrieval"))
         manifest = build_document_manifest(source)
         plan = build_run_plan(config, manifest.content_hash)
-        report_dir = index / "build-artifacts" / "synthetic-smoke"; report_dir.mkdir(parents=True)
+        report_dir = index / "build-artifacts" / _SYNTHETIC_BUILD_ID; report_dir.mkdir(parents=True)
         report = report_dir / "build-report.json"
-        payload = {"report_schema_version": "1", "build_id": "synthetic-smoke", "artifact_root": str(report_dir), "report_path": str(report), "index_fingerprint": plan.index_fingerprint, "document_manifest_hash": manifest.content_hash, "status": "completed", "partial_persistence": False, "text_records_persisted": 0, "image_records_persisted": 0}
+        payload = {"report_schema_version": "1", "build_id": _SYNTHETIC_BUILD_ID, "artifact_root": str(report_dir), "report_path": str(report), "index_fingerprint": plan.index_fingerprint, "document_manifest_hash": manifest.content_hash, "status": "completed", "partial_persistence": False, "text_records_persisted": 0, "image_records_persisted": 0}
         with report.open("x", encoding="utf-8") as stream:
             json.dump(payload, stream)
         token = secrets.token_urlsafe(32)
