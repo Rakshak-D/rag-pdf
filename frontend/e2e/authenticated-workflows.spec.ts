@@ -117,9 +117,33 @@ async function attachSafetyGuards(page: Page): Promise<SafetyRecorder> {
       if (["http:", "https:", "ws:", "wss:"].includes(url.protocol) && !isLoopback(url.hostname)) {
         violations.add("non_loopback_request");
       }
+      if (["http:", "https:", "ws:", "wss:"].includes(url.protocol) && url.host !== base.host) {
+        violations.add("request_outside_test_origin");
+      }
       if (tokens.some((token) => request.url().includes(token))) violations.add("token_in_url");
     } catch {
       violations.add("unparseable_request_url");
+    }
+  });
+
+  const expectedWebSocketProtocol = base.protocol === "https:" ? "wss:" : "ws:";
+  await page.routeWebSocket("**/*", async (route) => {
+    try {
+      const url = new URL(route.url());
+      if (!isLoopback(url.hostname) || url.host !== base.host || url.protocol !== expectedWebSocketProtocol) {
+        violations.add("request_outside_test_origin");
+        await route.close({ code: 1008, reason: "test origin only" });
+        return;
+      }
+      if (tokens.some((token) => url.href.includes(token))) {
+        violations.add("token_in_url");
+        await route.close({ code: 1008, reason: "credentials are not allowed in URLs" });
+        return;
+      }
+      route.connectToServer();
+    } catch {
+      violations.add("unparseable_request_url");
+      await route.close({ code: 1008, reason: "invalid test request URL" });
     }
   });
 
