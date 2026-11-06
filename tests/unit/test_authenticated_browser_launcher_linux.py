@@ -99,6 +99,240 @@ def _stat_line(identity: linux.ProcessIdentity, command: str = "test (worker)") 
     return f"{identity.pid} ({command}) {' '.join(tail)}\n"
 
 
+def _valid_startup_status(path: Path, *, include_health: bool = False) -> linux.StartupStatusRecorder:
+    recorder = linux.StartupStatusRecorder(path, "ordinary", require_fresh=True)
+    for stage in (
+        "guard_initialization", "guard_dependency_import", "guard_installation",
+        "runtime_module_import", "runtime_entrypoint",
+    ):
+        recorder.append(stage, "started")
+        recorder.append(stage, "completed")
+    recorder.append("server_startup", "started")
+    if include_health:
+        recorder.append("health_accepted", "health_accepted", reached_http_readiness=True)
+    return recorder
+
+
+def test_startup_status_records_successful_stages_and_http_acceptance(tmp_path: Path) -> None:
+    status_path = tmp_path / "ordinary.jsonl"
+    _valid_startup_status(status_path, include_health=True)
+    records = linux.load_startup_status(status_path, "ordinary")
+    assert records[0]["stage"] == "guard_initialization"
+    assert records[-1]["event"] == "health_accepted"
+    assert records[-1]["reached_http_readiness"] is True
+    if os.name == "posix":
+        assert status_path.stat().st_mode & 0o077 == 0
+
+
+def test_startup_status_classifies_missing_module_without_exception_message() -> None:
+    try:
+        raise ModuleNotFoundError("missing /home/runner/private/token-value", name="chroma.adapters")
+    except ModuleNotFoundError as exc:
+        classified = linux.safe_exception_metadata(exc)
+    assert classified == {
+        "exception_class": "ModuleNotFoundError",
+        "missing_module": "chroma.adapters",
+        "application_error_code": None,
+    }
+
+
+def test_startup_status_classifies_import_error_identifier() -> None:
+    exc = ImportError("private path /tmp/secret-value", name="uvicorn.config")
+    assert linux.safe_exception_metadata(exc)["missing_module"] == "uvicorn.config"
+    assert linux.safe_exception_metadata(exc)["exception_class"] == "ImportError"
+
+
+def test_startup_status_preserves_stable_runtime_configuration_code() -> None:
+    class RuntimeConfigurationError(Exception):
+        error_code = "runtime_composition_failed"
+
+    try:
+        try:
+            raise ModuleNotFoundError("token /home/user/private", name="expected_adapter")
+        except ModuleNotFoundError as cause:
+            raise RuntimeConfigurationError("private setting /secret") from cause
+    except RuntimeConfigurationError as exc:
+        classified = linux.safe_exception_metadata(exc)
+    assert classified == {
+        "exception_class": "ModuleNotFoundError",
+        "missing_module": "expected_adapter",
+        "application_error_code": "runtime_composition_failed",
+    }
+
+
+def test_forbidden_operation_is_durably_distinguished_from_other_exit(tmp_path: Path) -> None:
+    path = tmp_path / "ordinary.jsonl"
+    recorder = _valid_startup_status(path)
+    recorder.append("server_startup", "forbidden_operation", forbidden_operation=True, exit_code=91)
+    records = linux.load_startup_status(path, "ordinary")
+    assert records[-1]["forbidden_operation"] is True
+    assert records[-1]["exit_code"] == 91
+
+
+def test_unexpected_exception_keeps_only_safe_class_and_identifiers(tmp_path: Path) -> None:
+    secret = "bearer-token-should-never-appear"
+    private_path = "C:/Users/private/person/data.sqlite"
+    try:
+        raise OSError(f"{secret} {private_path}")
+    except OSError as exc:
+        classified = linux.safe_exception_metadata(exc)
+    path = tmp_path / "ordinary.jsonl"
+    recorder = _valid_startup_status(path)
+    recorder.append("server_startup", "failed", **classified, exit_code=1)
+    content = path.read_text(encoding="utf-8")
+    assert "OSError" in content
+    assert secret not in content and private_path not in content
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected"),
+    [(2, {"exit_code": 2, "signal_number": None}), (-9, {"exit_code": -9, "signal_number": 9})],
+)
+def test_process_exit_capture_includes_exit_code_and_signal(returncode, expected) -> None:
+    managed = linux.ManagedProcess("ordinary", SimpleNamespace(poll=lambda: returncode), ROOT)
+    assert linux.managed_process_exit(managed) == expected
+
+
+def test_missing_startup_status_is_reported_without_fabricating_health(tmp_path: Path) -> None:
+    with pytest.raises(linux.E2EBlocked, match="startup_status_missing"):
+        linux.load_startup_status(tmp_path / "ordinary.jsonl", "ordinary")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"{not-json}\n", b'{"schema_version":1}\n', b"{\n", b'{"stage":"x","stage":"y"}\n'],
+)
+def test_malformed_or_partial_startup_status_is_rejected(tmp_path: Path, payload: bytes) -> None:
+    path = tmp_path / "ordinary.jsonl"
+    path.write_bytes(payload)
+    with pytest.raises(linux.E2EBlocked, match="startup_status_(malformed|schema_invalid|identity_invalid)"):
+        linux.load_startup_status(path, "ordinary")
+
+
+def test_duplicate_or_conflicting_startup_records_are_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "ordinary.jsonl"
+    recorder = linux.StartupStatusRecorder(path, "ordinary", require_fresh=True)
+    recorder.append("guard_initialization", "started")
+    with pytest.raises(linux.E2EBlocked, match="startup_status_duplicate_or_conflicting_record"):
+        recorder.append("guard_initialization", "started")
+
+
+def test_startup_status_write_failure_is_reported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    recorder = linux.StartupStatusRecorder(tmp_path / "ordinary.jsonl", "ordinary", require_fresh=True)
+    monkeypatch.setattr(linux.os, "open", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("secret")))
+    with pytest.raises(linux.E2EBlocked, match="startup_status_write_failed"):
+        recorder.append("guard_initialization", "started")
+
+
+def test_status_schema_rejects_unexpected_keys_and_unsafe_identifiers(tmp_path: Path) -> None:
+    path = tmp_path / "ordinary.jsonl"
+    _valid_startup_status(path)
+    rows = linux.load_startup_status(path, "ordinary")
+    rows[0]["token"] = "must not be accepted"
+    with pytest.raises(linux.E2EBlocked, match="startup_status_schema_invalid"):
+        linux.validate_startup_records(rows, "ordinary")
+    rows = linux.load_startup_status(path, "ordinary")
+    rows[-1]["exception_class"] = "RuntimeError: /private/path"
+    with pytest.raises(linux.E2EBlocked, match="startup_status_identifier_invalid"):
+        linux.validate_startup_records(rows, "ordinary")
+
+
+def test_health_marker_cannot_be_written_before_startup_gates(tmp_path: Path) -> None:
+    path = tmp_path / "ordinary.jsonl"
+    recorder = linux.StartupStatusRecorder(path, "ordinary", require_fresh=True)
+    recorder.append("guard_initialization", "started")
+    with pytest.raises(linux.E2EBlocked, match="startup_status_health_marker_invalid"):
+        recorder.append("health_accepted", "health_accepted", reached_http_readiness=True)
+
+
+def test_guarded_service_diagnostic_source_compiles_and_keeps_forbidden_guard(tmp_path: Path) -> None:
+    generated = tmp_path / "guarded_service.py"
+    linux.write_guarded_service(generated)
+    source = generated.read_text(encoding="utf-8")
+    ast.parse(source)
+    assert 'recorder.append(current_stage, "forbidden_operation"' in source
+    assert "os._exit(91)" in source
+    assert "contextlib.redirect_stderr(diagnostics)" in source
+    assert "traceback" not in source.lower()
+
+
+def test_startup_status_path_rejects_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "target.jsonl"
+    target.write_text("", encoding="utf-8")
+    link = tmp_path / "ordinary.jsonl"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable for this test account")
+    with pytest.raises(linux.E2EBlocked, match="startup_status_path_invalid"):
+        linux.StartupStatusRecorder(link, "ordinary")
+
+
+def test_failed_startup_diagnostic_retains_exit_and_cleanup_remains_owned(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class FakePopen:
+        returncode = 2
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    status_path = tmp_path / "ordinary.jsonl"
+    recorder = linux.StartupStatusRecorder(status_path, "ordinary", require_fresh=True)
+    recorder.append("guard_initialization", "started")
+    recorder.append("guard_initialization", "completed")
+    recorder.append("guard_dependency_import", "started")
+    recorder.append(
+        "guard_dependency_import", "failed", exception_class="ModuleNotFoundError",
+        missing_module="synthetic_dependency", exit_code=1,
+    )
+    managed = linux.ManagedProcess("ordinary", FakePopen(), ROOT, PORT, status_path)
+    details = linux.startup_exit_details(managed)
+    assert details["process_exit"] == {"exit_code": 2, "signal_number": None}
+    assert details["status_records"][-1]["missing_module"] == "synthetic_dependency"
+
+    table_calls = {"count": 0}
+    tree_calls = {"count": 0}
+    def fake_table(_root):
+        table_calls["count"] += 1
+        return {ROOT.pid: ROOT} if table_calls["count"] == 1 else {}
+    def fake_tree(*_args, **_kwargs):
+        tree_calls["count"] += 1
+        return (ROOT,) if tree_calls["count"] == 1 else ()
+    monkeypatch.setattr(linux, "process_table", fake_table)
+    monkeypatch.setattr(linux, "task_process_tree", fake_tree)
+    signalled = []
+    monkeypatch.setattr(linux, "signal_verified_identity", lambda identity, sig, _root: signalled.append(identity.pid) or True)
+    monkeypatch.setattr(linux.time, "sleep", lambda _duration: None)
+    cleaned = linux.stop_owned_process_tree(managed, tmp_path)
+    assert cleaned["root_exited"] is True
+    assert signalled == [ROOT.pid]
+
+
+def test_startup_failure_classification_requires_safe_recorded_cause() -> None:
+    assert linux.startup_cause_identified({
+        "status_available": True,
+        "failure_record": {
+            "event": "failed", "exception_class": "ModuleNotFoundError",
+            "missing_module": "required_dependency", "application_error_code": None,
+        },
+    }) is True
+    assert linux.startup_cause_identified({
+        "status_available": True,
+        "failure_record": {"event": "failed", "exception_class": None, "missing_module": None, "application_error_code": None},
+    }) is False
+    assert linux.startup_cause_identified({
+        "status_available": False,
+        "failure_record": {"event": "failed", "exception_class": "RuntimeError"},
+    }) is False
+    assert linux.startup_cause_identified({
+        "status_available": True,
+        "reached_http_readiness": True,
+        "failure_record": {"event": "failed", "exception_class": "RuntimeError"},
+    }) is False
+
+
 def test_proc_stat_captures_creation_parent_and_session_identity() -> None:
     parsed = linux.parse_proc_stat(OWNER.pid, _stat_line(OWNER))
     assert parsed == OWNER

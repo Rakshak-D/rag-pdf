@@ -13,6 +13,7 @@ import re
 import secrets
 import shutil
 import signal
+import stat
 import socket
 import subprocess
 import sys
@@ -29,6 +30,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MAX_PROCESS_DEPTH = 64
 MAX_SELECTED_PORT_ROWS = 32
 MAX_EVIDENCE_BYTES = 8 * 1024 * 1024
+MAX_STARTUP_STATUS_BYTES = 64 * 1024
+MAX_STARTUP_STATUS_RECORDS = 32
+MAX_STARTUP_STATUS_RECORD_BYTES = 4096
 SERVICE_START_TIMEOUT_SECONDS = 35.0
 PLAYWRIGHT_TIMEOUT_SECONDS = 660.0
 PROCESS_TERM_GRACE_SECONDS = 3.0
@@ -43,13 +47,32 @@ KNOWN_PSUTIL_TCP_STATES = {
     "ESTABLISHED", "SYN_SENT", "SYN_RECV", "FIN_WAIT1", "FIN_WAIT2",
     "TIME_WAIT", "CLOSE", "CLOSE_WAIT", "LAST_ACK", "LISTEN", "CLOSING",
 }
+STARTUP_STAGES = (
+    "guard_initialization",
+    "guard_dependency_import",
+    "guard_installation",
+    "runtime_module_import",
+    "runtime_entrypoint",
+    "server_startup",
+    "health_accepted",
+)
+STARTUP_EVENTS = {"started", "completed", "failed", "forbidden_operation", "health_accepted"}
+STARTUP_STATUS_KEYS = {
+    "schema_version", "service_role", "stage", "event", "exception_class",
+    "missing_module", "application_error_code", "forbidden_operation", "exit_code",
+    "signal_number", "reached_http_readiness",
+}
+_SAFE_MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*){0,15}\Z")
+_SAFE_CODE = re.compile(r"[a-z][a-z0-9_]{1,79}\Z")
+_SAFE_EXCEPTION_CLASS = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
 
 
 class E2EBlocked(RuntimeError):
     """A bounded failure carrying a safe, stable code only."""
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, details: Mapping[str, Any] | None = None):
         self.code = code if re.fullmatch(r"[a-z][a-z0-9_]{1,79}", code or "") else "linux_e2e_blocked"
+        self.details = dict(details) if details is not None else None
         super().__init__(self.code)
 
 
@@ -156,6 +179,265 @@ class ManagedProcess:
     popen: subprocess.Popen[bytes]
     identity: ProcessIdentity
     port: int | None = None
+    startup_status_path: Path | None = None
+
+
+def safe_exception_metadata(exc: BaseException) -> dict[str, str | None]:
+    """Return only bounded identifiers; never retain exception messages or paths."""
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(chain) < 8:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    root = chain[-1] if chain else exc
+    raw_class = type(root).__name__
+    exception_class = raw_class if _SAFE_EXCEPTION_CLASS.fullmatch(raw_class) else "Exception"
+    missing_module: str | None = None
+    application_error_code: str | None = None
+    for item in chain:
+        if isinstance(item, (ModuleNotFoundError, ImportError)):
+            candidate = getattr(item, "name", None)
+            if isinstance(candidate, str) and _SAFE_MODULE_NAME.fullmatch(candidate):
+                missing_module = candidate
+        for attribute in ("error_code", "code"):
+            candidate = getattr(item, attribute, None)
+            if application_error_code is None and isinstance(candidate, str) and _SAFE_CODE.fullmatch(candidate):
+                application_error_code = candidate
+    return {
+        "exception_class": exception_class,
+        "missing_module": missing_module,
+        "application_error_code": application_error_code,
+    }
+
+
+def _startup_record(
+    service_role: str,
+    stage: str,
+    event: str,
+    *,
+    exception_class: str | None = None,
+    missing_module: str | None = None,
+    application_error_code: str | None = None,
+    forbidden_operation: bool = False,
+    exit_code: int | None = None,
+    signal_number: int | None = None,
+    reached_http_readiness: bool = False,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "service_role": service_role,
+        "stage": stage,
+        "event": event,
+        "exception_class": exception_class,
+        "missing_module": missing_module,
+        "application_error_code": application_error_code,
+        "forbidden_operation": forbidden_operation,
+        "exit_code": exit_code,
+        "signal_number": signal_number,
+        "reached_http_readiness": reached_http_readiness,
+    }
+
+
+def validate_startup_records(records: Sequence[object], service_role: str) -> list[dict[str, Any]]:
+    if service_role not in {"ordinary", "bootstrap"} or not isinstance(records, Sequence) or isinstance(records, (str, bytes)):
+        raise E2EBlocked("startup_status_invalid")
+    if not records or len(records) > MAX_STARTUP_STATUS_RECORDS:
+        raise E2EBlocked("startup_status_record_count_invalid")
+    validated: list[dict[str, Any]] = []
+    stage_events: dict[str, set[str]] = {}
+    started: set[str] = set()
+    terminal: set[str] = set()
+    completed: set[str] = set()
+    total = 0
+    for raw in records:
+        if not isinstance(raw, dict) or set(raw) != STARTUP_STATUS_KEYS:
+            raise E2EBlocked("startup_status_schema_invalid")
+        record = dict(raw)
+        try:
+            encoded = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise E2EBlocked("startup_status_schema_invalid") from exc
+        total += len(encoded) + 1
+        if len(encoded) + 1 > MAX_STARTUP_STATUS_RECORD_BYTES or total > MAX_STARTUP_STATUS_BYTES:
+            raise E2EBlocked("startup_status_size_limit_exceeded")
+        stage, event = record["stage"], record["event"]
+        if (
+            isinstance(record["schema_version"], bool) or record["schema_version"] != 1
+            or record["service_role"] != service_role
+            or not isinstance(stage, str) or stage not in STARTUP_STAGES
+            or not isinstance(event, str) or event not in STARTUP_EVENTS
+        ):
+            raise E2EBlocked("startup_status_identity_invalid")
+        if any(not isinstance(record[key], bool) for key in ("forbidden_operation", "reached_http_readiness")):
+            raise E2EBlocked("startup_status_schema_invalid")
+        for key, pattern in (("exception_class", _SAFE_EXCEPTION_CLASS), ("missing_module", _SAFE_MODULE_NAME), ("application_error_code", _SAFE_CODE)):
+            value = record[key]
+            if value is not None and (not isinstance(value, str) or not pattern.fullmatch(value)):
+                raise E2EBlocked("startup_status_identifier_invalid")
+        for key in ("exit_code", "signal_number"):
+            value = record[key]
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+                raise E2EBlocked("startup_status_schema_invalid")
+        if event in {"started", "completed", "health_accepted"} and any(
+            record[key] is not None
+            for key in ("exception_class", "missing_module", "application_error_code", "signal_number")
+        ):
+            raise E2EBlocked("startup_status_schema_invalid")
+        if event == "completed" and record["exit_code"] is not None and not (
+            stage == "server_startup" and record["exit_code"] == 0
+        ):
+            raise E2EBlocked("startup_status_schema_invalid")
+        if event in {"started", "health_accepted"} and record["exit_code"] is not None:
+            raise E2EBlocked("startup_status_schema_invalid")
+        if event == "forbidden_operation" and any(
+            record[key] is not None
+            for key in ("exception_class", "missing_module", "application_error_code", "signal_number")
+        ):
+            raise E2EBlocked("startup_status_schema_invalid")
+        events = stage_events.setdefault(stage, set())
+        if event in events:
+            raise E2EBlocked("startup_status_duplicate_or_conflicting_record")
+        events.add(event)
+        if event == "started":
+            if stage == "health_accepted" or stage in started or stage in terminal:
+                raise E2EBlocked("startup_status_transition_invalid")
+            prerequisites_by_stage = {
+                "guard_dependency_import": ("guard_initialization",),
+                "guard_installation": ("guard_dependency_import",),
+                "runtime_module_import": ("guard_installation",),
+                "runtime_entrypoint": ("runtime_module_import",),
+                "server_startup": ("runtime_entrypoint",),
+            }
+            if any(item not in completed for item in prerequisites_by_stage.get(stage, ())):
+                raise E2EBlocked("startup_status_transition_invalid")
+            if any(row["event"] == "failed" for row in validated):
+                raise E2EBlocked("startup_status_transition_invalid")
+            started.add(stage)
+        elif event in {"completed", "failed"}:
+            if stage not in started or stage in terminal:
+                raise E2EBlocked("startup_status_transition_invalid")
+            terminal.add(stage)
+            if event == "completed":
+                completed.add(stage)
+            if event == "failed" and record["reached_http_readiness"]:
+                raise E2EBlocked("startup_status_transition_invalid")
+        elif event == "forbidden_operation":
+            if stage not in started or stage in terminal or not record["forbidden_operation"] or record["exit_code"] != 91:
+                raise E2EBlocked("startup_status_forbidden_marker_invalid")
+        elif event == "health_accepted":
+            prerequisites = {
+                "guard_initialization", "guard_dependency_import", "guard_installation",
+                "runtime_module_import", "runtime_entrypoint", "server_startup",
+            }
+            if (
+                stage != "health_accepted" or not record["reached_http_readiness"]
+                or not prerequisites <= started
+                or not prerequisites - {"server_startup"} <= completed
+                or "server_startup" in terminal
+            ):
+                raise E2EBlocked("startup_status_health_marker_invalid")
+        if event != "health_accepted" and record["reached_http_readiness"]:
+            raise E2EBlocked("startup_status_health_marker_invalid")
+        if event != "forbidden_operation" and record["forbidden_operation"]:
+            raise E2EBlocked("startup_status_forbidden_marker_invalid")
+        validated.append(record)
+    if validated[0]["stage"] != "guard_initialization" or validated[0]["event"] != "started":
+        raise E2EBlocked("startup_status_initial_stage_missing")
+    return validated
+
+
+def load_startup_status(path: Path, service_role: str) -> list[dict[str, Any]]:
+    if path.is_symlink() or not path.is_file():
+        raise E2EBlocked("startup_status_missing")
+    try:
+        if path.stat().st_size > MAX_STARTUP_STATUS_BYTES:
+            raise E2EBlocked("startup_status_size_limit_exceeded")
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise E2EBlocked("startup_status_unreadable") from exc
+    if not raw or not raw.endswith(b"\n"):
+        raise E2EBlocked("startup_status_malformed")
+    lines = raw.splitlines()
+    if len(lines) > MAX_STARTUP_STATUS_RECORDS:
+        raise E2EBlocked("startup_status_record_count_invalid")
+    records: list[object] = []
+    def strict_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate key")
+            result[key] = value
+        return result
+    try:
+        for line in lines:
+            if not line or len(line) + 1 > MAX_STARTUP_STATUS_RECORD_BYTES:
+                raise E2EBlocked("startup_status_malformed")
+            records.append(json.loads(line.decode("utf-8"), object_pairs_hook=strict_object))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise E2EBlocked("startup_status_malformed") from exc
+    return validate_startup_records(records, service_role)
+
+
+class StartupStatusRecorder:
+    """Small append-only, fsynced status writer for one Linux child service."""
+
+    def __init__(self, path: Path, service_role: str, *, require_fresh: bool = False):
+        if service_role not in {"ordinary", "bootstrap"} or not path.is_absolute() or path.name != f"{service_role}.jsonl":
+            raise E2EBlocked("startup_status_path_invalid")
+        if path.is_symlink() or not path.parent.is_dir() or path.parent.is_symlink():
+            raise E2EBlocked("startup_status_path_invalid")
+        if require_fresh and path.exists():
+            raise E2EBlocked("startup_status_path_not_fresh")
+        self.path = path
+        self.service_role = service_role
+
+    def append(self, stage: str, event: str, **fields: Any) -> None:
+        if stage not in STARTUP_STAGES or event not in STARTUP_EVENTS:
+            raise E2EBlocked("startup_status_identity_invalid")
+        record = _startup_record(self.service_role, stage, event, **fields)
+        payload = json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8") + b"\n"
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = -1
+        try:
+            descriptor = os.open(self.path, flags, 0o600)
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise E2EBlocked("startup_status_path_invalid")
+            try:
+                import fcntl
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            if os.fstat(descriptor).st_size:
+                prior = load_startup_status(self.path, self.service_role)
+            else:
+                prior = []
+            validate_startup_records([*prior, record], self.service_role)
+            offset = 0
+            while offset < len(payload):
+                offset += os.write(descriptor, payload[offset:])
+            os.fsync(descriptor)
+            directory_flag = getattr(os, "O_DIRECTORY", 0)
+            if directory_flag:
+                directory_descriptor = os.open(self.path.parent, os.O_RDONLY | directory_flag)
+                try:
+                    os.fsync(directory_descriptor)
+                finally:
+                    os.close(directory_descriptor)
+        except OSError as exc:
+            raise E2EBlocked("startup_status_write_failed") from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+    def has_terminal(self, stage: str) -> bool:
+        if not self.path.exists():
+            return False
+        return any(
+            row["stage"] == stage and row["event"] in {"completed", "failed"}
+            for row in load_startup_status(self.path, self.service_role)
+        )
 
 
 def validate_port(port: object) -> int:
@@ -585,6 +867,7 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
             "browser_guard_violations": None,
         },
         "cleanup": {"complete": False, "processes": {}, "ports_zero_listeners": {}},
+        "startup_diagnostic": None,
         "original_failure_code": None,
         "failure_code": None,
         "evidence_manifest_sha256": None,
@@ -618,6 +901,10 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
             write_json_fsync(expected_path, fixture["expected"])
             guard_script = workspace / "guarded_service.py"
             write_guarded_service(guard_script)
+            startup_status_dir = workspace / "startup-status"
+            startup_status_dir.mkdir(mode=0o700)
+            ordinary_status_path = startup_status_dir / "ordinary.jsonl"
+            bootstrap_status_path = startup_status_dir / "bootstrap.jsonl"
             playwright_result_path = workspace / "playwright-results.json"
             observations_path = workspace / "api-observations.jsonl"
 
@@ -631,22 +918,26 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
             baseline = clean_child_environment(os.environ, workspace)
             ordinary_token, bootstrap_token, invalid_token = tokens
             ordinary_env = service_environment(
-                baseline, "ordinary", ordinary_token, paths, ordinary_port, fixture["report_path"]
+                baseline, "ordinary", ordinary_token, paths, ordinary_port, fixture["report_path"],
+                startup_status_path=ordinary_status_path,
             )
             bootstrap_env = service_environment(
-                baseline, "bootstrap", bootstrap_token, paths, bootstrap_port
+                baseline, "bootstrap", bootstrap_token, paths, bootstrap_port,
+                startup_status_path=bootstrap_status_path,
             )
 
             report["stage"] = "ordinary_service_start"
             ordinary = spawn_owned(
-                "ordinary", [sys.executable, "-u", str(guard_script)], ROOT, ordinary_env, ordinary_port
+                "ordinary", [sys.executable, "-u", str(guard_script)], ROOT, ordinary_env, ordinary_port,
+                startup_status_path=ordinary_status_path,
             )
             managed.append(ordinary)
             report["processes"] = [_process_record(item) for item in managed]
 
             report["stage"] = "bootstrap_service_start"
             bootstrap = spawn_owned(
-                "bootstrap", [sys.executable, "-u", str(guard_script)], ROOT, bootstrap_env, bootstrap_port
+                "bootstrap", [sys.executable, "-u", str(guard_script)], ROOT, bootstrap_env, bootstrap_port,
+                startup_status_path=bootstrap_status_path,
             )
             managed.append(bootstrap)
             report["processes"] = [_process_record(item) for item in managed]
@@ -671,6 +962,8 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
                     "root_start_ticks": process.identity.start_ticks,
                     "listener": listener.sanitized(),
                     "health": health,
+                    "startup": load_startup_status(process.startup_status_path, process.name)
+                    if process.startup_status_path is not None else None,
                 }
 
             browser_env = dict(baseline)
@@ -733,6 +1026,8 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
         except E2EBlocked as exc:
             first_failure = exc
             report["original_failure_code"] = exc.code
+            if exc.details is not None:
+                report["startup_diagnostic"] = exc.details
         except Exception as exc:
             first_failure = E2EBlocked("linux_e2e_internal_error")
             report["original_failure_code"] = first_failure.code
@@ -750,11 +1045,14 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
             cleanup_failures: list[str] = []
             for process in reversed(managed):
                 try:
-                    report["cleanup"]["processes"][process.name] = stop_owned_process_tree(process)
+                    cleanup = stop_owned_process_tree(process)
+                    cleanup["process_exit"] = managed_process_exit(process)
+                    report["cleanup"]["processes"][process.name] = cleanup
                 except E2EBlocked as exc:
                     cleanup_failures.append(exc.code)
                     report["cleanup"]["processes"][process.name] = {
                         "verified": False, "failure_code": exc.code,
+                        "process_exit": managed_process_exit(process),
                     }
             if ports:
                 for port in ports:
@@ -781,8 +1079,10 @@ def run_acceptance(frontend_dir: Path, evidence_dir: Path | None = None) -> tupl
                 report["cleanup"]["failure_codes"] = cleanup_failures
             elif first_failure is not None:
                 report["failure_code"] = first_failure.code
-                report["classification"] = classify_failure(
-                    report["stage"], first_failure.code, cleanup_complete=True
+                report["classification"] = (
+                    "LINUX_STARTUP_CAUSE_IDENTIFIED"
+                    if startup_cause_identified(report.get("startup_diagnostic"))
+                    else classify_failure(report["stage"], first_failure.code, cleanup_complete=True)
                 )
             else:
                 report["classification"] = "LINUX_BROWSER_E2E_VERIFIED"
@@ -873,33 +1173,166 @@ def write_synthetic_pdf(path: Path) -> None:
 
 
 def write_guarded_service(path: Path) -> None:
-    source = '''import os
+    source = '''from __future__ import annotations
 
-def forbidden(*_args, **_kwargs):
-    os._exit(91)
+import contextlib
+import importlib
+import os
+from pathlib import Path
+import re
+import sys
 
-import chromadb
-from backend.embeddings.text import TextEmbeddingAdapter
-from backend.embeddings.image import ImageEmbeddingAdapter
-from backend.engine.reranking import CrossEncoderReranker
-from backend.engine.generation import LocalGenerationAdapter
-from backend.vectorstore.chroma_store import ChromaVectorStore
-chromadb.PersistentClient = forbidden
-TextEmbeddingAdapter.load = forbidden
-ImageEmbeddingAdapter.load = forbidden
-CrossEncoderReranker.load = forbidden
-LocalGenerationAdapter.generate = forbidden
-ChromaVectorStore.open_existing = forbidden
-ChromaVectorStore.create_new = forbidden
+from scripts.authenticated_browser_e2e_linux import StartupStatusRecorder, safe_exception_metadata
 
 role = os.environ.get("RAG_E2E_SERVICE_ROLE")
-if role == "ordinary":
-    from backend.app.runtime import main
-elif role == "bootstrap":
-    from backend.bootstrap_app.runtime import main
-else:
+status_value = os.environ.get("RAG_E2E_STARTUP_STATUS_PATH")
+if role not in {"ordinary", "bootstrap"} or not status_value:
     raise SystemExit(92)
-raise SystemExit(main())
+status_path = Path(status_value)
+if not status_path.is_absolute() or status_path.name != f"{role}.jsonl":
+    raise SystemExit(92)
+recorder = StartupStatusRecorder(status_path, role, require_fresh=True)
+current_stage = "guard_initialization"
+recorder.append(current_stage, "started")
+recorder.append(current_stage, "completed")
+
+class SafeDiagnosticStderr:
+    """Consumes child logs without retaining messages, paths, or credentials."""
+    def __init__(self):
+        self.pending = ""
+        self.exception_class = None
+        self.missing_module = None
+        self.application_error_code = None
+
+    def write(self, value):
+        if not isinstance(value, str):
+            return 0
+        for character in value:
+            if character == "\\n":
+                self._line(self.pending)
+                self.pending = ""
+            elif len(self.pending) < 2048:
+                self.pending += character
+            else:
+                self.pending = ""
+        return len(value)
+
+    def _line(self, line):
+        code = re.search(r"(?:Local runtime configuration error|Bootstrap configuration error): ([a-z][a-z0-9_]{1,79})\\Z", line)
+        if code:
+            self.application_error_code = code.group(1)
+        module = re.search(r"No module named ['\\\"]([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*){0,15})['\\\"]", line)
+        if module:
+            self.missing_module = module.group(1)
+            self.exception_class = "ModuleNotFoundError"
+        kind = re.match(r"([A-Za-z][A-Za-z0-9_]{0,79}(?:Error|Exception))(?::|\\Z)", line)
+        if kind:
+            self.exception_class = kind.group(1)
+
+    def flush(self):
+        if self.pending:
+            self._line(self.pending)
+            self.pending = ""
+
+    def isatty(self):
+        return False
+
+
+diagnostics = SafeDiagnosticStderr()
+
+def record_failure(stage, exc=None, exit_code=None):
+    fields = safe_exception_metadata(exc) if exc is not None else {
+        "exception_class": diagnostics.exception_class,
+        "missing_module": diagnostics.missing_module,
+        "application_error_code": diagnostics.application_error_code,
+    }
+    if diagnostics.missing_module and not fields.get("missing_module"):
+        fields["missing_module"] = diagnostics.missing_module
+    if diagnostics.exception_class and not fields.get("exception_class"):
+        fields["exception_class"] = diagnostics.exception_class
+    if diagnostics.application_error_code and not fields.get("application_error_code"):
+        fields["application_error_code"] = diagnostics.application_error_code
+    recorder.append(stage, "failed", **fields, exit_code=exit_code)
+
+try:
+    current_stage = "guard_dependency_import"
+    recorder.append(current_stage, "started")
+    import chromadb
+    from backend.embeddings.text import TextEmbeddingAdapter
+    from backend.embeddings.image import ImageEmbeddingAdapter
+    from backend.engine.reranking import CrossEncoderReranker
+    from backend.engine.generation import LocalGenerationAdapter
+    from backend.vectorstore.chroma_store import ChromaVectorStore
+    recorder.append(current_stage, "completed")
+
+    current_stage = "guard_installation"
+    recorder.append(current_stage, "started")
+    def forbidden(*_args, **_kwargs):
+        recorder.append(current_stage, "forbidden_operation", forbidden_operation=True, exit_code=91)
+        os._exit(91)
+    chromadb.PersistentClient = forbidden
+    TextEmbeddingAdapter.load = forbidden
+    ImageEmbeddingAdapter.load = forbidden
+    CrossEncoderReranker.load = forbidden
+    LocalGenerationAdapter.generate = forbidden
+    ChromaVectorStore.open_existing = forbidden
+    ChromaVectorStore.create_new = forbidden
+    recorder.append(current_stage, "completed")
+
+    current_stage = "runtime_module_import"
+    recorder.append(current_stage, "started")
+    module_name = "backend.app.runtime" if role == "ordinary" else "backend.bootstrap_app.runtime"
+    runtime_module = importlib.import_module(module_name)
+    recorder.append(current_stage, "completed")
+
+    current_stage = "runtime_entrypoint"
+    recorder.append(current_stage, "started")
+    main = getattr(runtime_module, "main", None)
+    if not callable(main):
+        raise RuntimeError("entrypoint unavailable")
+    recorder.append(current_stage, "completed")
+
+    current_stage = "server_startup"
+    recorder.append(current_stage, "started")
+    build_name = "build_runtime" if role == "ordinary" else "build_bootstrap_runtime"
+    original_build = getattr(runtime_module, build_name)
+    def diagnosed_build(*args, **kwargs):
+        try:
+            return original_build(*args, **kwargs)
+        except BaseException as exc:
+            if not recorder.has_terminal("server_startup"):
+                record_failure("server_startup", exc)
+            raise
+    setattr(runtime_module, build_name, diagnosed_build)
+    original_run_server = runtime_module.run_server
+    def diagnosed_run_server(*args, **kwargs):
+        try:
+            return original_run_server(*args, **kwargs)
+        except BaseException as exc:
+            if not recorder.has_terminal("server_startup"):
+                record_failure("server_startup", exc)
+            raise
+    runtime_module.run_server = diagnosed_run_server
+
+    with contextlib.redirect_stderr(diagnostics):
+        result = main()
+        diagnostics.flush()
+    exit_code = result if isinstance(result, int) and not isinstance(result, bool) else 0
+    if not recorder.has_terminal("server_startup"):
+        if exit_code != 0 or diagnostics.exception_class or diagnostics.application_error_code:
+            record_failure("server_startup", exit_code=exit_code)
+        else:
+            recorder.append("server_startup", "completed", exit_code=exit_code)
+    raise SystemExit(exit_code)
+except SystemExit as exc:
+    code = exc.code if isinstance(exc.code, int) and not isinstance(exc.code, bool) else 1
+    if code != 0 and not recorder.has_terminal(current_stage):
+        record_failure(current_stage, exc, exit_code=code)
+    raise
+except BaseException as exc:
+    if not recorder.has_terminal(current_stage):
+        record_failure(current_stage, exc, exit_code=1)
+    raise SystemExit(1)
 '''
     path.write_text(source, encoding="utf-8", newline="\n")
     compile(source, str(path), "exec")
@@ -1011,7 +1444,7 @@ def clean_child_environment(base: Mapping[str, str], workspace: Path) -> dict[st
 
 def service_environment(
     baseline: Mapping[str, str], role: str, token: str, paths: Mapping[str, Path],
-    port: int, report_path: Path | None = None,
+    port: int, report_path: Path | None = None, *, startup_status_path: Path | None = None,
 ) -> dict[str, str]:
     env = dict(baseline)
     if role == "ordinary":
@@ -1026,6 +1459,7 @@ def service_environment(
             "RAG_WORKBENCH_API_HOST": "127.0.0.1",
             "RAG_WORKBENCH_API_PORT": str(port),
             "RAG_E2E_SERVICE_ROLE": "ordinary",
+            "RAG_E2E_STARTUP_STATUS_PATH": str(startup_status_path) if startup_status_path else "",
         })
     elif role == "bootstrap":
         env.update({
@@ -1036,6 +1470,7 @@ def service_environment(
             "RAG_WORKBENCH_BOOTSTRAP_API_HOST": "127.0.0.1",
             "RAG_WORKBENCH_BOOTSTRAP_API_PORT": str(port),
             "RAG_E2E_SERVICE_ROLE": "bootstrap",
+            "RAG_E2E_STARTUP_STATUS_PATH": str(startup_status_path) if startup_status_path else "",
         })
     else:
         raise E2EBlocked("service_role_invalid")
@@ -1063,10 +1498,18 @@ def http_health(port: int, timeout: float = 1.5) -> tuple[int, dict[str, Any]]:
 def spawn_owned(
     name: str, argv: Sequence[str], cwd: Path, env: Mapping[str, str],
     port: int | None = None, popen_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
-    proc_root: Path = Path("/proc"),
+    proc_root: Path = Path("/proc"), startup_status_path: Path | None = None,
 ) -> ManagedProcess:
     if not argv or any(not isinstance(item, str) or not item for item in argv):
         raise E2EBlocked("process_arguments_invalid")
+    if startup_status_path is not None:
+        expected_role = name if name in {"ordinary", "bootstrap"} else None
+        if (
+            expected_role is None or not startup_status_path.is_absolute()
+            or startup_status_path.name != f"{expected_role}.jsonl"
+            or env.get("RAG_E2E_STARTUP_STATUS_PATH") != str(startup_status_path)
+        ):
+            raise E2EBlocked("startup_status_path_invalid")
     try:
         process = popen_factory(
             list(argv), cwd=str(cwd), env=dict(env), stdin=subprocess.DEVNULL,
@@ -1083,7 +1526,77 @@ def spawn_owned(
         raise E2EBlocked("process_identity_capture_failed")
     if identity.session_id != identity.pid:
         raise E2EBlocked("process_session_identity_invalid")
-    return ManagedProcess(name, process, identity, port)
+    return ManagedProcess(name, process, identity, port, startup_status_path)
+
+
+def startup_exit_details(managed: ManagedProcess) -> dict[str, Any]:
+    returncode = managed.popen.poll()
+    process_exit: dict[str, int | None] = {"exit_code": returncode, "signal_number": -returncode if isinstance(returncode, int) and returncode < 0 else None}
+    if managed.startup_status_path is None:
+        return {"process_exit": process_exit, "status_available": False, "status_error_code": "startup_status_unconfigured"}
+    try:
+        records = load_startup_status(managed.startup_status_path, managed.name)
+    except E2EBlocked as exc:
+        return {
+            "process_exit": process_exit,
+            "status_available": False,
+            "status_error_code": exc.code,
+            "reached_http_readiness": False,
+        }
+    failure_record = next(
+        (row for row in reversed(records) if row["event"] in {"failed", "forbidden_operation"}),
+        None,
+    )
+    return {
+        "process_exit": process_exit,
+        "status_available": True,
+        "status_records": records,
+        "failure_stage": failure_record["stage"] if failure_record is not None else None,
+        "failure_record": failure_record,
+        "forbidden_operation_fired": any(item["event"] == "forbidden_operation" for item in records),
+        "reached_http_readiness": any(item["event"] == "health_accepted" for item in records),
+    }
+
+
+def managed_process_exit(managed: ManagedProcess) -> dict[str, int | None]:
+    returncode = managed.popen.poll()
+    return {
+        "exit_code": returncode,
+        "signal_number": -returncode if isinstance(returncode, int) and returncode < 0 else None,
+    }
+
+
+def assert_startup_status_running(managed: ManagedProcess) -> list[dict[str, Any]]:
+    if managed.startup_status_path is None:
+        return []
+    records = load_startup_status(managed.startup_status_path, managed.name)
+    by_stage_event = {(row["stage"], row["event"]) for row in records}
+    completed_stages = {
+        "guard_initialization", "guard_dependency_import", "guard_installation",
+        "runtime_module_import", "runtime_entrypoint",
+    }
+    if any((stage, "completed") not in by_stage_event for stage in completed_stages):
+        raise E2EBlocked(
+            "startup_stage_incomplete",
+            details={"process_exit": managed_process_exit(managed), "status_records": records},
+        )
+    if ("server_startup", "started") not in by_stage_event:
+        raise E2EBlocked(
+            "startup_stage_incomplete",
+            details={"process_exit": managed_process_exit(managed), "status_records": records},
+        )
+    if any(row["event"] in {"failed", "forbidden_operation"} for row in records):
+        failure_record = next(row for row in reversed(records) if row["event"] in {"failed", "forbidden_operation"})
+        raise E2EBlocked(
+            "startup_stage_failed",
+            details={
+                "process_exit": managed_process_exit(managed),
+                "failure_stage": failure_record["stage"],
+                "failure_record": failure_record,
+                "status_records": records,
+            },
+        )
+    return records
 
 
 def wait_for_owned_health(
@@ -1095,7 +1608,10 @@ def wait_for_owned_health(
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if managed.popen.poll() is not None:
-            raise E2EBlocked(f"{managed.name}_process_exited_before_ready")
+            raise E2EBlocked(
+                f"{managed.name}_process_exited_before_ready",
+                details=startup_exit_details(managed),
+            )
         snapshot = verifier.snapshot(managed.port)
         if not snapshot.proc_listeners and not snapshot.psutil_listeners:
             time.sleep(0.1)
@@ -1112,6 +1628,12 @@ def wait_for_owned_health(
         stable = verifier.verify_owned_listener(after, managed.identity)
         if (stable.pid, stable.inode, stable.address, stable.port) != (listener.pid, listener.inode, listener.address, listener.port):
             raise E2EBlocked("listener_identity_changed_during_health")
+        if managed.startup_status_path is not None:
+            assert_startup_status_running(managed)
+            status_writer = StartupStatusRecorder(managed.startup_status_path, managed.name)
+            status_writer.append(
+                "health_accepted", "health_accepted", reached_http_readiness=True
+            )
         return stable, {"status": status, "body_status": "ok"}
     raise E2EBlocked(f"{managed.name}_readiness_timeout")
 
@@ -1199,6 +1721,23 @@ def classify_failure(stage: str, failure_code: str, *, cleanup_complete: bool) -
     if failure_code == "playwright_scenario_failed":
         return "LINUX_BROWSER_BEHAVIOR_FAILED"
     return "LINUX_BROWSER_EXECUTION_BLOCKED"
+
+
+def startup_cause_identified(details: object) -> bool:
+    if (
+        not isinstance(details, dict) or details.get("status_available") is not True
+        or details.get("reached_http_readiness") is True
+    ):
+        return False
+    failure = details.get("failure_record")
+    if not isinstance(failure, dict):
+        return False
+    if failure.get("event") == "forbidden_operation":
+        return failure.get("forbidden_operation") is True and failure.get("exit_code") == 91
+    return failure.get("event") == "failed" and any(
+        failure.get(key) is not None
+        for key in ("exception_class", "missing_module", "application_error_code")
+    )
 
 
 def copy_sanitized_playwright_files(result_path: Path, observations_path: Path, tokens: Sequence[str]) -> dict[str, bytes]:
