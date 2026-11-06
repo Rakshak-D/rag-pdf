@@ -10,6 +10,7 @@ from starlette.testclient import TestClient
 
 from backend.app import create_app
 from backend.experiments import BenchmarkCase, BenchmarkSuite, build_ablation_plan
+from backend.experiments.ablation_plans import canonical_ablation_variants
 from backend.experiments.serialization import serialize_evaluation_result
 from backend.services import ExperimentJobManager
 from tests.unit.test_experiment_service import _service
@@ -34,6 +35,21 @@ def test_health_authentication_and_security_headers(tmp_path: Path):
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_canonical_ablation_variant_catalog_is_authenticated_and_matches_runner_contract(tmp_path: Path):
+    service, _, _ = _service(tmp_path)
+    client = TestClient(create_app(service, api_token="test-token"))
+
+    assert client.get("/api/v1/ablations/variants").status_code == 401
+    response = client.get("/api/v1/ablations/variants", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": "1",
+        "variants": list(canonical_ablation_variants()),
+    }
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_evaluation_submission_reads_and_metrics_use_service(tmp_path: Path):

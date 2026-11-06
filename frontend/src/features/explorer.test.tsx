@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,6 +38,15 @@ function metric(overrides: Partial<CatalogMetricRecord> = {}): CatalogMetricReco
 
 function response(value: unknown, status = 200): Response { return Response.json(value, { status }); }
 
+function readBlob(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("blob_read_failed"));
+    reader.onerror = () => reject(new Error("blob_read_failed"));
+    reader.readAsText(blob);
+  });
+}
+
 function mount(path: string) {
   const router = createMemoryRouter([{ path: "*", element: <App /> }], { initialEntries: [path] });
   render(<RouterProvider router={router} />);
@@ -50,7 +59,7 @@ async function connect(user: ReturnType<typeof userEvent.setup>, token = "test-t
   await screen.findByText("Connected");
 }
 
-function standardFetch(handler: (path: string, init: RequestInit | undefined) => Response) {
+function standardFetch(handler: (path: string, init: RequestInit | undefined) => Response | Promise<Response>) {
   return vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
     const path = String(input);
     if (path === "/health") return response(health);
@@ -75,6 +84,20 @@ describe("jobs and artifacts explorer", () => {
     await router.navigate(1);
     expect(await screen.findByRole("heading", { name: "Jobs", level: 1 })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Jobs" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("exposes evaluations, ablations, and results as working research navigation", async () => {
+    const fetcher = standardFetch((path) => path.startsWith("/api/v1/jobs") ? response({ jobs: [] }) : response({ artifacts: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup(); const router = mount("/");
+    await user.click(screen.getByRole("link", { name: "Evaluations" }));
+    expect(await screen.findByRole("heading", { name: "Evaluation run" })).toBeInTheDocument();
+    await router.navigate("/experiments/ablation");
+    expect(await screen.findByRole("heading", { name: "Ablation run" })).toBeInTheDocument();
+    await user.click(screen.getAllByRole("link", { name: "Results" })[0]!);
+    expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
+    expect(document.querySelector('[aria-disabled="true"]')).toBeNull();
+    expect(screen.queryByRole("link", { name: "Artifacts" })).not.toBeInTheDocument();
   });
 
   it("filters jobs, paginates with the bounded API limit, and opens a detail route", async () => {
@@ -224,7 +247,7 @@ describe("jobs and artifacts explorer", () => {
     const fetcher = standardFetch((path) => {
       if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}`) return response(evalArtifact);
       if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}/metrics`) return response({ metrics: values });
-      if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}/result`) return response({ status: "verified", result: [1, 2] });
+      if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}/result`) return response({ artifact_type: "evaluation_result", serialization_schema_version: "1", payload: { status: "verified", result: [1, 2] } });
       if (path.startsWith("/api/v1/artifacts")) return response({ artifacts: [] });
       return response({ jobs: [] });
     });
@@ -257,6 +280,67 @@ describe("jobs and artifacts explorer", () => {
     expect(screen.queryByText("private raw body")).not.toBeInTheDocument();
   });
 
+  it("does not reveal a late result response after disconnect", async () => {
+    const evalArtifact = artifact();
+    let finishResult: ((value: Response) => void) | undefined;
+    const fetcher = standardFetch((path) => {
+      if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}`) return response(evalArtifact);
+      if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}/metrics`) return response({ metrics: [] });
+      if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}/result`) return new Promise<Response>((resolve) => { finishResult = resolve; });
+      if (path.startsWith("/api/v1/artifacts")) return response({ artifacts: [] });
+      return response({ jobs: [] });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup(); mount(`/artifacts/${evalArtifact.artifact_id}`); await connect(user);
+    await user.click(await screen.findByRole("button", { name: "Load result JSON" }));
+    await waitFor(() => expect(finishResult).toBeDefined());
+    await user.click(screen.getByRole("button", { name: "Disconnect" }));
+    expect(await screen.findByText("Connect to inspect this artifact")).toBeInTheDocument();
+    await act(async () => { finishResult?.(response({ artifact_type: "evaluation_result", serialization_schema_version: "1", payload: { private: "late result" } })); });
+    expect(screen.queryByLabelText("Serialized artifact result JSON")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download original result JSON" })).not.toBeInTheDocument();
+  });
+
+  it("downloads catalog CSV and the unchanged stored result JSON within the browser limit", async () => {
+    const evalArtifact = artifact();
+    const rawJson = JSON.stringify({ artifact_type: "evaluation_result", serialization_schema_version: "1", payload: { status: "succeeded", query: "actual stored value" } });
+    const createDescriptor = Object.getOwnPropertyDescriptor(window.URL, "createObjectURL");
+    const revokeDescriptor = Object.getOwnPropertyDescriptor(window.URL, "revokeObjectURL");
+    const createObjectURL = vi.fn((_blob: Blob | MediaSource) => "blob:result-export");
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(window.URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(window.URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    const downloads: string[] = [];
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { downloads.push(this.download); });
+    try {
+      const fetcher = standardFetch((path) => {
+        if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}`) return response(evalArtifact);
+        if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}/metrics`) return response({ metrics: [metric()] });
+        if (path === `/api/v1/artifacts/${evalArtifact.artifact_id}/result`) return new Response(rawJson, { headers: { "Content-Type": "application/json" } });
+        if (path.startsWith("/api/v1/artifacts")) return response({ artifacts: [] });
+        return response({ jobs: [] });
+      });
+      vi.stubGlobal("fetch", fetcher);
+      const user = userEvent.setup(); mount(`/artifacts/${evalArtifact.artifact_id}`); await connect(user);
+      await user.click(await screen.findByRole("button", { name: "Download metric summary CSV" }));
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      const csvBlob = createObjectURL.mock.calls[0]?.[0] as Blob;
+      expect(await readBlob(csvBlob)).toContain('"artifact_id","artifact_type","benchmark_id"');
+      await user.click(screen.getByRole("button", { name: "Load result JSON" }));
+      await screen.findByLabelText("Serialized artifact result JSON");
+      await user.click(screen.getByRole("button", { name: "Download original result JSON" }));
+      expect(createObjectURL).toHaveBeenCalledTimes(2);
+      expect(await readBlob(createObjectURL.mock.calls[1]?.[0] as Blob)).toBe(rawJson);
+      expect(downloads).toEqual([`${evalArtifact.artifact_id}-metrics.csv`, `${evalArtifact.artifact_id}.json`]);
+      await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledTimes(2));
+      expect(anchorClick).toHaveBeenCalledTimes(2);
+    } finally {
+      anchorClick.mockRestore();
+      if (createDescriptor) Object.defineProperty(window.URL, "createObjectURL", createDescriptor); else delete (window.URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+      if (revokeDescriptor) Object.defineProperty(window.URL, "revokeObjectURL", revokeDescriptor); else delete (window.URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
+    }
+  });
+
   it("loads ablation comparisons and requires an object configuration before plan-bound result loading", async () => {
     const ablation = artifact({ artifact_id: "b".repeat(64), artifact_type: "ablation_result", relative_path: "ablation_result/bb/ablation.json", document_manifest_hash: "manifest-hash", evaluation_fingerprint: null });
     const fetcher = standardFetch((path) => {
@@ -281,6 +365,35 @@ describe("jobs and artifacts explorer", () => {
     const resultUrl = fetcher.mock.calls.map(([input]) => String(input)).find((path) => path.includes("/result?"));
     expect(resultUrl).toContain("document_manifest_hash=manifest-hash");
     expect(resultUrl).not.toContain("test-token");
+  });
+
+  it("shows the persisted canonical variant outcomes without inventing missing results", async () => {
+    const ablation = artifact({ artifact_id: "c".repeat(64), artifact_type: "ablation_result", relative_path: "ablation_result/cc/result.json", status: "partial", document_manifest_hash: "d".repeat(64), shared_index_fingerprint: "e".repeat(64), evaluation_fingerprint: null });
+    const variantIds = ["1_Dense_only", "2_BM25_only", "3_Hybrid_static", "4_Hybrid_adaptive", "5_Hybrid_reranker", "6_Full_pipeline"];
+    const payload = {
+      schema_version: "1", status: "partial", document_manifest_hash: "d".repeat(64), shared_index_fingerprint: "e".repeat(64),
+      benchmark_id: "synthetic-bench", benchmark_version: "2",
+      variants: variantIds.map((variant_id, index) => ({ variant_id, run_fingerprint: String(index + 1).repeat(64), status: index === 5 ? "failed" : "succeeded", evaluation_result: index === 5 ? null : {}, error_code: index === 5 ? "worker_failed" : null })),
+      metric_comparisons: [],
+    };
+    const fetcher = standardFetch((path) => {
+      if (path === `/api/v1/artifacts/${ablation.artifact_id}`) return response(ablation);
+      if (path === `/api/v1/artifacts/${ablation.artifact_id}/metrics`) return response({ metrics: [] });
+      if (path === `/api/v1/artifacts/${ablation.artifact_id}/comparisons`) return response({ comparisons: [] });
+      if (path.includes("/result?")) return response({ artifact_type: "ablation_result", serialization_schema_version: "1", payload });
+      if (path.startsWith("/api/v1/artifacts")) return response({ artifacts: [] });
+      return response({ jobs: [] });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup(); mount(`/artifacts/${ablation.artifact_id}`); await connect(user);
+    await screen.findByRole("heading", { name: "Artifact metadata" });
+    fireEvent.change(screen.getByRole("textbox", { name: /Original compatible base configuration/ }), { target: { value: "{}" } });
+    await user.click(screen.getByRole("button", { name: "Load result JSON" }));
+    expect(await screen.findByRole("heading", { name: "Variant outcomes" })).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(7);
+    expect(screen.getByText("worker_failed")).toBeInTheDocument();
+    expect(screen.getByText("failed", { selector: ".status-badge" })).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
 
   it("does not put credentials in storage or URLs", async () => {

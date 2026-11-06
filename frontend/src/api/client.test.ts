@@ -4,6 +4,39 @@ import { ApiError, WorkbenchApiClient } from "./client";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("WorkbenchApiClient", () => {
+  it("validates and returns the six ordered canonical ablation overrides", async () => {
+    const variants = [
+      { variant_id: "1_Dense_only", overrides: { retrieval_mode: "semantic", use_reranker: false } },
+      { variant_id: "2_BM25_only", overrides: { retrieval_mode: "bm25", use_reranker: false } },
+      { variant_id: "3_Hybrid_static", overrides: { retrieval_mode: "hybrid", adaptive_weighting: false } },
+      { variant_id: "4_Hybrid_adaptive", overrides: { retrieval_mode: "hybrid", adaptive_weighting: true } },
+      { variant_id: "5_Hybrid_reranker", overrides: { retrieval_mode: "hybrid", use_reranker: true } },
+      { variant_id: "6_Full_pipeline", overrides: { retrieval_mode: "hybrid", use_filtering: true, percentile_cutoff: 80 } },
+    ];
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ schema_version: "1", variants }));
+    const client = new WorkbenchApiClient({ token: "token", fetcher });
+    await expect(client.listCanonicalAblationVariants()).resolves.toEqual({ schema_version: "1", variants });
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/v1/ablations/variants");
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe("Bearer token");
+
+    const malformed = new WorkbenchApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json({ schema_version: "1", variants: variants.slice(1) })) });
+    await expect(malformed.listCanonicalAblationVariants()).rejects.toMatchObject({ kind: "malformed_response" });
+  });
+
+  it("keeps the bounded original result JSON and rejects oversized or malformed result envelopes", async () => {
+    const original = '{"artifact_type":"evaluation_result","serialization_schema_version":"1","payload":{"status":"partial","value":0}}';
+    const client = new WorkbenchApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response(original, { headers: { "Content-Type": "application/json" } })) });
+    await expect(client.loadArtifactResult("a".repeat(64), "evaluation_result")).resolves.toMatchObject({
+      artifact_type: "evaluation_result", payload: { status: "partial", value: 0 }, raw_json: original,
+    });
+
+    const oversized = new WorkbenchApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { headers: { "Content-Type": "application/json", "Content-Length": String(9 * 1024 * 1024) } })) });
+    await expect(oversized.loadArtifactResult("a".repeat(64), "evaluation_result")).rejects.toMatchObject({ code: "response_body_too_large" });
+
+    const malformed = new WorkbenchApiClient({ token: "token", fetcher: vi.fn<typeof fetch>().mockResolvedValue(Response.json({ artifact_type: "evaluation_result", serialization_schema_version: "1", payload: [] })) });
+    await expect(malformed.loadArtifactResult("a".repeat(64), "evaluation_result")).rejects.toMatchObject({ kind: "malformed_response" });
+  });
+
   it.each(["report_match", "mismatch", "unavailable", "indeterminate"] as const)("validates %s report compatibility", async (status) => {
     const hash = "a".repeat(64);
     const response = { status, reason_code: "report_checked", workflow: "evaluation", document_manifest_hash: hash, expected_index_fingerprint: "c".repeat(64), build_id: null, report_status: status === "report_match" ? "completed" : null, reported_text_records: status === "report_match" ? 3 : null, reported_image_records: status === "report_match" ? 0 : null, observed_text_records: null, observed_image_records: null, store_checked: false, check_level: "report" };

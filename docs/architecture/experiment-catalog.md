@@ -58,3 +58,23 @@ validates plans, benchmark identity, trace provenance and ablation comparisons
 before asking the catalog to register a result, while catalog read methods
 remain the authority for artifact and metadata integrity checks. The service
 does not add a second persistence format or background execution layer.
+
+## Research workflow in the workbench
+
+The authenticated frontend exposes the existing evaluation and ablation job
+routes. It can read a resolved configuration JSON file locally (up to 2 MiB),
+or users can edit the advanced JSON field; the file itself is not uploaded.
+Submission still sends the full configuration and benchmark suite to the
+existing server validators, and requires confirmation of the reviewed source,
+plan and benchmark scope. Ablation setup reads `GET /api/v1/ablations/variants`,
+which returns detached views of the six canonical runner overrides; it does not
+define a second variant set. One accepted ablation job uses the same source and
+index identity for its ordered variants, while each variant retains its own
+success, partial or failure outcome.
+
+The Results view reads immutable artifacts and catalog metric/comparison rows.
+Its JSON download preserves the stored result response, subject to an 8 MiB
+browser limit. Metric and comparison CSV files export catalog values and
+comparison states; the browser does not recompute scientific metrics or infer
+numeric deltas. CSV text is escaped against formula interpretation. These
+deterministic UI and API workflows do not qualify real-model research results.

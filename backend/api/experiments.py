@@ -20,7 +20,7 @@ from backend.engine.manifest import (
     ManifestValidationError,
     build_document_manifest,
 )
-from backend.experiments.ablation_plans import create_ablation_plan
+from backend.experiments.ablation_plans import canonical_ablation_variants, create_ablation_plan
 from backend.experiments.run_plan import build_run_plan
 from backend.experiments.artifact_store import ArtifactIntegrityError, ArtifactNotFoundError
 from backend.experiments.catalog import CatalogIntegrityError, CatalogNotFoundError, ExperimentCatalogError
@@ -603,6 +603,10 @@ async def get_comparisons(request: Request) -> JSONResponse:
         return _map_error(exc)
 
 
+async def list_ablation_variants(_request: Request) -> JSONResponse:
+    return JSONResponse({"schema_version": "1", "variants": canonical_ablation_variants()})
+
+
 def _ablation_plan_from_query(request: Request, record) -> Any:
     raw_config = request.query_params.get("base_config")
     manifest = request.query_params.get("document_manifest_hash")
@@ -652,6 +656,7 @@ def build_routes(service: ExperimentService, *, max_request_body_bytes: int, job
         Route("/api/v1/run-plans", prepare_run_plan, methods=["POST"]),
         Route("/api/v1/evaluations", submit_evaluation, methods=["POST"]),
         Route("/api/v1/ablations", submit_ablation, methods=["POST"]),
+        Route("/api/v1/ablations/variants", list_ablation_variants, methods=["GET"]),
         Route("/api/v1/runtime/models", runtime_models, methods=["GET"]),
         Route("/api/v1/jobs/evaluations", submit_evaluation_job, methods=["POST"]),
         Route("/api/v1/jobs/ablations", submit_ablation_job, methods=["POST"]),

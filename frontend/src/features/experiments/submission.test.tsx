@@ -12,6 +12,15 @@ const acceptedJob = {
   error_code: null, result_status: null,
 };
 
+const canonicalVariants = [
+  ["1_Dense_only", { retrieval_mode: "semantic", use_reranker: false, adaptive_weighting: false, use_weighted_fusion: false, use_filtering: false, use_percentile_filtering: false }],
+  ["2_BM25_only", { retrieval_mode: "bm25", use_reranker: false, adaptive_weighting: false, use_weighted_fusion: false, use_filtering: false, use_percentile_filtering: false }],
+  ["3_Hybrid_static", { retrieval_mode: "hybrid", adaptive_weighting: false, use_weighted_fusion: false, use_reranker: false, use_filtering: false, use_percentile_filtering: false }],
+  ["4_Hybrid_adaptive", { retrieval_mode: "hybrid", adaptive_weighting: true, use_weighted_fusion: false, use_reranker: false, use_filtering: false, use_percentile_filtering: false }],
+  ["5_Hybrid_reranker", { retrieval_mode: "hybrid", adaptive_weighting: false, use_weighted_fusion: false, use_reranker: true, use_filtering: false, use_percentile_filtering: false }],
+  ["6_Full_pipeline", { retrieval_mode: "hybrid", adaptive_weighting: true, use_weighted_fusion: false, use_reranker: true, use_filtering: true, use_percentile_filtering: true, percentile_cutoff: 80 }],
+].map(([variant_id, overrides]) => ({ variant_id, overrides }));
+
 function jsonResponse(value: unknown, status = 200): Response { return Response.json(value, { status }); }
 
 function mount(path: string) {
@@ -25,6 +34,7 @@ function fetchWith(handler: (path: string, init?: RequestInit) => Response | Pro
     const path = String(input);
     if (path === "/health") return jsonResponse({ status: "ok", api_version: "v1" });
     if (path === "/api/v1/runtime/models") return jsonResponse({ components: [] });
+    if (path === "/api/v1/ablations/variants") return jsonResponse({ schema_version: "1", variants: canonicalVariants });
     if (!customPreparation && path === "/api/v1/documents/manifest") return jsonResponse({ schema_version: "1", content_hash: "a".repeat(64), entry_count: 1, empty: false, entries: [{ relative_path: "paper.pdf", size_bytes: 10, sha256: "b".repeat(64), document_id: "doc_" + "c".repeat(64) }] });
     if (!customPreparation && path === "/api/v1/run-plans") return jsonResponse({ run_plan: JSON.parse(validRunPlan()), manifest: { schema_version: "1", content_hash: "a".repeat(64), entry_count: 1 } });
     return handler(path, init);
@@ -66,18 +76,47 @@ async function prepareEvaluation(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByText("RunPlan prepared");
 }
 
+async function confirmScope(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("checkbox", { name: /I reviewed this benchmark/ }));
+}
+
 describe("experiment submission workflows", () => {
-  it("navigates to experiments and supports direct evaluation and ablation routes", async () => {
+  it("navigates to evaluation and ablation workflows using the research navigation", async () => {
     const fetcher = fetchWith(() => jsonResponse({ jobs: [] }));
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup();
     const router = mount("/");
-    await user.click(screen.getByRole("link", { name: "Experiments" }));
-    expect(await screen.findByRole("heading", { name: "Experiments" })).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Evaluations" }));
+    expect(await screen.findByRole("heading", { name: "Evaluation run" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Evaluation run" })).toHaveAttribute("aria-current", "page");
+    await connect(user);
     await router.navigate("/experiments/ablation");
     expect(await screen.findByRole("heading", { name: "2. Resolved configuration" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Six variants, one shared index" })).toBeInTheDocument();
+    await waitFor(() => expect(fetcher.mock.calls.map(([input]) => String(input))).toContain("/api/v1/ablations/variants"));
+    expect(await screen.findByRole("row", { name: /6_Full_pipeline/ })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("link", { name: "Ablation run" })).toHaveAttribute("aria-current", "page"));
+  });
+
+  it("loads a complete resolved configuration from a local JSON file without uploading the file itself", async () => {
+    let preparedBody: unknown;
+    const fetcher = fetchWith((path, init) => {
+      if (path === "/api/v1/documents/manifest") return jsonResponse({ schema_version: "1", content_hash: "a".repeat(64), entry_count: 1, empty: false, entries: [{ relative_path: "paper.pdf", size_bytes: 10, sha256: "b".repeat(64), document_id: `doc_${"c".repeat(64)}` }] });
+      if (path === "/api/v1/run-plans") { preparedBody = JSON.parse(String(init?.body)) as unknown; return jsonResponse({ run_plan: JSON.parse(validRunPlan()), manifest: { schema_version: "1", content_hash: "a".repeat(64), entry_count: 1 } }); }
+      return jsonResponse({ jobs: [] });
+    }, true);
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user);
+    const file = new File([baseConfig], "resolved-config.json", { type: "application/json" });
+    await user.upload(screen.getByLabelText("Choose resolved configuration file (.json)"), file);
+    expect(await screen.findByText(/Loaded locally from/)).toHaveTextContent("resolved-config.json");
+    expect(screen.getByLabelText("Resolved base configuration JSON object")).toHaveValue(baseConfig);
+    expect(fetcher.mock.calls.some(([path]) => String(path).includes("resolved-config.json"))).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Inspect documents" }));
+    await screen.findByText(/Documents: 1/);
+    await user.click(screen.getByRole("button", { name: "Prepare RunPlan" }));
+    await screen.findByText("RunPlan prepared");
+    expect(preparedBody).toEqual({ resolved_config: JSON.parse(baseConfig), expected_manifest_hash: "a".repeat(64) });
   });
 
   it("adds and removes blank benchmark cases without inventing case content", async () => {
@@ -101,6 +140,8 @@ describe("experiment submission workflows", () => {
     fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: "[]" } });
     expect(await screen.findByText("The JSON value must be an object, not an array or null.")).toBeInTheDocument();
     await prepareEvaluation(user);
+    expect(submit).toBeDisabled();
+    await confirmScope(user);
     expect(submit).toBeEnabled();
     await user.click(submit);
     expect(await screen.findByText("The API request failed (request_invalid).")).toBeInTheDocument();
@@ -149,6 +190,7 @@ describe("experiment submission workflows", () => {
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user); await fillSuite(user);
     await prepareEvaluation(user);
+    await confirmScope(user);
     await user.click(screen.getByRole("button", { name: "Submit evaluation job" }));
     expect(await screen.findByText(acceptedJob.job_id)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open job details" })).toHaveAttribute("href", `/jobs/${acceptedJob.job_id}`);
@@ -162,6 +204,7 @@ describe("experiment submission workflows", () => {
     const fetcher = fetchWith(() => jsonResponse({ jobs: [] }));
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup(); mount("/experiments/ablation"); await connect(user); await fillSuite(user);
+    await screen.findByRole("heading", { name: "Six variants, one shared index" });
     const submit = screen.getByRole("button", { name: "Submit ablation job" });
     fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: "[]" } });
     expect(await screen.findByText("The JSON value must be an object, not an array or null.")).toBeInTheDocument();
@@ -200,6 +243,7 @@ describe("experiment submission workflows", () => {
     fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: baseConfig } });
     await user.click(screen.getByRole("button", { name: "Inspect documents" }));
     await screen.findByText(/Documents: 1/);
+    await confirmScope(user);
     await user.click(screen.getByRole("button", { name: "Submit ablation job" }));
     expect(await screen.findByText(ablationJob.job_id)).toBeInTheDocument();
     expect(posted).toEqual({
@@ -214,6 +258,7 @@ describe("experiment submission workflows", () => {
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user); await fillSuite(user);
     await prepareEvaluation(user);
+    await confirmScope(user);
     const submit = screen.getByRole("button", { name: "Submit evaluation job" });
     await user.click(submit);
     await waitFor(() => expect(submit).toBeDisabled());
@@ -228,6 +273,7 @@ describe("experiment submission workflows", () => {
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user); await fillSuite(user);
     await prepareEvaluation(user);
+    await confirmScope(user);
     await user.click(screen.getByRole("button", { name: "Submit evaluation job" }));
     await waitFor(() => expect(resolvePost).toBeDefined());
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
@@ -246,6 +292,7 @@ describe("experiment submission workflows", () => {
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user); await fillSuite(user);
     await prepareEvaluation(user);
+    await confirmScope(user);
     await user.click(screen.getByRole("button", { name: "Submit evaluation job" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("server may have accepted the job");
     expect(screen.queryByText("JOB ACCEPTED")).not.toBeInTheDocument();
@@ -287,7 +334,7 @@ describe("experiment submission workflows", () => {
     const user = userEvent.setup(); mount("/experiments/evaluation"); await connect(user); await fillSuite(user);
     expect(fetcher.mock.calls.some(([path]) => String(path) === "/api/v1/documents/manifest")).toBe(false);
     await prepareEvaluation(user);
-    expect(screen.getByRole("button", { name: "Submit evaluation job" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Submit evaluation job" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: baseConfig + " " } });
     expect(screen.queryByText("RunPlan prepared")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Submit evaluation job" })).toBeDisabled();
@@ -408,10 +455,10 @@ describe("experiment submission workflows", () => {
     await user.click(screen.getByRole("button", { name: "Prepare RunPlan" })); await waitFor(() => expect(finish).toBeDefined());
     fireEvent.change(screen.getByLabelText("Resolved base configuration JSON object"), { target: { value: baseConfig + " " } });
     await user.click(screen.getByRole("button", { name: "Inspect documents" }));
-    await screen.findByText("d".repeat(64));
+    await screen.findAllByText("d".repeat(64));
     finish?.(jsonResponse({ error: { code: "manifest_changed" } }, 409));
     await waitFor(() => expect(screen.getByRole("button", { name: "Prepare RunPlan" })).toBeEnabled());
-    expect(screen.getByText("d".repeat(64))).toBeInTheDocument();
+    expect(screen.getAllByText("d".repeat(64)).length).toBeGreaterThan(0);
     expect(screen.queryByText("Source documents changed. Inspect documents again, then prepare a new RunPlan.")).not.toBeInTheDocument();
   });
 

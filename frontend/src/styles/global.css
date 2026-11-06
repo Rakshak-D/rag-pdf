@@ -106,6 +106,31 @@ button:focus-visible, input:focus-visible, a:focus-visible, [tabindex]:focus-vis
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; } }
 
+.sidebar__section-label--research { margin-top: 17px; }
+.detail-banner__actions, .export-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.config-source { margin: -4px 0 12px; color: #45614f; font-size: 11px; }
+.advanced-config { margin: 8px 0 12px; }
+.advanced-config summary { width: fit-content; margin-bottom: 10px; color: #3f6652; cursor: pointer; font-size: 11px; font-weight: 600; }
+.advanced-config summary:focus-visible, .scope-confirmation input:focus-visible { outline: 3px solid #e2a747; outline-offset: 3px; }
+.ablation-guide { margin-bottom: 15px; }
+.ablation-variant-table th[scope="row"] { padding: 11px; border-top: 1px solid #edf1ed; text-align: left; white-space: nowrap; }
+.override-chip { display: inline-block; margin: 2px 5px 2px 0; padding: 4px 6px; border: 1px solid #e5ebe5; border-radius: 5px; background: #f7f9f7; color: #435b4b; font-family: var(--mono); font-size: 9px; white-space: nowrap; }
+.run-review { border-color: #d8e6da; background: #fbfdfb; }
+.run-review__metadata { margin-bottom: 10px; }
+.scope-confirmation { display: flex; align-items: flex-start; gap: 9px; margin-top: 12px; color: #354c3e; font-size: 12px; font-weight: 600; line-height: 1.5; }
+.scope-confirmation input { width: 16px; height: 16px; flex: 0 0 auto; accent-color: var(--green); }
+.scope-confirmation__note { margin: 6px 0 0 25px; color: #7a8780; font-size: 10px; }
+.metric-scale { display: block; width: 78px; height: 4px; margin-top: 5px; overflow: hidden; border-radius: 6px; background: #e8eee9; }
+.metric-scale > span { display: block; height: 100%; border-radius: inherit; background: #4b8a68; }
+.export-actions { gap: 7px; }
+.variant-outcomes { margin-top: 18px; }.variant-outcomes h3 { margin: 0 0 10px; color: #273c31; font-size: 13px; }
+
+@media (max-width: 560px) {
+  .detail-banner__actions, .export-actions { justify-content: flex-start; }
+  .run-review__metadata { grid-template-columns: 1fr; }
+  .override-chip { white-space: normal; overflow-wrap: anywhere; }
+}
+
 .experiment-prerequisite { margin-top: 0; border-color: #d8e6da; background: #f7faf7; }
 .experiment-prerequisite p { max-width: 920px; margin: 8px 0 0; color: #66756c; font-size: 11px; line-height: 1.6; }
 .workflow-tabs { display: flex; gap: 5px; margin: 14px 0; border-bottom: 1px solid #dfe7e0; }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ApiError, type WorkbenchApiClient } from "../../api/client";
-import type { AblationRequest, BenchmarkCaseInput, BenchmarkSuiteInput, DocumentManifest, ExperimentJobRecord, IndexReadinessResponse, RunPlanInput } from "../../api/types";
+import type { AblationRequest, AblationVariantCatalog, BenchmarkCaseInput, BenchmarkSuiteInput, DocumentManifest, ExperimentJobRecord, IndexReadinessResponse, RunPlanInput } from "../../api/types";
 import { apiErrorText } from "../../components/apiErrorText";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeading } from "../shared";
@@ -9,6 +9,7 @@ import { PageHeading } from "../shared";
 const identityPattern = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 const versionPattern = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
 const maximumCases = 100;
+const maximumConfigFileBytes = 2 * 1024 * 1024;
 
 interface DraftCase {
   caseId: string;
@@ -32,6 +33,16 @@ function blankCase(): DraftCase {
 
 function blankSuite(): SuiteDraft {
   return { benchmarkId: "", benchmarkVersion: "", cases: [blankCase()] };
+}
+
+function readLocalFile(file: File): Promise<string> {
+  if (typeof file.text === "function") return file.text();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("file_read_failed"));
+    reader.onerror = () => reject(new Error("file_read_failed"));
+    reader.readAsText(file);
+  });
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -190,6 +201,8 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
   const validWorkflow = isEvaluation || workflow === "ablation";
   const [suite, setSuite] = useState<SuiteDraft>(blankSuite);
   const [configText, setConfigText] = useState("");
+  const [configSourceName, setConfigSourceName] = useState<string | null>(null);
+  const [configFileError, setConfigFileError] = useState<string | null>(null);
   const [manifest, setManifest] = useState<DocumentManifest | null>(null);
   const [plan, setPlan] = useState<RunPlanInput | null>(null);
   const [readiness, setReadiness] = useState<IndexReadinessResponse | null>(null);
@@ -202,11 +215,16 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [acceptedJob, setAcceptedJob] = useState<ExperimentJobRecord | null>(null);
+  const [variantCatalog, setVariantCatalog] = useState<AblationVariantCatalog | null>(null);
+  const [variantCatalogLoading, setVariantCatalogLoading] = useState(false);
+  const [variantCatalogError, setVariantCatalogError] = useState<string | null>(null);
+  const [confirmedScope, setConfirmedScope] = useState("");
   const submitLock = useRef(false);
   const inspectLock = useRef(false);
   const prepareLock = useRef(false);
   const prepareSerial = useRef(0);
   const readinessSerial = useRef(0);
+  const configFileSerial = useRef(0);
   const readinessLock = useRef(false);
   const generation = useRef(0);
   const mounted = useRef(false);
@@ -224,20 +242,66 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
     readinessSerial.current += 1;
     readinessLock.current = false;
     submitLock.current = false; inspectLock.current = false; prepareLock.current = false;
-    setSuite(blankSuite()); setConfigText(""); setManifest(null); setPlan(null);
+    configFileSerial.current += 1;
+    setSuite(blankSuite()); setConfigText(""); setConfigSourceName(null); setConfigFileError(null); setManifest(null); setPlan(null);
     setInspecting(false); setPreparing(false); setSubmitting(false);
     setReadiness(null); setReadinessError(null); setCheckingIndex(false);
-    setShowValidation(false); setSubmitError(null); setPreparationError(null); setAcceptedJob(null);
+    setShowValidation(false); setSubmitError(null); setPreparationError(null); setAcceptedJob(null); setConfirmedScope("");
     return () => { generation.current += 1; };
   }, [client, connected]);
+
+  useEffect(() => {
+    let active = true;
+    if (!connected || workflow !== "ablation") {
+      setVariantCatalog(null); setVariantCatalogError(null); setVariantCatalogLoading(false);
+      return () => { active = false; };
+    }
+    setVariantCatalog(null); setVariantCatalogError(null); setVariantCatalogLoading(true);
+    void client.listCanonicalAblationVariants().then((value) => {
+      if (active) setVariantCatalog(value);
+    }).catch((error: unknown) => {
+      if (active) setVariantCatalogError(apiErrorText(error));
+    }).finally(() => { if (active) setVariantCatalogLoading(false); });
+    return () => { active = false; };
+  }, [client, connected, workflow]);
 
   const baseConfig = useMemo(() => parseObjectJson(configText), [configText]);
   const configErrors = baseConfig.value ? validateConfig(baseConfig.value, "Resolved configuration") : [];
   const suiteValidation = useMemo(() => validateSuite(suite, baseConfig.value), [suite, baseConfig]);
+  const scopeSignature = JSON.stringify([workflow, configText, manifest?.content_hash ?? null, plan?.run_fingerprint ?? null, suite]);
+  const scopeConfirmed = confirmedScope === scopeSignature;
   const workflowErrors = [ ...(baseConfig.error ? [baseConfig.error] : []), ...configErrors,
     ...(!manifest || manifest.empty ? ["Inspect a non-empty document manifest before submitting."] : []),
-    ...(isEvaluation && !plan ? ["Prepare a RunPlan before submitting."] : []), ...suiteValidation.errors];
-  const canSubmit = connected && validWorkflow && workflowErrors.length === 0 && !submitting;
+    ...(!isEvaluation && !variantCatalog ? ["Load the canonical ablation definitions before submitting."] : []),
+    ...(isEvaluation && !plan ? ["Prepare a RunPlan before submitting."] : []), ...suiteValidation.errors,
+    ...(!scopeConfirmed ? ["Review the run scope and confirm before submission."] : [])];
+  const canSubmit = connected && validWorkflow && workflowErrors.length === 0 && scopeConfirmed && !submitting;
+
+  function setConfigurationText(value: string, sourceName: string | null = null) {
+    generation.current += 1; readinessSerial.current += 1;
+    readinessLock.current = false; inspectLock.current = false;
+    setReadiness(null); setReadinessError(null); setCheckingIndex(false); setInspecting(false);
+    setPlan(null); setConfigText(value); setConfigSourceName(sourceName); setConfigFileError(null);
+    setShowValidation(true); setPreparationError(null); setSubmitError(null); setConfirmedScope("");
+  }
+
+  async function readConfigurationFile(file: File | undefined) {
+    if (!file) return;
+    const serial = ++configFileSerial.current;
+    if (!file.name.toLowerCase().endsWith(".json")) { setConfigFileError("Choose a .json resolved configuration file."); return; }
+    if (file.size <= 0 || file.size > maximumConfigFileBytes) { setConfigFileError("Configuration files must be between 1 byte and 2 MiB."); return; }
+    try {
+      const text = await readLocalFile(file);
+      if (serial !== configFileSerial.current) return;
+      const parsed = parseObjectJson(text);
+      if (parsed.error) { setConfigFileError(parsed.error); return; }
+      const errors = validateConfig(parsed.value!, "Resolved configuration");
+      if (errors.length) { setConfigFileError(errors.join(" ")); return; }
+      setConfigurationText(text, file.name);
+    } catch {
+      if (serial === configFileSerial.current) setConfigFileError("The selected configuration file could not be read.");
+    }
+  }
 
   async function inspect() {
     if (!connected || inspectLock.current) return;
@@ -323,7 +387,7 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
   if (!validWorkflow) return <section className="panel not-found"><h1>Choose a supported experiment workflow</h1><Link className="button button--primary" to="/experiments/evaluation">Open evaluation</Link></section>;
 
   return <>
-    <PageHeading eyebrow="EXPERIMENT SUBMISSION" title="Experiments" description="Submit a validated benchmark to the existing local job API." actions={<Link className="button button--quiet" to="/jobs">Back to jobs</Link>} />
+    <PageHeading eyebrow="RESEARCH WORKFLOW" title={isEvaluation ? "Evaluation run" : "Ablation run"} description={isEvaluation ? "Run a benchmark against the current source and compatible index." : "Compare the six canonical retrieval configurations against one shared source and index."} actions={<><Link className="button button--quiet" to="/jobs">Jobs</Link><Link className="button button--quiet" to="/artifacts">Results</Link></>} />
     <section className="panel experiment-prerequisite" aria-label="Workflow prerequisites">
       <span className="eyebrow">BEFORE YOU SUBMIT</span>
       <p>A compatible built index and matching configuration are required. Inspecting documents and preparing a RunPlan do not build or verify an index.</p>
@@ -333,6 +397,14 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
       <Link to="/experiments/evaluation" aria-current={isEvaluation ? "page" : undefined} className={isEvaluation ? "workflow-tab workflow-tab--active" : "workflow-tab"}>Evaluation run</Link>
       <Link to="/experiments/ablation" aria-current={!isEvaluation ? "page" : undefined} className={!isEvaluation ? "workflow-tab workflow-tab--active" : "workflow-tab"}>Ablation run</Link>
     </nav>
+    {!isEvaluation ? <section className="panel ablation-guide" aria-labelledby="ablation-guide-heading">
+      <div className="panel__heading"><div><span className="eyebrow">CANONICAL CONFIGURATIONS</span><h2 id="ablation-guide-heading">Six variants, one shared index</h2></div>{variantCatalog ? <span className="count-pill">{variantCatalog.variants.length}</span> : null}</div>
+      <p className="panel__note">One admitted job executes these variants in canonical order. Only the listed overrides change; source manifest and index fingerprint are shared. Other base-configuration values stay fixed. The workflow does not build or reset an index.</p>
+      {variantCatalogLoading ? <p role="status">Loading canonical variant definitions…</p> : null}
+      {variantCatalogError ? <div className="result-error" role="alert">Canonical variants could not be loaded: {variantCatalogError}</div> : null}
+      {variantCatalog ? <div className="table-scroll"><table className="data-table ablation-variant-table"><caption className="sr-only">Canonical ablation variant overrides</caption><thead><tr><th scope="col">Variant</th><th scope="col">Canonical settings changed</th></tr></thead><tbody>{variantCatalog.variants.map((variant) => <tr key={variant.variant_id}><th scope="row"><code>{variant.variant_id}</code></th><td>{Object.entries(variant.overrides).map(([key, value]) => <code className="override-chip" key={key}>{key} = {JSON.stringify(value)}</code>)}</td></tr>)}</tbody></table></div> : null}
+      <p className="page-context">Each variant retains its own outcome. Failed or partial variants remain visible in the persisted result; comparison states may be incomplete or not comparable.</p>
+    </section> : null}
     {!connected ? <EmptyState title="Connect before submitting" detail="Verify the local API token above to enable protected job submission. Form data is cleared when disconnected." /> : null}
 
     <form className="experiment-form" onSubmit={(event) => void submit(event)} noValidate>
@@ -345,10 +417,18 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
         </section>
         <section className="panel" aria-labelledby="config-heading">
           <h2 id="config-heading">2. Resolved configuration</h2>
-          <p className="panel__note">Supply the complete resolved configuration from the project configuration workflow. The backend validates its full schema and safety policy.</p>
-          <label className="form-field">Resolved base configuration JSON object
-            <textarea value={configText} onChange={(event) => { generation.current += 1; readinessSerial.current += 1; readinessLock.current = false; setReadiness(null); setReadinessError(null); setCheckingIndex(false); inspectLock.current = false; setInspecting(false); setPlan(null); setConfigText(event.target.value); setShowValidation(true); setPreparationError(null); setSubmitError(null); }} rows={11} spellCheck={false} />
+          <p className="panel__note">Open the complete resolved configuration JSON exported by your existing setup. The browser reads the file locally; the authenticated API validates the full schema and safety policy before use.</p>
+          <label className="form-field">Choose resolved configuration file (.json)
+            <input type="file" accept=".json,application/json" onChange={(event) => { void readConfigurationFile(event.currentTarget.files?.[0]); event.currentTarget.value = ""; }} />
           </label>
+          {configSourceName ? <p className="config-source" role="status">Loaded locally from <strong>{configSourceName}</strong>. No local path is retained.</p> : null}
+          {configFileError ? <div className="result-error" role="alert">{configFileError}</div> : null}
+          <details className="advanced-config" open>
+            <summary>Advanced: inspect or edit resolved configuration JSON</summary>
+            <label className="form-field">Resolved base configuration JSON object
+              <textarea value={configText} onChange={(event) => setConfigurationText(event.target.value)} rows={11} spellCheck={false} />
+            </label>
+          </details>
           {isEvaluation && <><button type="button" className="button button--quiet" onClick={() => void prepare()} disabled={!manifest || manifest.empty || !baseConfig.value || configErrors.length > 0 || preparing || inspecting}>{preparing ? "Preparing…" : "Prepare RunPlan"}</button>
             {plan && <div role="status"><h3>RunPlan prepared</h3><p>Schema: {plan.plan_schema_version}</p><p>Manifest: <code>{plan.document_manifest_hash}</code></p><p>Configuration snapshot: <code>{plan.configuration_snapshot_hash}</code></p><p>Index fingerprint: <code>{plan.index_fingerprint}</code></p><p>Run fingerprint: <code>{plan.run_fingerprint}</code></p></div>}</>}
           {preparationError && <div className="result-error" role="alert">{preparationError}</div>}
@@ -389,10 +469,25 @@ export function ExperimentWorkflowPage({ client, connected, onAccepted }: {
         </section>
       </fieldset>
 
+      <section className="panel run-review" aria-labelledby="run-review-heading">
+        <div className="panel__heading"><div><span className="eyebrow">FINAL REVIEW</span><h2 id="run-review-heading">Review run scope</h2></div></div>
+        <dl className="metadata-grid run-review__metadata">
+          <div className="metadata-item"><dt>Benchmark</dt><dd>{suite.benchmarkId || "Not set"}{suite.benchmarkVersion ? ` · v${suite.benchmarkVersion}` : ""}</dd></div>
+          <div className="metadata-item"><dt>Cases</dt><dd>{suite.cases.length} configured</dd></div>
+          <div className="metadata-item"><dt>Modality coverage</dt><dd>{suite.cases.filter((item) => item.modalities.includes("text")).length} text · {suite.cases.filter((item) => item.modalities.includes("image")).length} image cases</dd></div>
+          <div className="metadata-item metadata-item--wide"><dt>Source manifest</dt><dd><code>{manifest?.content_hash ?? "Inspect documents first"}</code></dd></div>
+          <div className="metadata-item metadata-item--wide"><dt>{isEvaluation ? "Prepared run" : "Shared index report check"}</dt><dd><code>{isEvaluation ? plan?.run_fingerprint ?? "RunPlan not prepared" : readiness?.status === "report_match" ? readiness.expected_index_fingerprint : readiness ? `${readiness.status} · ${readiness.reason_code}` : "Not checked in this form"}</code></dd></div>
+          {!isEvaluation ? <div className="metadata-item metadata-item--wide"><dt>Execution scope</dt><dd>{variantCatalog ? `${variantCatalog.variants.length} canonical variants, one persisted job, in canonical sequence` : "Canonical variant catalog unavailable"}</dd></div> : null}
+        </dl>
+        <p className="page-context">The report check is report-level only; it does not open or verify the persisted vector store. The job revalidates its accepted plan before execution.</p>
+        <label className="scope-confirmation"><input type="checkbox" checked={scopeConfirmed} disabled={!connected || submitting} onChange={(event) => setConfirmedScope(event.target.checked ? scopeSignature : "")} />I reviewed this benchmark and authorize one {isEvaluation ? "evaluation" : "six-variant ablation"} job.</label>
+        <p className="scope-confirmation__note">Any change to the configuration, source identity, plan, or benchmark clears this confirmation.</p>
+      </section>
+
       {showValidation && workflowErrors.length > 0 ? <section className="validation-summary" aria-label="Input validation" aria-live="polite"><strong>Review these fields before submitting</strong><ul>{workflowErrors.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul></section> : null}
       {submitError ? <div className="result-error" role="alert">{submitError}</div> : null}
       {acceptedJob ? <section className="submission-success" role="status" aria-live="polite"><div><span className="eyebrow">JOB ACCEPTED</span><h2>{acceptedJob.job_id}</h2><p>Current state: <strong>{acceptedJob.status}</strong>. Execution may still be queued or running.</p></div><Link className="button button--primary" to={`/jobs/${encodeURIComponent(acceptedJob.job_id)}`}>Open job details</Link></section> : null}
-      <div className="submission-actions"><button className="button button--primary" type="submit" disabled={!canSubmit}>{submitting ? "Submitting…" : isEvaluation ? "Submit evaluation job" : "Submit ablation job"}</button><span role="status">{submitting ? "Sending one request; it will not be retried automatically." : "Submission is enabled when the required inputs validate."}</span></div>
+      <div className="submission-actions"><button className="button button--primary" type="submit" disabled={!canSubmit}>{submitting ? "Submitting…" : isEvaluation ? "Submit evaluation job" : "Submit ablation job"}</button><span role="status">{submitting ? "Sending one request; it will not be retried automatically." : "Submission requires valid inputs and confirmation of the current scope."}</span></div>
     </form>
   </>;
 }

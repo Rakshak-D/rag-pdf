@@ -59,7 +59,7 @@ export function ArtifactsPage({ client, connected, refreshKey, onRefresh }: Arti
   const activeFilters = Object.entries(filters).filter(([, value]) => Boolean(value)).length;
 
   return <>
-    <PageHeading eyebrow="IMMUTABLE RESULT CATALOG" title="Artifacts" description="Filter registered evaluation and ablation results by identity and provenance." actions={<button className="button button--quiet" type="button" onClick={onRefresh} disabled={loading}>Refresh</button>} />
+    <PageHeading eyebrow="PERSISTED RESEARCH" title="Results" description="Review registered evaluation and ablation results, metrics, and provenance." actions={<><Link className="button button--quiet" to="/experiments/evaluation">New evaluation</Link><Link className="button button--quiet" to="/experiments/ablation">New ablation</Link><button className="button button--quiet" type="button" onClick={onRefresh} disabled={loading}>Refresh</button></>} />
     <section className="panel explorer-panel" aria-labelledby="artifact-filters-heading">
       <div className="panel__heading"><div><span className="eyebrow">CATALOG QUERY</span><h2 id="artifact-filters-heading">Filter artifacts</h2></div><span className="active-filter-note">{activeFilters === 0 ? "No filters" : `${activeFilters} active ${activeFilters === 1 ? "filter" : "filters"}`}</span></div>
       <form className="filter-form artifact-filter-form" onSubmit={apply}>

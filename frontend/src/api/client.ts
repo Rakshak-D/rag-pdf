@@ -2,6 +2,7 @@ import type {
   AblationPlanQuery,
   AblationRequest,
   AblationSubmissionResponse,
+  AblationVariantCatalog,
   AskRequest,
   AskResponse,
   ApiErrorEnvelope,
@@ -40,6 +41,7 @@ import type {
   ModelState,
   ResultStatus,
   RuntimeModelsResponse,
+  StoredArtifactResult,
 } from "./types";
 
 export type ApiErrorKind = "network" | "non_json" | "http" | "malformed_response";
@@ -247,6 +249,31 @@ function isComparison(value: unknown): value is CatalogComparisonRecord {
     isNullableString(value.reason_code);
 }
 
+const canonicalVariantIds = [
+  "1_Dense_only", "2_BM25_only", "3_Hybrid_static", "4_Hybrid_adaptive", "5_Hybrid_reranker", "6_Full_pipeline",
+] as const;
+const canonicalOverrideKeys = new Set([
+  "retrieval_mode", "use_reranker", "adaptive_weighting", "use_weighted_fusion", "use_filtering",
+  "use_percentile_filtering", "percentile_cutoff",
+]);
+
+function isAblationVariantCatalog(value: unknown): value is AblationVariantCatalog {
+  return isRecord(value) && Object.keys(value).length === 2 && Object.hasOwn(value, "schema_version") && Object.hasOwn(value, "variants") &&
+    value.schema_version === "1" && Array.isArray(value.variants) &&
+    value.variants.length === canonicalVariantIds.length && value.variants.every((item: unknown, index: number) => {
+      if (!isRecord(item) || Object.keys(item).length !== 2 || item.variant_id !== canonicalVariantIds[index] || !isRecord(item.overrides)) return false;
+      const entries = Object.entries(item.overrides);
+      return entries.length > 0 && entries.every(([key, override]) => canonicalOverrideKeys.has(key) &&
+        (typeof override === "string" || typeof override === "boolean" || (typeof override === "number" && Number.isFinite(override))));
+    });
+}
+
+function isStoredArtifactResult(value: unknown, artifactType: CatalogArtifactRecord["artifact_type"]): value is Omit<StoredArtifactResult, "raw_json"> {
+  return isRecord(value) && Object.keys(value).length === 3 && Object.hasOwn(value, "artifact_type") &&
+    Object.hasOwn(value, "serialization_schema_version") && Object.hasOwn(value, "payload") &&
+    value.artifact_type === artifactType && value.serialization_schema_version === "1" && isRecord(value.payload);
+}
+
 function isArtifactStatus(value: unknown): value is CatalogArtifactRecord["status"] {
   return value === "succeeded" || value === "partial" || value === "failed";
 }
@@ -296,7 +323,7 @@ export class WorkbenchApiClient {
     this.fetcher = options.fetcher ?? fetch;
   }
 
-  private async request(path: string, options: { method?: string; body?: unknown; protected?: boolean; signal?: AbortSignal } = {}): Promise<unknown> {
+  private async request(path: string, options: { method?: string; body?: unknown; protected?: boolean; signal?: AbortSignal; maxResponseBytes?: number; preserveJsonText?: boolean } = {}): Promise<unknown> {
     const headers = new Headers();
     if (options.protected !== false && path.startsWith("/api/v1/")) {
       if (!this.token) throw new ApiError("http", "authentication_required", 401);
@@ -318,12 +345,53 @@ export class WorkbenchApiClient {
     } catch {
       throw new ApiError("network", "network_error");
     }
-    const payload = await parseJson(response);
+    let payload: unknown;
+    let rawJson: string | undefined;
+    if (options.maxResponseBytes !== undefined) {
+      if (!(response.headers.get("content-type") ?? "").toLowerCase().includes("application/json")) {
+        throw new ApiError("non_json", "non_json_response", response.status);
+      }
+      const contentLength = response.headers.get("content-length");
+      if (contentLength && /^\d+$/.test(contentLength) && Number(contentLength) > options.maxResponseBytes) {
+        await response.body?.cancel();
+        throw new ApiError("malformed_response", "response_body_too_large", response.status);
+      }
+      const reader = response.body?.getReader();
+      if (!reader) malformed(response.status);
+      const chunks: Uint8Array[] = [];
+      let byteLength = 0;
+      try {
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          byteLength += part.value.byteLength;
+          if (byteLength > options.maxResponseBytes) {
+            await reader.cancel();
+            throw new ApiError("malformed_response", "response_body_too_large", response.status);
+          }
+          chunks.push(part.value);
+        }
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
+        throw new ApiError("malformed_response", "malformed_response", response.status);
+      }
+      try {
+        const joined = new Uint8Array(byteLength);
+        let offset = 0;
+        for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
+        rawJson = new TextDecoder("utf-8", { fatal: true }).decode(joined);
+        payload = JSON.parse(rawJson) as unknown;
+      } catch {
+        throw new ApiError("malformed_response", "malformed_response", response.status);
+      }
+    } else {
+      payload = await parseJson(response);
+    }
     if (!response.ok) {
       const code = errorCode(payload);
       throw new ApiError("http", code ?? "http_error", response.status);
     }
-    return payload;
+    return options.preserveJsonText ? { payload, rawJson } : payload;
   }
 
   async getHealth(): Promise<HealthResponse> {
@@ -459,13 +527,23 @@ export class WorkbenchApiClient {
     return value.comparisons;
   }
 
-  async loadArtifactResult(artifactId: string, plan?: AblationPlanQuery): Promise<unknown> {
+  async listCanonicalAblationVariants(): Promise<AblationVariantCatalog> {
+    const value = await this.request("/api/v1/ablations/variants");
+    if (!isAblationVariantCatalog(value)) malformed();
+    return value;
+  }
+
+  async loadArtifactResult(artifactId: string, artifactType: CatalogArtifactRecord["artifact_type"], plan?: AblationPlanQuery): Promise<StoredArtifactResult> {
     const params = new URLSearchParams();
     if (plan) {
       params.set("base_config", JSON.stringify(plan.base_config));
       params.set("document_manifest_hash", plan.document_manifest_hash);
     }
-    return this.request(appendQuery(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/result`, params));
+    const value = await this.request(appendQuery(`/api/v1/artifacts/${encodeURIComponent(artifactId)}/result`, params), {
+      maxResponseBytes: 8 * 1024 * 1024, preserveJsonText: true,
+    });
+    if (!isRecord(value) || !isStoredArtifactResult(value.payload, artifactType) || typeof value.rawJson !== "string") malformed();
+    return { ...value.payload, raw_json: value.rawJson };
   }
 
   async submitEvaluationJob(input: EvaluationRequest): Promise<JobEnvelope> {

@@ -118,6 +118,15 @@ def _expected_override_map() -> dict[str, dict[str, Any]]:
     return {variant_id: dict(overrides) for variant_id, overrides in _ABLATION_OVERRIDES}
 
 
+def canonical_ablation_variants() -> tuple[dict[str, Any], ...]:
+    """Return a detached, read-only view of the six canonical variant overrides."""
+
+    return tuple(
+        {"variant_id": variant_id, "overrides": copy.deepcopy(dict(overrides))}
+        for variant_id, overrides in _ABLATION_OVERRIDES
+    )
+
+
 def _override_tuple(value: Mapping[str, Any], variant_id: str) -> tuple[tuple[str, Any], ...]:
     expected = _expected_override_map().get(variant_id)
     if expected is None or dict(value) != expected:

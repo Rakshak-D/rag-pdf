@@ -53,8 +53,8 @@ export function JobDetailPage({ client, connected, onRefresh }: JobDetailPagePro
     {connected && !loading && !error && !job ? <EmptyState title="Job unavailable" detail="The job may not exist or may no longer be registered." /> : null}
     {connected && job ? <>
       <section className="detail-banner panel">
-        <div><span className="eyebrow">{job.job_type.toUpperCase()} Â· {job.job_id}</span><h2>{job.benchmark_id}<span className="record-version">v{job.benchmark_version}</span></h2></div>
-        <StatusBadge status={job.status} />
+        <div><span className="eyebrow">{job.job_type.toUpperCase()} · {job.job_id}</span><h2>{job.benchmark_id}<span className="record-version">v{job.benchmark_version}</span></h2></div>
+        <div className="detail-banner__actions"><StatusBadge status={job.status} />{job.artifact_id ? <Link className="button button--primary button--small" to={`/artifacts/${encodeURIComponent(job.artifact_id)}`}>Open persisted result</Link> : null}</div>
       </section>
       <section className="panel" aria-labelledby="job-metadata-heading">
         <div className="panel__heading"><div><span className="eyebrow">PERSISTED METADATA</span><h2 id="job-metadata-heading">Execution record</h2></div>

@@ -397,6 +397,23 @@ export interface AblationRequest {
   benchmark_suite: BenchmarkSuiteInput;
 }
 
+export interface AblationVariantDefinition {
+  variant_id: string;
+  overrides: Record<string, string | number | boolean>;
+}
+
+export interface AblationVariantCatalog {
+  schema_version: "1";
+  variants: AblationVariantDefinition[];
+}
+
+export interface StoredArtifactResult {
+  artifact_type: ArtifactType;
+  serialization_schema_version: "1";
+  payload: Record<string, unknown>;
+  raw_json: string;
+}
+
 export interface EvaluationSubmissionResponse {
   artifact: CatalogArtifactRecord;
   result: {
