@@ -19,6 +19,7 @@ from starlette.routing import Route
 from backend.api.experiments import ApiRequestError, _read_json, _response_error
 from backend.config.paths import PathContainmentError, resolve_disjoint_paths
 from backend.config.schema import ResolvedRunConfig, WorkbenchSafetyPolicy
+from notebooks.config import Config
 from backend.engine.manifest import ManifestSourceChangedError, ManifestValidationError, build_document_manifest
 from backend.experiments.run_plan import RunPlan, build_run_plan
 from backend.services.bootstrap_jobs import BootstrapJobError, BootstrapJobManager, BuildJob
@@ -39,6 +40,12 @@ class _StrictModel(BaseModel):
 
 
 class BootstrapPreviewRequest(_StrictModel):
+    resolved_config: dict[str, Any]
+
+
+class BootstrapConfigurationResponse(_StrictModel):
+    schema_version: Literal["1"]
+    configuration_source: Literal["trusted_server_defaults"]
     resolved_config: dict[str, Any]
 
 
@@ -327,6 +334,8 @@ def _bounded_json(request: Request, payload: dict[str, Any], *, status_code: int
             payload = BootstrapInventoryResponse.model_validate(payload).model_dump(mode="json")
         elif "documents" in payload:
             payload = BootstrapDocumentsResponse.model_validate(payload).model_dump(mode="json")
+        elif "resolved_config" in payload:
+            payload = BootstrapConfigurationResponse.model_validate(payload).model_dump(mode="json")
         elif "document" in payload:
             payload = BootstrapDocumentImportResponse.model_validate(payload).model_dump(mode="json")
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -355,6 +364,46 @@ async def status(request: Request) -> JSONResponse:
         return JSONResponse({
             "mode": "bootstrap", "status": "running", "accepting_jobs": _manager(request).accepting,
             "worker_count": 1, "queue_capacity": settings.queue_capacity,
+        })
+    except Exception as exc:
+        return _map_bootstrap_error(exc)
+
+
+async def configuration(request: Request) -> JSONResponse:
+    """Return schema-validated defaults bound to this bootstrap runtime's roots."""
+
+    try:
+        _trusted_state(request)
+        source, storage = _trusted_roots(request)
+        state = Path(request.app.state.bootstrap_settings.state_dir)
+
+        # Use the established notebook dataclass as the source of scientific
+        # defaults, then bind every filesystem setting to this service's own
+        # source, storage, or private state root. Config.validate() is not
+        # called because it creates directories as a side effect.
+        legacy = Config()
+        legacy.pdf_dir = str(source)
+        legacy.images_dir = str(storage / "build-artifacts")
+        legacy.database_dir = str(state / "database")
+        legacy.results_dir = str(state / "results")
+        legacy.model_comparison_results_dir = str(state / "model-comparison-results")
+        legacy.retrieval_results_dir = str(state / "retrieval-results")
+        legacy.reset_collections_on_start = False
+        config = ResolvedRunConfig.from_legacy(legacy)
+        config.validate_for_workbench()
+        for value in (
+            config.images_dir,
+            config.database_dir,
+            config.results_dir,
+            config.model_comparison_results_dir,
+            config.retrieval_results_dir,
+        ):
+            _safe_components(Path(value))
+        validated = _validated_config(config.model_dump(mode="json"), source)
+        return _bounded_json(request, {
+            "schema_version": "1",
+            "configuration_source": "trusted_server_defaults",
+            "resolved_config": validated.model_dump(mode="json"),
         })
     except Exception as exc:
         return _map_bootstrap_error(exc)
@@ -577,6 +626,7 @@ def build_bootstrap_routes() -> list[Route]:
     return [
         Route("/health", health, methods=["GET"]),
         Route("/api/v1/bootstrap/status", status, methods=["GET"]),
+        Route("/api/v1/bootstrap/configuration", configuration, methods=["GET"]),
         Route("/api/v1/bootstrap/documents", list_documents_route, methods=["GET"]),
         Route("/api/v1/bootstrap/documents", import_document_route, methods=["POST"]),
         Route("/api/v1/bootstrap/preview", preview, methods=["POST"]),
@@ -590,6 +640,7 @@ def build_bootstrap_routes() -> list[Route]:
 __all__ = [
     "BootstrapInventoryRequest",
     "BootstrapInventoryResponse",
+    "BootstrapConfigurationResponse",
     "BootstrapPreviewRequest",
     "BootstrapJobRequest",
     "build_bootstrap_routes",

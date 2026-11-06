@@ -9,6 +9,8 @@ interface Props {
   preview: BootstrapPreviewResponse | null;
   resolvedConfig: Record<string, unknown> | null;
   inventoryPage: BootstrapInventoryPage | null;
+  onSelectionReadback?: (selection: IndexSelectionState) => void;
+  compact?: boolean;
 }
 
 function operationId(): string {
@@ -18,7 +20,7 @@ function operationId(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryPage }: Props) {
+export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryPage, onSelectionReadback, compact = false }: Props) {
   const client = useMemo(() => new WorkbenchApiClient({ token }), [token]);
   const [selection, setSelection] = useState<IndexSelectionState | null>(null);
   const [loading, setLoading] = useState(false);
@@ -35,13 +37,16 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
     setError(null);
     try {
       const value = await client.getIndexSelection();
-      if (requestSerial.current === serial) setSelection(value);
+      if (requestSerial.current === serial) {
+        setSelection(value);
+        onSelectionReadback?.(value);
+      }
     } catch (cause) {
       if (requestSerial.current === serial) setError(apiErrorText(cause));
     } finally {
       if (requestSerial.current === serial) setLoading(false);
     }
-  }, [client, token]);
+  }, [client, onSelectionReadback, token]);
 
   useEffect(() => {
     requestSerial.current += 1;
@@ -82,7 +87,7 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
       value.selection.index_fingerprint === preview.index_fingerprint;
     try {
       const operation = operationId();
-      const confirmed = await client.selectIndex({
+      await client.selectIndex({
         resolved_config: resolvedConfig,
         expected_manifest_hash: preview.manifest_hash,
         expected_index_fingerprint: preview.index_fingerprint,
@@ -91,8 +96,15 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
         operation_id: operation,
       });
       if (requestSerial.current === serial) {
-        setSelection(confirmed);
-        setMessage("The runtime confirmed this report selection. Chroma and model readiness were not checked.");
+        const readback = await client.getIndexSelection();
+        if (requestSerial.current !== serial) return;
+        setSelection(readback);
+        onSelectionReadback?.(readback);
+        if (matches(readback)) {
+          setMessage("The runtime confirmed this report selection. Chroma and model readiness were not checked.");
+        } else {
+          setError("The selection response succeeded, but readback did not confirm this report. Refresh selection before proceeding.");
+        }
       }
     } catch (cause) {
       if (requestSerial.current !== serial) return;
@@ -100,6 +112,7 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
         const current = await client.getIndexSelection();
         if (requestSerial.current !== serial) return;
         setSelection(current);
+        onSelectionReadback?.(current);
         if (matches(current)) {
           setMessage("The selection request response was interrupted; the runtime confirms the selected report.");
           return;
@@ -117,7 +130,11 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
       submitLock.current = false;
       if (requestSerial.current === serial) setSelecting(null);
     }
-  }, [candidates, client, inventoryPage, preview, resolvedConfig, selection, token]);
+  }, [candidates, client, inventoryPage, onSelectionReadback, preview, resolvedConfig, selection, token]);
+
+  const selectedForCurrentPreview = Boolean(preview && selection?.selection_status === "selected" &&
+    selection.selection?.document_manifest_hash === preview.manifest_hash &&
+    selection.selection.index_fingerprint === preview.index_fingerprint);
 
   const statusText = !token ? "Connect to the ordinary runtime to inspect or change its active report." :
     loading ? "Reading the runtime selection…" : selection?.selection_status === "selected" ? "A report identity is selected." :
@@ -137,7 +154,17 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
     {!token ? <p className="index-selection__hint">The bootstrap connection above is separate. Use the ordinary runtime token to save a selection for evaluations and retrieval.</p> : null}
     {error ? <p className="result-error" role="alert">{error}</p> : null}
     {message ? <p className="index-selection__confirmed" role="status">{message}</p> : null}
-    {(selection?.selection_status === "selected" || selection?.selection_status === "stale") && selection.selection ? <dl className="index-selection__identity">
+    {selectedForCurrentPreview && !compact ? <p className="index-selection__confirmed"><Link to="/?mode=document">Ask documents</Link></p> : null}
+    {(selection?.selection_status === "selected" || selection?.selection_status === "stale") && selection.selection ? compact ? <details className="index-selection__technical"><summary>View report identity details</summary><dl className="index-selection__identity">
+      <div><dt>Selected build</dt><dd><code>{selection.selection.build_id}</code></dd></div>
+      <div><dt>Report status</dt><dd>{selection.selection.report_status}</dd></div>
+      <div className="index-selection__wide"><dt>Source manifest</dt><dd><code>{selection.selection.document_manifest_hash}</code></dd></div>
+      <div className="index-selection__wide"><dt>Index fingerprint</dt><dd><code>{selection.selection.index_fingerprint}</code></dd></div>
+      <div className="index-selection__wide"><dt>Validated report SHA-256</dt><dd><code>{selection.selection.report_sha256}</code></dd></div>
+      <div className="index-selection__wide"><dt>Configuration snapshot</dt><dd><code>{selection.selection.configuration_snapshot_hash}</code></dd></div>
+      <div className="index-selection__wide"><dt>Run fingerprint</dt><dd><code>{selection.selection.run_fingerprint}</code></dd></div>
+      <div><dt>Selection revision</dt><dd>{selection.selection.selection_revision}</dd></div>
+    </dl></details> : <dl className="index-selection__identity">
       <div><dt>Selected build</dt><dd><code>{selection.selection.build_id}</code></dd></div>
       <div><dt>Report status</dt><dd>{selection.selection.report_status}</dd></div>
       <div className="index-selection__wide"><dt>Source manifest</dt><dd><code>{selection.selection.document_manifest_hash}</code></dd></div>
@@ -158,15 +185,15 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
             selection.selection.document_manifest_hash === preview.manifest_hash && selection.selection.index_fingerprint === preview.index_fingerprint;
           const blocked = selection?.revision === null || selection?.selection_status === "invalid";
           return <div className="index-selection__choice" key={candidate.candidate_id}>
-            <div><strong><code>{candidate.build_id}</code></strong><small>{candidate.report_status ?? "Successful report"} · report compatibility only</small></div>
+            <div><strong>{compact ? "Compatible completed index" : <code>{candidate.build_id}</code>}</strong><small>{candidate.report_status ?? "Successful report"} · report compatibility only</small></div>
             <button className={isSelected ? "button button--quiet" : "button button--primary"} type="button"
               onClick={() => void select(candidate.build_id!)} disabled={blocked || isSelected || selecting !== null || loading}>
-              {selecting === candidate.build_id ? "Confirming…" : isSelected ? "Selected" : "Select report"}
+              {selecting === candidate.build_id ? "Confirming…" : isSelected ? "Selected" : compact ? "Use this index" : "Select report"}
             </button>
           </div>;
         }) : <p className="muted">No compatible report is available on this complete inventory page. Inspect another page or build an index explicitly.</p>}
       <p className="index-selection__note"><strong>Selection is not readiness.</strong> This records a report-level identity only; the runtime has not opened Chroma, checked collections, or loaded models.</p>
     </div> : token && (!preview || !inventoryPage) ? <p className="index-selection__hint">Preview the current configuration and inspect the report inventory to choose a compatible build.</p> : null}
-    <div className="index-selection__links"><Link to="/documents">Manage source documents</Link><span>Question answering is a separate next workflow.</span></div>
+    {!compact ? <div className="index-selection__links"><Link to="/documents">Manage source documents</Link><span>Question answering is a separate next workflow.</span></div> : null}
   </section>;
 }
