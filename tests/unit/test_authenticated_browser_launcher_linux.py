@@ -160,6 +160,25 @@ def test_startup_status_preserves_stable_runtime_configuration_code() -> None:
     }
 
 
+def test_startup_status_prefers_specific_root_cause_code() -> None:
+    class IndexSelectionError(Exception):
+        def __init__(self):
+            self.code = "build_report_path_invalid"
+
+    class RuntimeConfigurationError(Exception):
+        error_code = "runtime_composition_failed"
+
+    try:
+        try:
+            raise IndexSelectionError()
+        except IndexSelectionError as cause:
+            raise RuntimeConfigurationError("redacted") from cause
+    except RuntimeConfigurationError as exc:
+        classified = linux.safe_exception_metadata(exc)
+    assert classified["exception_class"] == "IndexSelectionError"
+    assert classified["application_error_code"] == "build_report_path_invalid"
+
+
 def test_forbidden_operation_is_durably_distinguished_from_other_exit(tmp_path: Path) -> None:
     path = tmp_path / "ordinary.jsonl"
     recorder = _valid_startup_status(path)
@@ -254,6 +273,22 @@ def test_guarded_service_diagnostic_source_compiles_and_keeps_forbidden_guard(tm
     assert "os._exit(91)" in source
     assert "contextlib.redirect_stderr(diagnostics)" in source
     assert "traceback" not in source.lower()
+
+
+def test_synthetic_report_uses_the_existing_selection_build_id_contract(tmp_path: Path) -> None:
+    from backend.services.index_selection import IndexSelectionService
+
+    paths = linux.create_workspace_layout(tmp_path)
+    fixture = linux.build_synthetic_fixture(paths)
+    report = json.loads(fixture["report_path"].read_text(encoding="utf-8"))
+    assert report["build_id"] == linux.SYNTHETIC_BROWSER_BUILD_ID
+    assert fixture["report_path"].parent.name == report["build_id"]
+    selection = IndexSelectionService(
+        paths["ordinary_source"], paths["ordinary_index"],
+        paths["ordinary_state"] / "active-index-selection.json",
+        legacy_report_path=fixture["report_path"],
+    )
+    assert selection is not None
 
 
 def test_startup_status_path_rejects_symlink(tmp_path: Path) -> None:

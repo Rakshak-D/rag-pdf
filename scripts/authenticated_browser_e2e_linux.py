@@ -33,6 +33,7 @@ MAX_EVIDENCE_BYTES = 8 * 1024 * 1024
 MAX_STARTUP_STATUS_BYTES = 64 * 1024
 MAX_STARTUP_STATUS_RECORDS = 32
 MAX_STARTUP_STATUS_RECORD_BYTES = 4096
+SYNTHETIC_BROWSER_BUILD_ID = "8d3f6c1a2b4e59708c1d2e3f4a5b6c7d"
 SERVICE_START_TIMEOUT_SECONDS = 35.0
 PLAYWRIGHT_TIMEOUT_SECONDS = 660.0
 PROCESS_TERM_GRACE_SECONDS = 3.0
@@ -203,7 +204,7 @@ def safe_exception_metadata(exc: BaseException) -> dict[str, str | None]:
                 missing_module = candidate
         for attribute in ("error_code", "code"):
             candidate = getattr(item, attribute, None)
-            if application_error_code is None and isinstance(candidate, str) and _SAFE_CODE.fullmatch(candidate):
+            if isinstance(candidate, str) and _SAFE_CODE.fullmatch(candidate):
                 application_error_code = candidate
     return {
         "exception_class": exception_class,
@@ -1377,14 +1378,14 @@ def build_synthetic_fixture(paths: Mapping[str, Path]) -> dict[str, Any]:
     )
     ordinary_manifest = build_document_manifest(paths["ordinary_source"])
     ordinary_plan = build_run_plan(ordinary_config, ordinary_manifest.content_hash)
-    report_root = paths["ordinary_index"] / "build-artifacts" / "synthetic-browser-e2e"
+    report_root = paths["ordinary_index"] / "build-artifacts" / SYNTHETIC_BROWSER_BUILD_ID
     report_root.mkdir(parents=True, exist_ok=True)
     report_path = report_root / "build-report.json"
     write_json_fsync(
         report_path,
         {
             "report_schema_version": "1",
-            "build_id": "synthetic-browser-e2e",
+            "build_id": SYNTHETIC_BROWSER_BUILD_ID,
             "artifact_root": str(report_root),
             "report_path": str(report_path),
             "index_fingerprint": ordinary_plan.index_fingerprint,
