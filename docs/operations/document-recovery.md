@@ -13,7 +13,7 @@ The source now contains Orbit_Field_Notes.pdf and Voyager Grand Tour PDF.pdf. Cu
 The two-PDF report was selected and read back through the actual local gateway in a separate ordinary state directory. To use that selection without replacing the original saved selection:
 
 ```powershell
-Set-Location 'C:\RAKSHAK\MY CODE\AI\rag-pdf-hardening-wt'
+Set-Location 'C:\RAKSHAK\MY CODE\AI\rag-pdf-conversation-wt'
 $demo = Join-Path $env:TEMP 'rag-pdf-overnight-evidence\demo-workspace'
 $env:RAG_WORKBENCH_DATA_DIR = Join-Path $demo 'pdf-source'
 $env:RAG_WORKBENCH_INDEX_STORAGE_ROOT = Join-Path $demo 'index-storage'
@@ -28,3 +28,5 @@ $env:TRANSFORMERS_OFFLINE = '1'
 Open http://127.0.0.1:5173. Do not start a second instance. Stop with Ctrl+C. Ollama must already be configured separately; startup does not load its weights. General Chat uses browser preferences; Document Chat preserves the selected RunPlan. Wait for each operation to finish before another model operation.
 
 This correction verified browser upload, changed-source preview invalidation, compatible report selection/readback, composer recovery, Settings persistence, and empty Results. No new real inference or index build was run. Previous Gemma inference nearly exhausted physical RAM; recheck resources before attempting it. Full multimodal retrieval and benchmark evaluation remain unverified. The original text-only demonstration record is in docs/DEMO.md.
+
+The conversation sprint automatically checks preparation when Documents opens. Use Check documents for a manual refresh. New Chat keeps earlier chats in the conversation picker; navigation and reload preserve tab-session transcripts and drafts. See local-chat-first.md for storage and evidence-expiry behavior.

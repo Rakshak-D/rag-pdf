@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { decodeSession, encodeSession } from "./conversations";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { useConversations, SESSION_KEY, decodeSession, encodeSession } from "./conversations";
 const session = () => ({ version: 1 as const, activeId: "one", conversations: [{ id: "one", mode: "general" as const, question: "Draft", messages: [], generalTurns: [] }] });
 describe("conversation session boundary", () => {
   it("restores a versioned session with its active draft", () => { expect(decodeSession(encodeSession(session()))).toEqual(session()); });
@@ -16,4 +17,40 @@ describe("conversation session boundary", () => {
     expect(restored.evidenceExpired).toBe(true); expect(restored.indexFingerprint).toBe("a".repeat(64)); expect(restored.document).toBeUndefined();
   });
   it("rejects General history attached to a Document conversation", () => { expect(() => decodeSession(JSON.stringify({ ...session(), conversations: [{ ...session().conversations[0], mode: "document", generalTurns: [{user:"hello",assistant:"world"}] }] }))).toThrow(); });
+});
+
+
+afterEach(() => { cleanup(); vi.restoreAllMocks(); sessionStorage.clear(); });
+describe("application conversation ownership", () => {
+  it("keeps a late update attached to the original conversation", () => {
+    const { result } = renderHook(() => useConversations());
+    const originalId = result.current.active.id;
+    const updateOriginal = result.current.setMessages;
+    act(() => result.current.create("general"));
+    const nextId = result.current.active.id;
+    act(() => updateOriginal([{ id: "late", role: "assistant", mode: "general", text: "Original reply" }]));
+    expect(result.current.active.id).toBe(nextId); expect(result.current.active.messages).toEqual([]);
+    act(() => result.current.select(originalId));
+    expect(result.current.active.messages[0]?.text).toBe("Original reply");
+  });
+  it("retains drafts in memory when session storage rejects writes", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("quota", "QuotaExceededError"); });
+    const { result } = renderHook(() => useConversations());
+    act(() => result.current.setQuestion("Do not lose this draft"));
+    expect(result.current.active.question).toBe("Do not lose this draft");
+    expect(result.current.notice).toContain("kept in memory");
+  });
+  it("recovers malformed storage with an explicit notice", () => {
+    sessionStorage.setItem(SESSION_KEY, "{corrupt");
+    const { result } = renderHook(() => useConversations());
+    expect(result.current.active.messages).toEqual([]); expect(result.current.notice).toContain("could not be restored");
+  });
+  it("preserves existing conversations when the conversation limit is reached", () => {
+    const { result } = renderHook(() => useConversations());
+    act(() => result.current.setQuestion("Original unsent draft"));
+    for (let i = 0; i < 10; i++) act(() => result.current.create("general"));
+    expect(result.current.conversations).toHaveLength(10);
+    expect(result.current.conversations[0]?.question).toBe("Original unsent draft");
+    expect(result.current.notice).toContain("Delete one");
+  });
 });

@@ -20,8 +20,10 @@ export function decodeSession(raw: string): Session {
   for (const c of v.conversations) {
     if (!record(c) || !keys(c, ["id", "mode", "messages", "generalTurns", "question"]) || !text(c.id, 80) || !c.id || ids.has(c.id) || !["general", "document"].includes(String(c.mode)) || !text(c.question, 4000) || !Array.isArray(c.messages) || c.messages.length > 100 || !Array.isArray(c.generalTurns) || c.generalTurns.length > 8) throw Error("conversation_invalid");
     ids.add(c.id);
+    const messageIds = new Set<string>();
     for (const m of c.messages) {
-      if (!record(m) || !keys(m, ["id", "role", "mode", "text", "error", "indexFingerprint", "sourceManifest", "evidenceExpired"]) || !text(m.id, 80) || !["user", "assistant"].includes(String(m.role)) || m.mode !== c.mode || !text(m.text, 32000) || (m.error !== undefined && typeof m.error !== "boolean") || (m.evidenceExpired !== undefined && typeof m.evidenceExpired !== "boolean")) throw Error("message_invalid");
+      if (!record(m) || !keys(m, ["id", "role", "mode", "text", "error", "indexFingerprint", "sourceManifest", "evidenceExpired"]) || !text(m.id, 80) || !m.id || messageIds.has(m.id) || !["user", "assistant"].includes(String(m.role)) || m.mode !== c.mode || !text(m.text, 32000) || (m.error !== undefined && typeof m.error !== "boolean") || (m.evidenceExpired !== undefined && typeof m.evidenceExpired !== "boolean")) throw Error("message_invalid");
+      messageIds.add(m.id as string);
       for (const k of ["indexFingerprint", "sourceManifest"]) if (m[k] !== undefined && (typeof m[k] !== "string" || !/^[a-f0-9]{64}$/.test(m[k]))) throw Error("provenance_invalid");
     }
     for (const t of c.generalTurns) if (!record(t) || !keys(t, ["user", "assistant"]) || !text(t.user, 4000) || !text(t.assistant, 32000)) throw Error("history_invalid");

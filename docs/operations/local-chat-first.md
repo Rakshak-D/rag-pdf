@@ -55,7 +55,7 @@ RunConfig (`llm_model`) and may be overridden for a General Chat request only by
 a model reported as installed by the local Ollama API. The Settings page lists
 that verified catalog; a selected model applies to the current browser session
 and the next request. The configured model is not rewritten, and research
-RunPlans are unaffected. Temperature and output length remain server-controlled;
+RunPlans are unaffected. Settings sends validated temperature and output-token limits with General Chat requests;
 there is no unsupported universal “thinking” switch.
 
 General Chat permits one active generation per ordinary runtime. Ollama owns
@@ -85,11 +85,37 @@ index. It reports actual returned passages, citations, source pages, and
 authenticated image evidence. Index selection itself does not prove Chroma or
 model readiness. General Chat remains available without documents or an index.
 
-Conversation history is held only in React memory for the active page and
-validated/sent with follow-up General Chat requests (up to eight prior turns).
-New Chat, navigation away, reload, or closing the tab clears it. No chat history
-is written to browser storage or experiment artifacts. Document Chat questions
-remain independent, as in the existing Ask contract.
+Conversations are owned by App rather than a route. Navigating to Settings,
+Documents, or Results preserves the active transcript and draft. Pending replies
+continue in their original conversation while another page is open. Conversation
+switching, deletion and New Chat are disabled during generation. Navigation does
+not promise model cancellation; reload or disconnect may interrupt the browser
+request while Ollama continues working.
+
+The conversation picker supports up to ten conversations. General and Document
+conversations have separate drafts and histories. General Chat sends at most
+eight complete prior turns and 32,000 history characters. Document questions
+remain independent; each answer retains its own index and source identities.
+New Chat creates another conversation without deleting the previous one. Delete
+conversation requires confirmation. At 100 messages, start another conversation.
+
+A versioned, validated sessionStorage record is limited to 256 KiB. It saves
+transcripts, drafts, General Chat history and document identity hashes for this
+browser tab session. It contains no API credentials, retrieved passages, image
+references or blobs. Treat saved chat text as private local browser data.
+Reload restores the transcript, but document citation links and image evidence
+are intentionally not restored: the UI marks that evidence as expired. Ask again
+for fresh evidence. Invalid records recover with a notice. Storage failure keeps
+the current conversation in memory and warns that reload cannot be relied on.
+Closing a browser tab normally ends its session; browser session restoration may
+retain sessionStorage. There is no server-side or cross-device chat history.
+
+Documents automatically checks the complete configured PDF collection and
+compatible reports. Preparation is read-only. New builds remain explicitly
+confirmed and fresh-only. Leaving the page preserves preview and job context;
+returning refreshes source inventory and compatibility. Uploading a PDF changes
+the collection identity and invalidates the prior readiness state. Previous-index
+checks and job history remain available in secondary disclosures.
 
 ## Existing workflows
 
