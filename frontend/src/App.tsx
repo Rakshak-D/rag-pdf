@@ -13,6 +13,7 @@ import { ArtifactsPage } from "./features/artifacts/ArtifactsPage";
 import { ExperimentWorkflowPage } from "./features/experiments/ExperimentWorkflowPage";
 import { IndexBuildsPage } from "./features/index-builds/IndexBuildsPage";
 import { DocumentsPage } from "./features/documents/DocumentsPage";
+import { useConversations } from "./features/chat/conversations";
 import { ChatPage } from "./features/chat/ChatPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
 import {
@@ -163,12 +164,22 @@ export default function App() {
     return () => { active = false; };
   }, [client, connected, location.pathname, refreshVersion]);
 
+  const conversations = useConversations();
+  const [documentsVisited, setDocumentsVisited] = useState(false);
+  useEffect(() => { if (location.pathname === "/documents") setDocumentsVisited(true); }, [location.pathname]);
+
   return <AppShell>
     {!localGateway && !location.pathname.startsWith("/index-builds") && location.pathname !== "/documents" ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
+    <div hidden={location.pathname !== "/"}>
+      <ChatPage token={token} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onResetUnavailableModel={resetUnavailableChatModel} conversations={conversations} visible={location.pathname === "/"} />
+    </div>
+    {(documentsVisited || location.pathname === "/documents") ? <div hidden={location.pathname !== "/documents"}>
+      <DocumentsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} visible={location.pathname === "/documents"} />
+    </div> : null}
     <Routes>
-      <Route path="/" element={<ChatPage token={token} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onResetUnavailableModel={resetUnavailableChatModel} />} />
+      <Route path="/" element={null} />
       <Route path="/settings" element={<SettingsPage token={token} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onSave={saveChatPreferences} onResetUnavailableModel={resetUnavailableChatModel} />} />
-      <Route path="/documents" element={<DocumentsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} />} />
+      <Route path="/documents" element={null} />
       <Route path="/artifacts" element={<ArtifactsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/artifacts/:artifactId" element={<ArtifactDetailPage key={location.pathname} client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/jobs" element={<JobsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />

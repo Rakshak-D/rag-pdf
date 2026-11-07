@@ -1,22 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { ApiError, WorkbenchApiClient } from "../../api/client";
-import type { AskResponse, ChatModelCatalog, ChatTurn, IndexSelectionState } from "../../api/types";
+import type { AskResponse, ChatModelCatalog, IndexSelectionState } from "../../api/types";
 import type { GeneralChatPreferences, PreferenceLoadStatus } from "../settings/preferences";
 import { resolveChatModel } from "../settings/preferences";
 import { boundedChatHistory } from "./history";
 
-type Mode = "general" | "document";
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  mode: Mode;
-  text: string;
-  error?: boolean;
-  document?: AskResponse;
-};
+import type { Mode, Message, ConversationStore } from "./conversations";
 
 interface Props {
+  conversations: ConversationStore;
+  visible: boolean;
   token: string | null;
   preferences: GeneralChatPreferences;
   preferenceLoadStatus: PreferenceLoadStatus;
@@ -67,13 +61,11 @@ function pageName(page: number | null): string {
   return page === null ? "Page not identified" : `Page ${page}`;
 }
 
-export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnavailableModel }: Props) {
+export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnavailableModel, conversations, visible }: Props) {
   const client = useMemo(() => new WorkbenchApiClient({ token }), [token]);
-  const [searchParams] = useSearchParams();
-  const [mode, setMode] = useState<Mode>(() => searchParams.get("mode") === "document" ? "document" : "general");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [generalTurns, setGeneralTurns] = useState<ChatTurn[]>([]);
-  const [question, setQuestion] = useState("");
+  const location = useLocation();
+  const { mode, messages, generalTurns, question } = conversations.active;
+  const { setMode, setMessages, setGeneralTurns, setQuestion } = conversations;
   const [busy, setBusy] = useState(false);
   const [catalog, setCatalog] = useState<ChatModelCatalog | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -92,6 +84,13 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
   const imageControllers = useRef<Set<AbortController>>(new Set());
   const objectUrls = useRef<Set<string>>(new Set());
 
+  useEffect(() => {
+    requestSequence.current += 1;
+    requestController.current?.abort();
+    requestController.current = null;
+    setBusy(false);
+  }, [token]);
+
   const modelResolution = resolveChatModel(preferences, catalog);
   const generalModel = modelResolution.model;
   const modelIsVerified = catalog?.availability === "available" && generalModel !== null;
@@ -108,22 +107,24 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
+    if (!visible) return () => controller.abort();
     void client.chatModels(controller.signal).then((value) => {
       if (active) { setCatalog(value); setCatalogError(null); }
     }).catch((error: unknown) => {
       if (active) setCatalogError(messageFor(error));
     });
     return () => { active = false; controller.abort(); };
-  }, [client]);
+  }, [client, visible]);
 
   useEffect(() => {
+    if (!visible) return;
     if (modelResolution.status !== "saved-model-unavailable" || !preferences.selectedModel) return;
     const previous = preferences.selectedModel;
     const fallback = catalog?.configured_model_available ? `Using configured default ${catalog.configured_model}.` :
       `Configured default ${catalog?.configured_model ?? ""} is also not installed.`;
     setUnavailableModelNotice(`Saved model ${previous} is no longer installed. ${fallback}`);
     onResetUnavailableModel();
-  }, [catalog, modelResolution.status, onResetUnavailableModel, preferences.selectedModel]);
+  }, [catalog, modelResolution.status, onResetUnavailableModel, preferences.selectedModel, visible]);
 
   useEffect(() => {
     let active = true;
@@ -146,7 +147,7 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     refresh();
     window.addEventListener("focus", refresh);
     return () => { active = false; window.removeEventListener("focus", refresh); };
-  }, [client, mode]);
+  }, [client, mode, visible]);
 
   useEffect(() => {
     const region = scrollRegion.current;
@@ -192,6 +193,16 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     textarea.current?.focus();
   };
 
+  const appliedLocation = useRef<string | null>(null);
+  useEffect(() => {
+    if (location.pathname !== "/" || busy || appliedLocation.current === location.key) return;
+    appliedLocation.current = location.key;
+    const requested = new URLSearchParams(location.search).get("mode");
+    if ((requested === "document" || requested === "general") && requested !== mode) selectMode(requested);
+  }, [location.pathname, location.search, location.key, busy]);
+
+  useEffect(() => { setDrawerMessage(null); setActiveEvidence(null); releaseImages(); }, [conversations.active.id, visible, releaseImages]);
+
   const openEvidence = (message: Message, label: string | null) => {
     setDrawerMessage(message);
     setActiveEvidence(label);
@@ -200,7 +211,7 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
   async function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const normalized = question.trim();
-    if (!normalized || normalized.length > 4000 || busy || (mode === "document" && !hasIndex)) return;
+    if (!normalized || normalized.length > 4000 || messages.length >= 100 || busy || requestController.current !== null || (mode === "document" && !hasIndex)) return;
     const currentMode = mode;
     const sequence = ++requestSequence.current;
     const controller = new AbortController();
@@ -253,18 +264,9 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
   };
 
   const clearConversation = () => {
-    requestSequence.current += 1;
-    requestController.current?.abort();
-    requestController.current = null;
-    setBusy(false);
-    setQuestion("");
-    setMessages([]);
-    setGeneralTurns([]);
-    setDrawerMessage(null);
-    setActiveEvidence(null);
-    setImageErrors({});
+    if (busy || requestController.current) return;
+    conversations.create(mode);
     setCopyNotice(null);
-    releaseImages();
     textarea.current?.focus();
   };
 
@@ -287,12 +289,20 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
         </div>
         <div className="chat-heading__actions">
           {mode === "general" ? <Link className="chat-settings-link" to="/settings">Settings</Link> : null}
-          <button className="chat-new" type="button" onClick={clearConversation} disabled={!messages.length && !question} aria-label="New chat">
+          <button className="chat-new" type="button" onClick={clearConversation} disabled={busy} aria-label="New chat">
             <span aria-hidden="true">＋</span> New chat
           </button>
         </div>
       </header>
 
+      <div className="conversation-picker">
+        <label htmlFor="conversation-picker">Conversation</label>
+        <select id="conversation-picker" value={conversations.active.id} disabled={busy} onChange={e => conversations.select(e.target.value)}>
+          {conversations.conversations.map((c, i) => <option key={c.id} value={c.id}>{c.mode === "general" ? "General" : "Documents"}: {c.messages.find(m => m.role === "user")?.text.slice(0, 45) || c.question.slice(0, 45) || `New conversation ${i + 1}`}</option>)}
+        </select>
+        <button type="button" disabled={busy} onClick={() => { if (window.confirm("Delete this conversation and its draft from this tab?")) conversations.remove(); }}>Delete conversation</button>
+      </div>
+      {conversations.notice ? <p role="status">{conversations.notice}</p> : null}
       <div className="chat-mode-row">
         <div className="chat-mode-control" role="group" aria-label="Chat mode">
           <button type="button" disabled={busy} aria-pressed={mode === "general"} className={mode === "general" ? "is-active" : ""} onClick={() => selectMode("general")}>General</button>
@@ -303,8 +313,8 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
         </div>
       </div>
 
-      {mode === "general" && unavailableModelNotice ? <p className="chat-settings-notice" role="status">{unavailableModelNotice}</p> : null}
-      {mode === "general" && preferenceLoadStatus === "invalid" ? <p className="chat-settings-notice" role="status">Saved General Chat preferences were invalid. Safe defaults are active.</p> : null}
+      {visible && mode === "general" && unavailableModelNotice ? <p className="chat-settings-notice" role="status">{unavailableModelNotice}</p> : null}
+      {visible && mode === "general" && preferenceLoadStatus === "invalid" ? <p className="chat-settings-notice" role="status">Saved General Chat preferences were invalid. Safe defaults are active.</p> : null}
 
       {mode === "document" && !hasIndex ? <div className="chat-no-index" role={selectionError ? "alert" : "status"}>
         <div className="chat-no-index__mark" aria-hidden="true">▤</div>
@@ -324,6 +334,8 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
           <div className="chat-message__meta"><span className={`chat-avatar chat-avatar--${message.mode}`} aria-hidden="true">{message.role === "user" ? "Y" : "R"}</span><strong>{message.role === "user" ? "You" : "RAG-PDF"}</strong><span>{message.mode === "general" ? "General Chat" : "Document Chat"}</span></div>
           <div className="chat-message__body">
             {message.document && message.document.outcome === "answered" ? <p>{citationSegments(message.text, message.document, (label) => openEvidence(message, label))}</p> : <p>{message.text}</p>}
+            {message.evidenceExpired ? <p className="chat-note">Evidence expired after reload. Ask again to retrieve current sources.</p> : null}
+            {message.document && message.document.index_fingerprint !== selection?.selection?.index_fingerprint ? <p className="chat-note">Sources belong to the index used for this answer.</p> : null}
             {message.document?.model_reported_insufficient_evidence ? <p className="chat-note">The configured model reported that the supplied evidence was insufficient.</p> : null}
             {message.document?.warnings.includes("unsupported_citation_label") ? <p className="chat-note">A citation label was not present in the supplied evidence, so it is shown without a link.</p> : null}
             {message.document?.text_evidence.length || message.document?.image_evidence.length ? <button className="chat-evidence-link" type="button" onClick={() => openEvidence(message, null)}>View {message.document.text_evidence.length + message.document.image_evidence.length} source items</button> : null}
@@ -333,6 +345,7 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
         {busy ? <div className="chat-thinking" role="status"><span className="chat-thinking__dots" aria-hidden="true"><i /><i /><i /></span><span>{mode === "general" ? "Waiting for the local model…" : "Searching the selected index…"}</span></div> : null}
       </div>
 
+      {messages.length >= 100 ? <p role="status">Conversation limit reached. Start a new chat to continue; these messages remain available.</p> : null}
       {copyNotice ? <p className="chat-copy-notice" role="status">{copyNotice}</p> : null}
       <form className="chat-composer" onSubmit={(event) => void submit(event)}>
         <label className="sr-only" htmlFor="chat-question">Message</label>
@@ -340,10 +353,10 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
           placeholder={mode === "general" ? "Message your local model…" : "Ask about the selected documents…"} disabled={busy} rows={3} />
         <div className="chat-composer__foot">
           <span>{mode === "general" ? modelIsVerified ? `Local model · ${generalModel}` : catalog?.availability === "unavailable" ? "Ollama unavailable" : "Checking local model" : "Answers from your PDFs"}</span>
-          <div><small>{question.length}/4000</small><button type="submit" className="chat-send" disabled={!question.trim() || busy || (mode === "document" && !hasIndex)} aria-label="Send message"><span aria-hidden="true">↑</span></button></div>
+          <div><small>{question.length}/4000</small><button type="submit" className="chat-send" disabled={!question.trim() || messages.length >= 100 || busy || requestController.current !== null || (mode === "document" && !hasIndex)} aria-label="Send message"><span aria-hidden="true">↑</span></button></div>
         </div>
       </form>
-      <p className="chat-footnote">{mode === "general" ? "General Chat is not document-grounded. Conversation history stays in this tab and is sent with follow-up questions." : "Each Document Chat question is evaluated independently against the selected index."} Closing or reloading this page clears the conversation.</p>
+      <p className="chat-footnote">{mode === "general" ? "General Chat is not document-grounded. Conversation history stays in this tab and is sent with follow-up questions." : "Each Document Chat question is evaluated independently against the selected index."} Conversations stay in this browser tab session. Evidence is not saved across reloads.</p>
     </section>
 
     {drawerMessage?.document ? <>

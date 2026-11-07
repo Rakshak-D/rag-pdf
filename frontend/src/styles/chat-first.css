@@ -259,3 +259,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.conversation-picker { display: flex; align-items: center; gap: 10px; margin: 8px 0 16px; font-size: 12px; }
+.conversation-picker select { min-width: 0; max-width: 380px; flex: 1; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: inherit; }
+.conversation-picker button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+@media(max-width: 600px) { .conversation-picker { flex-wrap: wrap; } .conversation-picker select { max-width: 70%; } }

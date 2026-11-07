@@ -61,7 +61,6 @@ describe("DocumentsIndexWorkflow", () => {
     mount();
 
     expect(await screen.findByText("Using the trusted server configuration")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Preview index" }));
     expect(await screen.findByText("A fresh build can be submitted")).toBeInTheDocument();
     expect(screen.getByText("2", { selector: "dd" })).toBeInTheDocument();
     await waitFor(() => expect(fetcher.mock.calls.some(([url]) => String(url) === "/bootstrap-api/v1/bootstrap/index-inventory")).toBe(true));
@@ -99,7 +98,6 @@ describe("DocumentsIndexWorkflow", () => {
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup(); mount();
     await screen.findByText("Using the trusted server configuration");
-    await user.click(screen.getByRole("button", { name: "Preview index" }));
     await screen.findByText("A fresh build can be submitted");
     await user.click(screen.getByLabelText(/I reviewed the preview/));
     await user.click(screen.getByRole("button", { name: "Start index build" }));
@@ -119,17 +117,15 @@ describe("DocumentsIndexWorkflow", () => {
       return json({ error: { code: "unexpected_route" } }, 404);
     });
     vi.stubGlobal("fetch", fetcher);
-    const user = userEvent.setup();
     const view = mount(null, 0);
     await screen.findByText("Using the trusted server configuration");
-    expect(screen.getByRole("button", { name: "Preview index" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Check documents" })).toBeDisabled();
     expect(fetcher.mock.calls.some(([url]) => String(url) === "/bootstrap-api/v1/bootstrap/preview")).toBe(false);
     view.rerender(<MemoryRouter><DocumentsIndexWorkflow
       token="bootstrap-token-for-workflow"
       status={{ mode: "bootstrap", status: "running", accepting_jobs: true, worker_count: 1, queue_capacity: 2 }}
       sourceManifestHash={manifest} sourceCount={2} onRefreshDocuments={vi.fn()}
     /></MemoryRouter>);
-    await user.click(screen.getByRole("button", { name: "Preview index" }));
     await screen.findByText("A fresh build can be submitted");
     view.rerender(<MemoryRouter><DocumentsIndexWorkflow
       token="bootstrap-token-for-workflow"
@@ -154,8 +150,8 @@ describe("DocumentsIndexWorkflow", () => {
     mount();
     expect(await screen.findByLabelText("Build status running")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("Build status succeeded")).toBeInTheDocument(), { timeout: 4000 });
-    await waitFor(() => expect(inventoryCalls).toBe(1));
-    expect(previewCalls).toBe(1);
+    await waitFor(() => expect(inventoryCalls).toBe(2));
+    expect(previewCalls).toBe(2);
     expect(screen.getByText("No usable completed build found.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start index build" })).not.toBeInTheDocument();
     expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST" && String(init.body).includes("client_request_id"))).toBe(false);

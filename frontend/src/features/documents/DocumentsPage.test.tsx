@@ -82,7 +82,7 @@ describe("Documents page", () => {
     const file = new File(["%PDF-test payload"], "Research note.pdf", { type: "application/pdf" });
     await user.upload(screen.getByLabelText("PDF file"), file);
     await user.click(screen.getByRole("button", { name: "Import PDF" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("imported and confirmed in the source inventory");
+    expect(await screen.findByRole("status", { name: "PDF import" })).toHaveTextContent("imported and confirmed in the source inventory");
     expect(await screen.findByText("Research note.pdf", { exact: true })).toBeInTheDocument();
 
     const uploadCall = fetcher.mock.calls.find(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST");
@@ -125,7 +125,7 @@ describe("Documents page", () => {
     await user.click(screen.getByRole("button", { name: "Importing PDF…" }));
     expect(fetcher.mock.calls.filter(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST")).toHaveLength(1);
     releaseUpload?.(json({ outcome: "imported", document: record, manifest_hash: "b".repeat(64), max_upload_bytes: 1024 * 1024, error_code: null }, 201));
-    await screen.findByRole("status");
+    await screen.findByRole("status", { name: "PDF import" });
   });
 
   it("renders safe upload errors and inventory failures without inventing documents", async () => {

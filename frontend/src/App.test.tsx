@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(URL, "revokeObje
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 afterEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
   vi.unstubAllGlobals();
   if (originalCreateObjectURL) Object.defineProperty(URL, "createObjectURL", originalCreateObjectURL);
   else delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
@@ -180,6 +181,47 @@ describe("chat-first local application", () => {
     expect(composer).toHaveValue("Keep this draft");
   });
 
+  it("preserves conversation, draft and model history through Settings and Documents, then restores on reload", async () => {
+    const fallback = defaultFetch();
+    const requests: Array<{ question: string; history: unknown[] }> = [];
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation((url, init) => {
+      if (String(url) === "/api/v1/chat") { const body = JSON.parse(String(init?.body)); requests.push(body); return Promise.resolve(jsonResponse({ mode: "general", model: "gemma4:e2b", answer: `Answer ${body.question}` })); }
+      return fallback(url, init);
+    }));
+    const user = userEvent.setup(); const router = mount();
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "Remember the observatory{Enter}");
+    await screen.findByText("Answer Remember the observatory");
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "My unsent draft");
+    await act(async () => { await router.navigate("/settings"); });
+    await act(async () => { await router.navigate("/documents"); });
+    await act(async () => { await router.navigate("/"); });
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("My unsent draft");
+    expect(screen.getByText("Answer Remember the observatory")).toBeVisible();
+    cleanup(); mount();
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("My unsent draft");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await screen.findByText("Answer My unsent draft");
+    expect(requests[1]?.history).toEqual([{ user: "Remember the observatory", assistant: "Answer Remember the observatory" }]);
+    const firstId = (screen.getByRole("combobox", { name: "Conversation" }) as HTMLSelectElement).value;
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    expect(screen.queryByText("Answer My unsent draft")).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Conversation" }), firstId);
+    expect(screen.getByText("Answer My unsent draft")).toBeVisible();
+  });
+
+  it("honors mode query navigation on a reused Chat workspace and preserves separate drafts", async () => {
+    vi.stubGlobal("fetch", defaultFetch()); const user = userEvent.setup(); const router = mount();
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "General draft");
+    await act(async () => { await router.navigate("/?mode=document"); });
+    expect(screen.getByRole("button", { name: "Documents", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("");
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "PDF draft");
+    await act(async () => { await router.navigate("/?mode=general"); });
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("General draft");
+    await act(async () => { await router.navigate("/?mode=document"); });
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("PDF draft");
+  });
+
   it("shows a truthful Ollama-unavailable error and does not fabricate an answer", async () => {
     const fetcher = defaultFetch();
     fetcher.mockImplementation(async (input) => {
@@ -198,7 +240,7 @@ describe("chat-first local application", () => {
     expect(screen.queryByText(/Here is an answer/)).not.toBeInTheDocument();
   });
 
-  it("prevents duplicate sends and suppresses a response after New Chat", async () => {
+  it("prevents duplicate sends and keeps a pending response in its conversation", async () => {
     let resolveChat!: (response: Response) => void;
     const pending = new Promise<Response>((resolve) => { resolveChat = resolve; });
     const fetcher = defaultFetch();
@@ -211,19 +253,22 @@ describe("chat-first local application", () => {
     });
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup();
-    mount();
+    const router = mount();
     await user.type(screen.getByRole("textbox", { name: "Message" }), "Wait for this response");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1));
     expect(screen.getByRole("button", { name: "Documents", pressed: false })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "New chat" }));
+    expect(screen.getByRole("button", { name: "New chat" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Conversation" })).toBeDisabled();
+    await act(async () => { await router.navigate("/settings"); });
     await act(async () => {
       resolveChat(jsonResponse({ mode: "general", answer: "Late response", model: "gemma4:e2b" }));
       await pending;
     });
-    expect(screen.queryByText("Wait for this response")).not.toBeInTheDocument();
-    expect(screen.queryByText("Late response")).not.toBeInTheDocument();
+    await act(async () => { await router.navigate("/"); });
+    expect(screen.getByText("Wait for this response")).toBeInTheDocument();
+    expect(screen.getByText("Late response")).toBeInTheDocument();
     expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1);
   });
 

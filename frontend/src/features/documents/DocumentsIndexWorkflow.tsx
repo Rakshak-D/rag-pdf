@@ -13,6 +13,7 @@ import { IndexSelectionPanel } from "../index-builds/IndexSelectionPanel";
 import { getTrustedBootstrapConfiguration } from "./documentsApi";
 
 interface Props {
+  visible?: boolean;
   token: string | null;
   status: BootstrapStatusResponse | null;
   sourceManifestHash: string | null;
@@ -62,7 +63,7 @@ function JobStatus({ job }: { job: BootstrapJobRecord }) {
   </div>;
 }
 
-export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sourceCount, onRefreshDocuments }: Props) {
+export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sourceCount, onRefreshDocuments, visible = true }: Props) {
   const client = useMemo(() => token ? new BootstrapApiClient({ token }) : null, [token]);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [configurationLoading, setConfigurationLoading] = useState(false);
@@ -178,6 +179,10 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
       void createPreview();
     }
   }, [activeJob?.job_id, activeJob?.status]);
+
+  useEffect(() => {
+    if (visible && config && client && sourceManifestHash && sourceCount) void createPreview();
+  }, [config, client, sourceManifestHash, sourceCount, visible]);
 
   async function createPreview() {
     if (!client || !config || !sourceManifestHash || !sourceCount) return;
@@ -306,30 +311,40 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
   const selectionToken = LOCAL_GATEWAY ? token : null;
 
   return <div role="region" className="documents-workflow" aria-label="Prepare and use a document index">
+    <p className="documents-next-step" role="status" aria-label="Document preparation">{!sourceCount ? "Add a PDF to begin." : activeJob && ["running", "queued"].includes(activeJob.status) ? "Indexing your PDFs. You can leave this page and return later." : currentSelection ? "Index selected. Ask your PDFs below." : preview?.fresh_build_eligible ? "Your PDFs need an index. Confirm the build below when you are ready." : inventoryPage?.candidates.some(c => c.compatibility === "report_match") ? "A completed index matches your PDFs. Choose Use this index below." : preview?.existing_index ? "Existing index files need review. See the report checks below." : "Checking your PDF collection…"}</p>
     <section className="documents-workflow__section" aria-labelledby="prepare-index-title">
       <div className="documents-workflow__heading">
-        <div><span className="documents-workflow__eyebrow">NEXT · PREPARE AN INDEX</span><h2 id="prepare-index-title">Make your PDFs searchable</h2></div>
+        <div><h2 id="prepare-index-title">Prepare for chat</h2></div>
         {token ? <span className="documents-workflow__connection">Build setup available</span> : null}
       </div>
-      <p className="documents-workflow__copy">Check your PDFs, then build or select an index.</p>
+      <p className="documents-workflow__copy">One index covers the whole PDF collection. Adding a PDF requires an updated index.</p>
       {!token ? <p className="documents-workflow__empty">Connect to the bootstrap service above to prepare a build.</p> : null}
       {configurationLoading ? <p role="status">Loading the trusted server configuration…</p> : null}
       {configurationError ? <div className="documents-workflow__error" role="alert"><p>{configurationError}</p><button className="button button--quiet" type="button" onClick={() => { setConfigurationError(null); setConfigurationLoading(true); void getTrustedBootstrapConfiguration(token).then((value) => setConfig(value.resolved_config)).catch((error: unknown) => setConfigurationError(apiErrorText(error))).finally(() => setConfigurationLoading(false)); }}>Retry configuration</button></div> : null}
-      {config && token ? <div className="documents-workflow__config-state"><span aria-hidden="true">✓</span><div><strong>Using the trusted server configuration</strong><small>Default build settings</small></div></div> : null}
+      {config && token ? <details className="documents-workflow__config-state"><summary>Build settings</summary><div><span aria-hidden="true">✓</span><div><strong>Using the trusted server configuration</strong><small>Default build settings</small></div></div></details> : null}
       <div className="documents-workflow__actions">
         <button className="button button--primary" type="button" onClick={() => void createPreview()} disabled={!token || !config || !sourceManifestHash || !sourceCount || previewLoading || configurationLoading}>
-          {previewLoading ? "Checking source…" : "Preview index"}
+          {previewLoading ? "Checking source…" : "Check documents"}
         </button>
         {!sourceCount && token ? <span className="documents-workflow__hint">Import at least one PDF before previewing.</span> : null}
       </div>
       {previewError ? <p className="documents-workflow__error" role="alert">{previewError}</p> : null}
       {preview ? <>
-        <dl className="documents-workflow__facts" aria-label="Index preview results">
+        <details><summary>View preparation details</summary><dl className="documents-workflow__facts" aria-label="Index preview results">
           <div><dt>Source documents</dt><dd>{preview.document_count}</dd></div>
           <div><dt>Build decision</dt><dd>{preview.fresh_build_eligible ? "A fresh build can be submitted" : preview.existing_index ? "An index already exists" : "Not eligible"}</dd></div>
-        </dl>
+        </dl></details>
         <p className="documents-workflow__note">No build starts until you confirm.</p>
         {preview.existing_index && !inventoryPage ? <p className="documents-workflow__warning" role="status">Index files found. Select a matching completed build below.</p> : null}
+      {token && preview?.fresh_build_eligible ? <div className="documents-workflow__build-confirm">
+        <p>Starting a build uses the configured models and may take time. It creates new fingerprint-owned index data only; no existing index is modified.</p>
+        <label><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} disabled={!preview.fresh_build_eligible || !status?.accepting_jobs || submitting} /> I reviewed the preview and want to submit one fresh build for this source.</label>
+        <button className="button button--primary" type="button" onClick={() => void submitBuild()} disabled={!acknowledged || !status?.accepting_jobs || submitting || Boolean(uncertainRequestId)}>
+          {submitting ? "Submitting build…" : "Start index build"}
+        </button>
+        {status && !status.accepting_jobs ? <p role="status">The bootstrap worker is not accepting jobs right now.</p> : null}
+      </div> : null}
+        <details open={!preview.fresh_build_eligible} className="documents-existing-indexes"><summary>Existing indexes</summary>
         <div className="documents-workflow__actions">
           <button className="button button--quiet" type="button" onClick={() => void inspectReports(0)} disabled={inventoryLoading || !config}>
             {inventoryLoading ? "Inspecting reports…" : inventoryPage ? "Refresh compatible reports" : "Find existing indexes"}
@@ -345,24 +360,18 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
         </div> : null}
         {preview.existing_index && inventoryOffset === 0 && inventoryPage?.complete && !hasNextReportPage && !inventoryPage.candidates.some((item) => item.compatibility === "report_match") ? <div role="alert" className="documents-workflow__warning"><strong>No usable completed build found.</strong><p>Existing files are preserved. Review failed builds below. To retry an incomplete build, use a separate source and index workspace; do not delete the existing files.</p><Link to="/index-builds">Review build configuration and history</Link><details><summary>View report checks</summary>{inventoryPage.candidates.map((item) => <p key={item.candidate_id}>{item.build_id}: {item.reason_code}</p>)}</details></div> : null}
         <IndexSelectionPanel token={selectionToken} preview={preview} resolvedConfig={config} inventoryPage={inventoryPage} onSelectionReadback={setSelection} compact />
+        </details>
       </> : null}
       {!LOCAL_GATEWAY && token ? <p className="documents-workflow__hint">In direct development mode, report selection uses the separate ordinary-runtime connection on <Link to="/index-builds">advanced Index Builds</Link>. The bootstrap credential is never sent to the ordinary runtime.</p> : null}
     </section>
 
+    <details open={Boolean(activeJob || uncertainRequestId || actionError || historyError)} className="documents-workflow__activity"><summary>Build activity</summary>
     <section className="documents-workflow__section" aria-labelledby="build-status-title">
-      <div className="documents-workflow__heading"><div><span className="documents-workflow__eyebrow">BUILD STATUS</span><h2 id="build-status-title">Index activity</h2></div>
+      <div className="documents-workflow__heading"><div><h2 id="build-status-title">Index activity</h2></div>
         <button className="button button--quiet" type="button" onClick={() => void refreshHistory()} disabled={!token || historyLoading}>{historyLoading ? "Refreshing…" : "Refresh jobs"}</button>
       </div>
       {historyError ? <p className="documents-workflow__error" role="alert">{historyError}</p> : null}
       {activeJob ? <JobStatus job={activeJob} /> : null}
-      {token && preview?.fresh_build_eligible ? <div className="documents-workflow__build-confirm">
-        <p>Starting a build uses the configured models and may take time. It creates new fingerprint-owned index data only; no existing index is modified.</p>
-        <label><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} disabled={!preview.fresh_build_eligible || !status?.accepting_jobs || submitting} /> I reviewed the preview and want to submit one fresh build for this source.</label>
-        <button className="button button--primary" type="button" onClick={() => void submitBuild()} disabled={!acknowledged || !status?.accepting_jobs || submitting || Boolean(uncertainRequestId)}>
-          {submitting ? "Submitting build…" : "Start index build"}
-        </button>
-        {status && !status.accepting_jobs ? <p role="status">The bootstrap worker is not accepting jobs right now.</p> : null}
-      </div> : null}
       {uncertainRequestId ? <div className="documents-workflow__warning" role="group" aria-labelledby="uncertain-build-title">
         <h3 id="uncertain-build-title">Build submission needs confirmation</h3>
         <p>The response was interrupted. The server may have accepted the request. No retry was sent.</p>
@@ -381,8 +390,9 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
       <p className="documents-workflow__hint">Builds are explicit and fresh-only. Failed or interrupted data is preserved for review, not repaired automatically.</p>
     </section>
 
+    </details>
     {currentSelection ? <section className="documents-workflow__section documents-workflow__use" aria-labelledby="use-documents-title">
-      <div><span className="documents-workflow__eyebrow">USE DOCUMENTS</span><h2 id="use-documents-title">Ask your PDFs</h2></div>
+      <div><h2 id="use-documents-title">Ask your PDFs</h2></div>
       {currentSelection ? <div className="documents-workflow__selected" role="status"><strong>Index selected.</strong><span>Your next question will check retrieval and model availability.</span><Link className="button button--primary" to="/?mode=document">Ask documents</Link></div> : <p className="documents-workflow__copy">Select a completed index above to start Document Chat.</p>}
       {sourceManifestHash && preview && preview.manifest_hash !== sourceManifestHash ? <p className="documents-workflow__warning" role="alert">The source manifest changed. Preview and report compatibility were cleared.</p> : null}
     </section> : null}

@@ -188,3 +188,12 @@
 .documents-workflow__section { box-shadow: none; }
 .documents-workflow .index-selection { box-shadow: none; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 18px 0 0; }
 .documents-workflow__note, .documents-workflow__hint { line-height: 1.5; }
+
+.documents-next-step { padding: 14px 16px; border-left: 3px solid #ad593e; background: #f5eee7; line-height: 1.6; }
+.documents-workflow__config-state { display: block; box-shadow: none; }
+.documents-workflow__config-state > div { display: flex; gap: 10px; margin-top: 12px; }
+.documents-workflow__section details > summary { cursor: pointer; font-size: 12px; }
+
+.documents-existing-indexes > summary, .documents-workflow__activity > summary { cursor: pointer; padding: 10px 0; color: #6f655d; font-size: 12px; }
+.documents-existing-indexes[open] > summary { margin-bottom: 10px; }
+.documents-workflow__activity > section { margin-top: 8px; }

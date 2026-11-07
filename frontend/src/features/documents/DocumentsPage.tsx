@@ -9,6 +9,7 @@ import { DocumentsIndexWorkflow } from "./DocumentsIndexWorkflow";
 import "./documents-workflow.css";
 
 interface Props {
+  visible?: boolean;
   token: string | null;
   status: BootstrapStatusResponse | null;
   checking: boolean;
@@ -58,7 +59,7 @@ function DocumentRow({ document }: { document: BootstrapDocumentRecord }) {
   </tr>;
 }
 
-export function DocumentsPage({ token, status, checking, connectionError, onConnect, onDisconnect }: Props) {
+export function DocumentsPage({ token, status, checking, connectionError, onConnect, onDisconnect, visible = true }: Props) {
   const client = useMemo(() => new BootstrapApiClient({ token }), [token]);
   const [inventory, setInventory] = useState<BootstrapDocumentsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -198,6 +199,12 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
     }
   }
 
+  const previouslyVisible = useRef(visible);
+  useEffect(() => {
+    if (visible && !previouslyVisible.current) setRefreshVersion(value => value + 1);
+    previouslyVisible.current = visible;
+  }, [visible]);
+
   const hasNext = Boolean(inventory && offset + inventory.documents.length < inventory.total);
   const maxUploadBytes = inventory?.max_upload_bytes ?? null;
 
@@ -205,7 +212,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
     <PageHeading
       eyebrow="YOUR DOCUMENTS"
       title="Documents"
-      description="Import PDFs, check the current source, and prepare an index when you are ready."
+      description="Add PDFs, prepare them for chat, then ask questions."
       actions={<Link className="button button--quiet" to="/index-builds">Advanced job details</Link>}
     />
 
@@ -215,7 +222,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
     /></details>
 
     <section className="panel documents-import" aria-labelledby="documents-import-title">
-      <div className="panel__heading"><div><span className="eyebrow">SOURCE INTAKE</span><h2 id="documents-import-title">Import a PDF</h2></div></div>
+      <div className="panel__heading"><div><h2 id="documents-import-title">Import a PDF</h2></div></div>
       <p className="documents-copy">Import PDFs, then prepare an index below.</p>
       {maxUploadBytes !== null ? <p className="documents-limit">Maximum file size {formatBytes(maxUploadBytes)} ({maxUploadBytes.toLocaleString()} bytes) · maximum {inventory?.max_pages} pages · readable, unencrypted PDFs</p>
         : <p className="documents-limit">Connect to the bootstrap service to read its configured upload limit.</p>}
@@ -241,14 +248,14 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
           {uploading ? <span role="status">Validating and publishing the selected PDF.</span> : null}
         </div>
         {uploadError ? <p className="inline-error" role="alert">{uploadError}</p> : null}
-        {feedback ? <p className="documents-feedback" role="status">{feedback}</p> : null}
+        {feedback ? <p className="documents-feedback" role="status" aria-label="PDF import">{feedback}</p> : null}
         {warning ? <p className="documents-warning" role="alert">{warning}</p> : null}
       </form>
     </section>
 
     <section className="panel documents-inventory" aria-labelledby="documents-inventory-title">
       <div className="panel__heading">
-        <div><span className="eyebrow">SOURCE MANIFEST</span><h2 id="documents-inventory-title">Imported documents</h2></div>
+        <div><h2 id="documents-inventory-title">Imported documents</h2></div>
         <button className="button button--quiet" type="button" onClick={() => setRefreshVersion((value) => value + 1)} disabled={!token || loading || uploading}>Refresh</button>
       </div>
       {!token ? <p className="documents-empty">Connect to the bootstrap service to inspect its PDF source inventory.</p>
@@ -272,6 +279,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
     </section>
 
     <DocumentsIndexWorkflow
+      visible={visible}
       token={token}
       status={status}
       sourceManifestHash={inventory?.manifest_hash ?? null}
