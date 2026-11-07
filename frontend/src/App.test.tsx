@@ -153,7 +153,7 @@ describe("chat-first local application", () => {
     vi.stubGlobal("fetch", defaultFetch());
     const user = userEvent.setup();
     mount();
-    await user.click(screen.getByRole("button", { name: "Documents", pressed: false }));
+    await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
     expect(await screen.findByText("Choose an index to chat with documents")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Prepare documents" })).toHaveAttribute("href", "/documents");
     expect(screen.getByRole("textbox", { name: "Message" })).toBeEnabled();
@@ -170,7 +170,7 @@ describe("chat-first local application", () => {
     const fallback = defaultFetch();
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation((input, init) => String(input) === "/api/v1/index/selection" ? Promise.resolve(jsonResponse(current)) : fallback(input, init)));
     const user = userEvent.setup(); mount();
-    await user.click(screen.getByRole("button", { name: "Documents", pressed: false }));
+    await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
     await screen.findByText("Choose an index to chat with documents");
     const composer = screen.getByRole("textbox", { name: "Message" });
     await user.type(composer, "Keep this draft");
@@ -213,13 +213,73 @@ describe("chat-first local application", () => {
     vi.stubGlobal("fetch", defaultFetch()); const user = userEvent.setup(); const router = mount();
     await user.type(screen.getByRole("textbox", { name: "Message" }), "General draft");
     await act(async () => { await router.navigate("/?mode=document"); });
-    expect(screen.getByRole("button", { name: "Documents", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat with PDFs", pressed: true })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("");
     await user.type(screen.getByRole("textbox", { name: "Message" }), "PDF draft");
     await act(async () => { await router.navigate("/?mode=general"); });
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("General draft");
     await act(async () => { await router.navigate("/?mode=document"); });
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("PDF draft");
+  });
+
+  it("remembers the last selected conversation per mode and keeps URL, picker, reload and history aligned", async () => {
+    vi.stubGlobal("fetch", defaultFetch()); const user = userEvent.setup(); const router = mount("/?mode=general");
+    const picker = () => screen.getByRole("combobox", { name: "Conversation" }) as HTMLSelectElement;
+    const input = () => screen.getByRole("textbox", { name: "Message" });
+    await user.type(input(), "General A draft"); const a = picker().value;
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await user.type(input(), "General C draft"); const c = picker().value;
+    await user.selectOptions(picker(), a);
+    await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
+    await user.type(input(), "PDF B draft"); const b = picker().value;
+    await user.click(screen.getByRole("button", { name: "General Chat", pressed: false }));
+    expect(picker().value).toBe(a); expect(input()).toHaveValue("General A draft");
+    expect(router.state.location.search).toContain("mode=general");
+    const generalUrl = `${router.state.location.pathname}${router.state.location.search}`;
+    cleanup(); const restored = mount(generalUrl);
+    expect((screen.getByRole("combobox", { name: "Conversation" }) as HTMLSelectElement).value).toBe(a);
+    await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
+    expect(picker().value).toBe(b); expect(input()).toHaveValue("PDF B draft");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "General Chat", pressed: false }));
+      fireEvent.click(screen.getByRole("button", { name: "Chat with PDFs" }));
+    });
+    expect(picker().value).toBe(b); expect(input()).toHaveValue("PDF B draft");
+    await user.selectOptions(picker(), c);
+    expect(screen.getByRole("button", { name: "General Chat", pressed: true })).toBeInTheDocument();
+    expect(input()).toHaveValue("General C draft");
+    await act(async () => { await restored.navigate(-1); });
+    expect(picker().value).toBe(b); expect(input()).toHaveValue("PDF B draft");
+    await act(async () => { await restored.navigate(1); });
+    expect(picker().value).toBe(c);
+    await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
+    await act(async () => {
+      fireEvent.change(picker(), { target: { value: c } });
+      await restored.navigate(-1);
+    });
+    expect(picker().value).toBe(b);
+    expect(input()).toHaveValue("PDF B draft");
+    await user.selectOptions(picker(), c);
+    await act(async () => { await restored.navigate("/settings"); await restored.navigate("/"); });
+    expect(picker().value).toBe(c); expect(input()).toHaveValue("General C draft");
+  });
+
+  it("waits for model discovery before sending a saved model preference", async () => {
+    window.localStorage.setItem("rag-pdf.general-chat-preferences", JSON.stringify({version:1, selectedModel:"qwen2.5:3b", temperature:0.4, maxOutputTokens:64}));
+    let resolveModels!: (value: Response) => void;
+    const pendingModels = new Promise<Response>(resolve => { resolveModels = resolve; });
+    const fallback = defaultFetch();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((url, init) => String(url) === "/api/v1/chat/models" ? pendingModels : String(url) === "/api/v1/chat" ? Promise.resolve(jsonResponse({mode:"general",model:"qwen2.5:3b",answer:"Saved model response"})) : fallback(url, init));
+    vi.stubGlobal("fetch", fetcher); const user = userEvent.setup(); mount();
+    await user.type(screen.getByRole("textbox", {name:"Message"}), "Use my saved model");
+    expect(screen.getByRole("button", {name:"Send message"})).toBeDisabled();
+    await user.keyboard("{Enter}");
+    expect(fetcher.mock.calls.some(([url]) => String(url) === "/api/v1/chat")).toBe(false);
+    await act(async () => resolveModels(jsonResponse(models)));
+    await user.click(screen.getByRole("button", {name:"Send message"}));
+    await screen.findByText("Saved model response");
+    const call = fetcher.mock.calls.find(([url]) => String(url) === "/api/v1/chat");
+    expect(JSON.parse(String(call?.[1]?.body)).model).toBe("qwen2.5:3b");
   });
 
   it("shows a truthful Ollama-unavailable error and does not fabricate an answer", async () => {
@@ -257,7 +317,7 @@ describe("chat-first local application", () => {
     await user.type(screen.getByRole("textbox", { name: "Message" }), "Wait for this response");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1));
-    expect(screen.getByRole("button", { name: "Documents", pressed: false })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Chat with PDFs", pressed: false })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "New chat" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Conversation" })).toBeDisabled();
@@ -269,6 +329,22 @@ describe("chat-first local application", () => {
     await act(async () => { await router.navigate("/"); });
     expect(screen.getByText("Wait for this response")).toBeInTheDocument();
     expect(screen.getByText("Late response")).toBeInTheDocument();
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1);
+  });
+
+  it("does not attach a late pre-reload response to a restored browser session", async () => {
+    let resolveChat!: (response: Response) => void;
+    const pending = new Promise<Response>(resolve => { resolveChat = resolve; });
+    const fallback = defaultFetch();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation((url, init) => String(url) === "/api/v1/chat" ? pending : fallback(url, init));
+    vi.stubGlobal("fetch", fetcher); const user = userEvent.setup(); mount();
+    await user.type(screen.getByRole("textbox", {name:"Message"}), "Request before reload");
+    await user.click(screen.getByRole("button", {name:"Send message"}));
+    cleanup(); mount();
+    expect(screen.getByText("Request before reload")).toBeVisible();
+    expect(screen.getByText(/previous request may still be processing/)).toBeVisible();
+    await act(async () => { resolveChat(jsonResponse({mode:"general",model:"gemma4:e2b",answer:"Old browser response"})); await pending; });
+    expect(screen.queryByText("Old browser response")).not.toBeInTheDocument();
     expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1);
   });
 
@@ -296,7 +372,7 @@ describe("chat-first local application", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     vi.stubGlobal("fetch", fetcher);
     mount("/?mode=document");
-    expect(await screen.findByText(/c{8} selected/)).toBeInTheDocument();
+    expect(await screen.findByText("PDF collection selected")).toBeInTheDocument();
     const input = await screen.findByRole("textbox", { name: "Message" });
     await user.type(input, "What does the figure show?");
     await user.keyboard("{Enter}");

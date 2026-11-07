@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ApiError, WorkbenchApiClient } from "../../api/client";
 import type { AskResponse, ChatModelCatalog, IndexSelectionState } from "../../api/types";
 import type { GeneralChatPreferences, PreferenceLoadStatus } from "../settings/preferences";
@@ -64,6 +64,7 @@ function pageName(page: number | null): string {
 export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnavailableModel, conversations, visible }: Props) {
   const client = useMemo(() => new WorkbenchApiClient({ token }), [token]);
   const location = useLocation();
+  const navigate = useNavigate();
   const { mode, messages, generalTurns, question } = conversations.active;
   const { setMode, setMessages, setGeneralTurns, setQuestion } = conversations;
   const [busy, setBusy] = useState(false);
@@ -181,25 +182,32 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     return () => { active = false; };
   }, [client, drawerMessage, imageErrors, imageUrls]);
 
+  const conversationUrl = (mode: Mode, id: string) => `/?mode=${mode}&conversation=${encodeURIComponent(id)}`;
   const selectMode = (next: Mode) => {
-    if (next === mode) return;
-    requestSequence.current += 1;
-    requestController.current?.abort();
-    setBusy(false);
-    setMode(next);
-    setDrawerMessage(null);
-    setActiveEvidence(null);
-    releaseImages();
+    if (busy || requestController.current) return;
+    const id = setMode(next, false);
+    if (id) navigate(conversationUrl(next, id));
     textarea.current?.focus();
   };
 
-  const appliedLocation = useRef<string | null>(null);
-  useEffect(() => {
-    if (location.pathname !== "/" || busy || appliedLocation.current === location.key) return;
-    appliedLocation.current = location.key;
-    const requested = new URLSearchParams(location.search).get("mode");
-    if ((requested === "document" || requested === "general") && requested !== mode) selectMode(requested);
-  }, [location.pathname, location.search, location.key, busy]);
+  // Explicit conversation IDs win over mode hints. A plain sidebar / preserves
+  // the active conversation; history entries restore their specific conversation.
+  useLayoutEffect(() => {
+    if (location.pathname !== "/" || busy) return;
+    const params = new URLSearchParams(location.search);
+    const target = conversations.conversations.find(c => c.id === params.get("conversation"));
+    if (target) {
+      if (conversations.active.id !== target.id) conversations.select(target.id);
+      const canonical = conversationUrl(target.mode, target.id);
+      if (`${location.pathname}${location.search}` !== canonical) navigate(canonical, { replace: true });
+      return;
+    }
+    const requested = params.get("mode");
+    if (requested === "document" || requested === "general") {
+      const id = requested === mode ? conversations.active.id : setMode(requested);
+      if (id) navigate(conversationUrl(requested, id), { replace: true });
+    }
+  }, [location.pathname, location.search, location.key, conversations.active.id, mode, busy]);
 
   useEffect(() => { setDrawerMessage(null); setActiveEvidence(null); releaseImages(); }, [conversations.active.id, visible, releaseImages]);
 
@@ -211,7 +219,7 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
   async function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const normalized = question.trim();
-    if (!normalized || normalized.length > 4000 || messages.length >= 100 || busy || requestController.current !== null || (mode === "document" && !hasIndex)) return;
+    if (!normalized || normalized.length > 4000 || messages.length >= 100 || (mode === "general" && catalog === null) || busy || requestController.current !== null || (mode === "document" && !hasIndex)) return;
     const currentMode = mode;
     const sequence = ++requestSequence.current;
     const controller = new AbortController();
@@ -265,7 +273,8 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
 
   const clearConversation = () => {
     if (busy || requestController.current) return;
-    conversations.create(mode);
+    const id = conversations.create(mode, false);
+    if (id) navigate(conversationUrl(mode, id));
     setCopyNotice(null);
     textarea.current?.focus();
   };
@@ -283,7 +292,6 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     <section className="chat-main" aria-label="Conversation">
       <header className="chat-heading">
         <div>
-          <span className="chat-kicker">RAG-PDF · LOCAL CONVERSATION</span>
           <h1>Chat</h1>
           <p>{mode === "general" ? "Talk with your local model, without document retrieval." : "Ask about the documents behind your selected index."}</p>
         </div>
@@ -297,19 +305,19 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
 
       <div className="conversation-picker">
         <label htmlFor="conversation-picker">Conversation</label>
-        <select id="conversation-picker" value={conversations.active.id} disabled={busy} onChange={e => conversations.select(e.target.value)}>
-          {conversations.conversations.map((c, i) => <option key={c.id} value={c.id}>{c.mode === "general" ? "General" : "Documents"}: {c.messages.find(m => m.role === "user")?.text.slice(0, 45) || c.question.slice(0, 45) || `New conversation ${i + 1}`}</option>)}
+        <select id="conversation-picker" value={conversations.active.id} disabled={busy} onChange={e => { const target = conversations.conversations.find(c => c.id === e.target.value); if (target) { conversations.select(target.id, false); navigate(conversationUrl(target.mode, target.id)); } }}>
+          {conversations.conversations.map((c, i) => <option key={c.id} value={c.id}>{c.mode === "general" ? "General Chat" : "PDF chat"}: {c.messages.find(m => m.role === "user")?.text.slice(0, 45) || c.question.slice(0, 45) || `New conversation ${i + 1}`}</option>)}
         </select>
-        <button type="button" disabled={busy} onClick={() => { if (window.confirm("Delete this conversation and its draft from this tab?")) conversations.remove(); }}>Delete conversation</button>
+        <button type="button" disabled={busy} onClick={() => { if (window.confirm("Delete this conversation and its draft from this tab?")) { const id = conversations.remove(); const target = conversations.conversations.find(c => c.id === id); navigate(conversationUrl(target?.mode ?? mode, id), { replace: true }); } }}>Delete conversation</button>
       </div>
       {conversations.notice ? <p role="status">{conversations.notice}</p> : null}
       <div className="chat-mode-row">
         <div className="chat-mode-control" role="group" aria-label="Chat mode">
-          <button type="button" disabled={busy} aria-pressed={mode === "general"} className={mode === "general" ? "is-active" : ""} onClick={() => selectMode("general")}>General</button>
-          <button type="button" disabled={busy} aria-pressed={mode === "document"} className={mode === "document" ? "is-active" : ""} onClick={() => selectMode("document")}>Documents</button>
+          <button type="button" disabled={busy} aria-pressed={mode === "general"} className={mode === "general" ? "is-active" : ""} onClick={() => selectMode("general")}>General Chat</button>
+          <button type="button" disabled={busy} aria-pressed={mode === "document"} className={mode === "document" ? "is-active" : ""} onClick={() => selectMode("document")}>Chat with PDFs</button>
         </div>
         <div className="chat-context-label" aria-live="polite">
-          {mode === "general" ? <><span className={`chat-dot${modelIsVerified ? "" : " chat-dot--muted"}`} /> General Chat{modelIsVerified ? ` · ${generalModel}` : !catalog ? " · checking models" : ""}</> : hasIndex ? <><span className="chat-dot chat-dot--rust" /> {selection?.selection?.build_id?.slice(0, 8)} selected</> : <><span className="chat-dot chat-dot--muted" /> No usable index</>}
+          {mode === "general" ? <><span className={`chat-dot${modelIsVerified ? "" : " chat-dot--muted"}`} /> General Chat{modelIsVerified ? ` · ${generalModel}` : !catalog ? " · checking models" : ""}</> : hasIndex ? <><span className="chat-dot chat-dot--rust" /> PDF collection selected</> : <><span className="chat-dot chat-dot--muted" /> No usable index</>}
         </div>
       </div>
 
@@ -353,10 +361,10 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
           placeholder={mode === "general" ? "Message your local model…" : "Ask about the selected documents…"} disabled={busy} rows={3} />
         <div className="chat-composer__foot">
           <span>{mode === "general" ? modelIsVerified ? `Local model · ${generalModel}` : catalog?.availability === "unavailable" ? "Ollama unavailable" : "Checking local model" : "Answers from your PDFs"}</span>
-          <div><small>{question.length}/4000</small><button type="submit" className="chat-send" disabled={!question.trim() || messages.length >= 100 || busy || requestController.current !== null || (mode === "document" && !hasIndex)} aria-label="Send message"><span aria-hidden="true">↑</span></button></div>
+          <div><small>{question.length}/4000</small><button type="submit" className="chat-send" disabled={!question.trim() || messages.length >= 100 || (mode === "general" && catalog === null) || busy || requestController.current !== null || (mode === "document" && !hasIndex)} aria-label="Send message"><span aria-hidden="true">↑</span></button></div>
         </div>
       </form>
-      <p className="chat-footnote">{mode === "general" ? "General Chat is not document-grounded. Conversation history stays in this tab and is sent with follow-up questions." : "Each Document Chat question is evaluated independently against the selected index."} Conversations stay in this browser tab session. Evidence is not saved across reloads.</p>
+      <p className="chat-footnote">{mode === "general" ? "General Chat is not document-grounded." : "PDF questions use the selected index."} Conversations stay in this browser tab session. Evidence is not saved across reloads.</p>
     </section>
 
     {drawerMessage?.document ? <>

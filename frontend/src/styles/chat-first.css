@@ -244,11 +244,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .chat-mode-row { align-items: flex-start; flex-direction: column; gap: 8px; margin-bottom: 9px; }
   .chat-transcript { min-height: 270px; max-height: 54vh; padding-top: 14px; }
   .chat-message--user { width: 88%; }
-  .chat-message__body { padding-left: 28px; font-size: 12px; }
+  .chat-message__body { padding-left: 28px; font-size: 14px; }
   .chat-composer__foot { align-items: flex-end; }
   .chat-composer__foot > span { max-width: 66%; line-height: 1.4; }
   .chat-empty h2 { font-size: 18px; }
-  .chat-footnote { font-size: 8px; }
+  .chat-footnote { font-size: 10px; }
   .settings-section { padding: 18px 0 21px; }
   .settings-section__heading { grid-template-columns: 24px minmax(0, 1fr); gap: 7px; }
   .settings-model-summary { align-items: flex-start; }

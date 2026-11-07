@@ -54,3 +54,44 @@ describe("application conversation ownership", () => {
     expect(result.current.notice).toContain("Delete one");
   });
 });
+
+
+describe("last active conversation per mode", () => {
+  it("returns to the selected older chat rather than the newest created chat", () => {
+    const { result } = renderHook(() => useConversations());
+    const a = result.current.active.id;
+    act(() => result.current.setQuestion("A"));
+    act(() => result.current.create("general"));
+    const c = result.current.active.id;
+    act(() => result.current.select(a));
+    act(() => result.current.setMode("document"));
+    const b = result.current.active.id;
+    act(() => result.current.setMode("general"));
+    expect(result.current.active.id).toBe(a);
+    act(() => result.current.setMode("document"));
+    expect(result.current.active.id).toBe(b);
+    act(() => result.current.remove());
+    expect(result.current.conversations.map(v => v.id)).toEqual([a,c]);
+    expect(result.current.active.id).toBe(c);
+    act(() => result.current.setMode("general"));
+    expect(result.current.active.id).toBe(c);
+  });
+  it("rejects mode memory referencing the wrong conversation mode", () => {
+    expect(() => decodeSession(JSON.stringify({ ...session(), lastActiveByMode: { document: "one" } }))).toThrow();
+  });
+});
+
+
+it("records a navigation intent without changing the visible conversation prematurely", () => {
+  const { result } = renderHook(() => useConversations());
+  const a = result.current.active.id;
+  let b: string | null = null;
+  act(() => { b = result.current.create("document", false); });
+  expect(result.current.active.id).toBe(a);
+  act(() => result.current.select(b!));
+  expect(result.current.active.id).toBe(b);
+  act(() => result.current.setMode("general", false));
+  expect(result.current.active.id).toBe(b);
+  act(() => result.current.select(a));
+  expect(result.current.active.id).toBe(a);
+});
