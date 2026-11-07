@@ -179,7 +179,7 @@ describe("bootstrap index-build workflow", () => {
     await user.click(screen.getByRole("button", { name: "Connect" }));
     await screen.findByText("No adapters are registered yet. This status does not indicate index or Ollama readiness.");
     await user.click(screen.getByRole("button", { name: "Select report" }));
-    await screen.findByText("The runtime confirmed this report selection. Chroma and model readiness were not checked.");
+    await screen.findByText("Index selected. You can now ask your PDFs.");
 
     const bootstrapCall = fetcher.mock.calls.find(([url]) => String(url) === "/bootstrap-api/v1/bootstrap/index-inventory");
     expect(new Headers(bootstrapCall?.[1]?.headers).get("Authorization")).toBe("Bearer bootstrap-only-secret");

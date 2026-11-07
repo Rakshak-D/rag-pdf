@@ -134,12 +134,18 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     }
     setSelection(null);
     setSelectionError(null);
-    void client.getIndexSelection().then((value) => {
-      if (active) setSelection(value);
-    }).catch((error: unknown) => {
-      if (active) setSelectionError(messageFor(error));
-    });
-    return () => { active = false; };
+    let serial = 0;
+    const refresh = () => {
+      const request = ++serial;
+      void client.getIndexSelection().then((value) => {
+        if (active && request === serial) { setSelection(value); setSelectionError(null); }
+      }).catch((error: unknown) => {
+        if (active && request === serial) { setSelection(null); setSelectionError(messageFor(error)); }
+      });
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => { active = false; window.removeEventListener("focus", refresh); };
   }, [client, mode]);
 
   useEffect(() => {
@@ -303,8 +309,8 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
       {mode === "document" && !hasIndex ? <div className="chat-no-index" role={selectionError ? "alert" : "status"}>
         <div className="chat-no-index__mark" aria-hidden="true">▤</div>
         <div><strong>{selectionError ? "Index status is unavailable" : selection?.selection_status === "stale" ? "Your selected index is out of date" : "Choose an index to chat with documents"}</strong>
-          <p>{selectionError ?? (selection?.selection_status === "stale" ? "Review the source changes and select a compatible build." : "General Chat works without PDFs. Document Chat needs an explicitly selected, compatible index.")}</p>
-          <div className="chat-inline-links"><Link to="/documents">Open Documents</Link><Link to="/index-builds">Select an index</Link></div>
+          <p>{selectionError ?? (selection?.selection_status === "stale" ? "Your PDFs changed after this index was built. Prepare an index for the updated documents." : "You can draft a question now. Prepare your documents before sending.")}</p>
+          <div className="chat-inline-links"><Link to="/documents">Prepare documents</Link></div>
         </div>
       </div> : null}
 
@@ -312,7 +318,7 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
         {!messages.length ? <div className="chat-empty">
           <div className="chat-empty__glyph" aria-hidden="true"><span /><span /><span /></div>
           <h2>{mode === "general" ? "What would you like to explore?" : "Ask a question about your PDFs"}</h2>
-          <p>{mode === "general" ? "General Chat uses the configured local Ollama model. It does not read or cite your documents." : hasIndex ? "Answers use only evidence selected from your compatible index." : "Select an index to begin, or switch to General Chat."}</p>
+          <p>{mode === "general" ? "Chat with your local model." : hasIndex ? "Answers use only evidence selected from your compatible index." : "Select an index to begin, or switch to General Chat."}</p>
           {mode === "general" ? <p className="chat-model-status">{catalogError ?? (catalog?.availability === "unavailable" ? "Ollama is currently unavailable. You can still open Settings to inspect model availability." : modelResolution.status === "configured-default-unavailable" ? `Configured default ${catalog?.configured_model} is not installed. Select an installed model in Settings.` : modelResolution.status === "checking" ? "Checking installed models…" : generalModel ? `Using ${generalModel}.` : "Select an installed model in Settings to begin.")}</p> : null}
         </div> : messages.map((message) => <article className={`chat-message chat-message--${message.role}${message.error ? " chat-message--error" : ""}`} key={message.id}>
           <div className="chat-message__meta"><span className={`chat-avatar chat-avatar--${message.mode}`} aria-hidden="true">{message.role === "user" ? "Y" : "R"}</span><strong>{message.role === "user" ? "You" : "RAG-PDF"}</strong><span>{message.mode === "general" ? "General Chat" : "Document Chat"}</span></div>
@@ -331,9 +337,9 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
       <form className="chat-composer" onSubmit={(event) => void submit(event)}>
         <label className="sr-only" htmlFor="chat-question">Message</label>
         <textarea ref={textarea} id="chat-question" value={question} maxLength={4000} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleKeyDown}
-          placeholder={mode === "general" ? "Message your local model…" : "Ask about the selected documents…"} disabled={busy || (mode === "document" && !hasIndex)} rows={3} />
+          placeholder={mode === "general" ? "Message your local model…" : "Ask about the selected documents…"} disabled={busy} rows={3} />
         <div className="chat-composer__foot">
-          <span>{mode === "general" ? modelIsVerified ? `Local model · ${generalModel}` : catalog?.availability === "unavailable" ? "Ollama unavailable" : "Checking local model" : "Document answers are grounded in retrieved evidence"}</span>
+          <span>{mode === "general" ? modelIsVerified ? `Local model · ${generalModel}` : catalog?.availability === "unavailable" ? "Ollama unavailable" : "Checking local model" : "Answers from your PDFs"}</span>
           <div><small>{question.length}/4000</small><button type="submit" className="chat-send" disabled={!question.trim() || busy || (mode === "document" && !hasIndex)} aria-label="Send message"><span aria-hidden="true">↑</span></button></div>
         </div>
       </form>

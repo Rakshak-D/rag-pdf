@@ -17,6 +17,7 @@ interface Props {
   onDisconnect: () => void;
 }
 
+const LOCAL_GATEWAY = import.meta.env.VITE_RAG_LOCAL_GATEWAY === "true";
 const pageSize = 50;
 const filenamePattern = /^[A-Za-z0-9][A-Za-z0-9 _().-]{0,114}\.pdf$/;
 
@@ -52,7 +53,7 @@ function DocumentRow({ document }: { document: BootstrapDocumentRecord }) {
   return <tr>
     <th scope="row"><span className="document-file-mark" aria-hidden="true">PDF</span><span className="document-filename">{document.relative_path}</span></th>
     <td>{formatBytes(document.size_bytes)}</td>
-    <td><code className="document-hash" title={document.sha256}>{document.sha256.slice(0, 16)}…</code></td>
+    <td><details><summary>View details</summary><code className="document-hash" title={document.sha256}>{document.sha256}</code></details></td>
     <td><span className="document-source-state">Available for indexing</span></td>
   </tr>;
 }
@@ -208,14 +209,14 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
       actions={<Link className="button button--quiet" to="/index-builds">Advanced job details</Link>}
     />
 
-    <BootstrapConnectionPanel
+    <details open={!LOCAL_GATEWAY || !token || Boolean(connectionError)} className="documents-connection"><summary>Connection details</summary><BootstrapConnectionPanel
       connected={token !== null} checking={checking} busy={false} status={status} error={connectionError}
       onConnect={connect} onDisconnect={disconnect}
-    />
+    /></details>
 
     <section className="panel documents-import" aria-labelledby="documents-import-title">
       <div className="panel__heading"><div><span className="eyebrow">SOURCE INTAKE</span><h2 id="documents-import-title">Import a PDF</h2></div></div>
-      <p className="documents-copy">Files are stored in the trusted source configured for the bootstrap service. Importing does not build or activate an index.</p>
+      <p className="documents-copy">Import PDFs, then prepare an index below.</p>
       {maxUploadBytes !== null ? <p className="documents-limit">Maximum file size {formatBytes(maxUploadBytes)} ({maxUploadBytes.toLocaleString()} bytes) · maximum {inventory?.max_pages} pages · readable, unencrypted PDFs</p>
         : <p className="documents-limit">Connect to the bootstrap service to read its configured upload limit.</p>}
       <form className="documents-upload-form" onSubmit={(event) => { void submit(event); }}>
@@ -254,10 +255,10 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
         : loading && !inventory ? <p className="documents-empty" role="status">Loading source inventory…</p>
           : inventoryError ? <div className="documents-load-error" role="alert"><p>{inventoryError}</p><button className="button button--quiet" type="button" onClick={() => setRefreshVersion((value) => value + 1)}>Retry inventory</button></div>
             : inventory ? <>
-              <div className="documents-inventory-meta"><span>{inventory.total} {inventory.total === 1 ? "document" : "documents"} in the configured source</span><code title={inventory.manifest_hash}>Manifest {inventory.manifest_hash.slice(0, 16)}…</code></div>
+              <div className="documents-inventory-meta"><span>{inventory.total} {inventory.total === 1 ? "document" : "documents"} in the configured source</span><details><summary>Source identity</summary><code>{inventory.manifest_hash}</code></details></div>
               {inventory.documents.length === 0 ? <p className="documents-empty">No PDF documents are present in the trusted source yet.</p> : <>
                 <div className="documents-table-wrap"><table className="documents-table">
-                  <thead><tr><th scope="col">Document</th><th scope="col">Size</th><th scope="col">SHA-256</th><th scope="col">Source state</th></tr></thead>
+                  <thead><tr><th scope="col">Document</th><th scope="col">Size</th><th scope="col">Details</th><th scope="col">Source state</th></tr></thead>
                   <tbody>{inventory.documents.map((document) => <DocumentRow key={document.document_id} document={document} />)}</tbody>
                 </table></div>
                 <nav className="documents-pagination" aria-label="Document inventory pages">
@@ -267,7 +268,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
                 </nav>
               </>}
             </> : null}
-      <p className="documents-indexing-note">Source availability does not mean a document has been indexed or can be queried.</p>
+      <p className="documents-indexing-note">Importing adds a PDF to your collection. Build or select an index before asking questions.</p>
     </section>
 
     <DocumentsIndexWorkflow

@@ -119,8 +119,8 @@ describe("IndexSelectionPanel", () => {
     expect(screen.queryByText(otherBuildId)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Manage source documents" })).toHaveAttribute("href", "/documents");
     await user.click(screen.getByRole("button", { name: "Select report" }));
-    expect(await screen.findByText("The runtime confirmed this report selection. Chroma and model readiness were not checked.")).toBeInTheDocument();
-    expect(screen.getByText("Selection is not readiness.")).toBeInTheDocument();
+    expect(await screen.findByText("Index selected. You can now ask your PDFs.")).toBeInTheDocument();
+    expect(screen.getByText("About index checks")).toBeInTheDocument();
     const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
     expect(posts).toHaveLength(1);
     expect(JSON.parse(String(posts[0]?.[1]?.body))).toMatchObject({
@@ -157,10 +157,10 @@ describe("IndexSelectionPanel", () => {
   it("does not expose stale candidates as ready and shows the persisted identity", async () => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(json(state("stale", 2))));
     mount("ordinary-test-token");
-    expect(await screen.findByText(/saved report no longer matches the current source or report identity/)).toBeInTheDocument();
+    expect(await screen.findByText(/Your PDFs or build settings changed/)).toBeInTheDocument();
     expect(screen.getAllByText(buildId).length).toBeGreaterThan(1);
     expect(screen.queryByText(/Ready to query/i)).not.toBeInTheDocument();
-    expect(screen.getByText("The saved selection is stale or incompatible.")).toBeInTheDocument();
+    expect(screen.getByText("Documents changed.")).toBeInTheDocument();
   });
 
   it("does not offer a candidate when the preview and inventory source identities differ", async () => {
@@ -169,7 +169,7 @@ describe("IndexSelectionPanel", () => {
     mount("ordinary-test-token", mismatchedInventory);
     await screen.findByText("No index is selected.");
     expect(screen.queryByRole("button", { name: "Select report" })).not.toBeInTheDocument();
-    expect(screen.getByText(/No compatible report is available/)).toBeInTheDocument();
+    expect(screen.getByText(/No matching completed index/)).toBeInTheDocument();
   });
 
   it("prevents duplicate selection submissions while a request is pending", async () => {
@@ -187,7 +187,7 @@ describe("IndexSelectionPanel", () => {
     fireEvent.click(button);
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
     resolvePost(json(state("selected", 1)));
-    await waitFor(() => expect(screen.getByText("The runtime confirmed this report selection. Chroma and model readiness were not checked.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Index selected. You can now ask your PDFs.")).toBeInTheDocument());
   });
 
   it("keeps selection errors visible and does not persist the token", async () => {

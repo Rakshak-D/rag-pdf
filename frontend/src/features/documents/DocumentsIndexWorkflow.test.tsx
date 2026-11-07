@@ -64,7 +64,7 @@ describe("DocumentsIndexWorkflow", () => {
     await user.click(screen.getByRole("button", { name: "Preview index" }));
     expect(await screen.findByText("A fresh build can be submitted")).toBeInTheDocument();
     expect(screen.getByText("2", { selector: "dd" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Find existing indexes" }));
+    await waitFor(() => expect(fetcher.mock.calls.some(([url]) => String(url) === "/bootstrap-api/v1/bootstrap/index-inventory")).toBe(true));
     expect(await screen.findByText("No build reports were found for this source and configuration.")).toBeInTheDocument();
     const buildButton = screen.getByRole("button", { name: "Start index build" });
     expect(buildButton).toBeDisabled();
@@ -138,4 +138,27 @@ describe("DocumentsIndexWorkflow", () => {
     /></MemoryRouter>);
     await waitFor(() => expect(screen.queryByText("A fresh build can be submitted")).not.toBeInTheDocument());
   });
+  it("resumes a running job after navigation and automatically checks completed reports", async () => {
+    let previewCalls = 0;
+    let inventoryCalls = 0;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const path = String(input);
+      if (path.endsWith("/configuration")) return json({ schema_version: "1", configuration_source: "trusted_server_defaults", resolved_config: config() });
+      if (path.includes("/jobs?")) return json({ jobs: [{ ...queuedJob, status: "running" }], limit: 25, offset: 0 });
+      if (path.endsWith(`/jobs/${jobId}`)) return json({ job: { ...queuedJob, status: "succeeded", build_id: "d".repeat(32), report_reference: `build-artifacts/${"d".repeat(32)}/build-report.json`, text_records: 2, image_records: 0, partial_persistence: false } });
+      if (path.endsWith("/preview")) { previewCalls++; return json({ ...preview, existing_index: true, fresh_build_eligible: false, reason_code: "index_already_exists" }); }
+      if (path.endsWith("/index-inventory")) { inventoryCalls++; return json({ expected_index_fingerprint: fingerprint, document_manifest_hash: manifest, candidates: [], total_candidates: 0, offset: 0, limit: 25, complete: true, reason_code: "inventory_complete", check_level: "report", store_checked: false }); }
+      return json({ error: { code: "unexpected_route" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    mount();
+    expect(await screen.findByLabelText("Build status running")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Build status succeeded")).toBeInTheDocument(), { timeout: 4000 });
+    await waitFor(() => expect(inventoryCalls).toBe(1));
+    expect(previewCalls).toBe(1);
+    expect(screen.getByText("No usable completed build found.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start index build" })).not.toBeInTheDocument();
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST" && String(init.body).includes("client_request_id"))).toBe(false);
+  });
+
 });

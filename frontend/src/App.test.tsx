@@ -154,11 +154,30 @@ describe("chat-first local application", () => {
     mount();
     await user.click(screen.getByRole("button", { name: "Documents", pressed: false }));
     expect(await screen.findByText("Choose an index to chat with documents")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open Documents" })).toHaveAttribute("href", "/documents");
-    expect(screen.getByRole("link", { name: "Select an index" })).toHaveAttribute("href", "/index-builds");
-    expect(screen.getByRole("textbox", { name: "Message" })).toBeDisabled();
-    await user.click(screen.getByRole("link", { name: "Open Documents" }));
+    expect(screen.getByRole("link", { name: "Prepare documents" })).toHaveAttribute("href", "/documents");
+    expect(screen.getByRole("textbox", { name: "Message" })).toBeEnabled();
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "Draft before indexing");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Draft before indexing");
+    await user.click(screen.getByRole("link", { name: "Prepare documents" }));
     expect(await screen.findByRole("heading", { name: "Documents" })).toBeInTheDocument();
+  });
+
+  it("refreshes selection on window focus without discarding a drafted document question", async () => {
+    let current: typeof unselected | typeof selected = unselected;
+    const fallback = defaultFetch();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation((input, init) => String(input) === "/api/v1/index/selection" ? Promise.resolve(jsonResponse(current)) : fallback(input, init)));
+    const user = userEvent.setup(); mount();
+    await user.click(screen.getByRole("button", { name: "Documents", pressed: false }));
+    await screen.findByText("Choose an index to chat with documents");
+    const composer = screen.getByRole("textbox", { name: "Message" });
+    await user.type(composer, "Keep this draft");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    current = selected;
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled());
+    expect(composer).toHaveValue("Keep this draft");
   });
 
   it("shows a truthful Ollama-unavailable error and does not fabricate an answer", async () => {

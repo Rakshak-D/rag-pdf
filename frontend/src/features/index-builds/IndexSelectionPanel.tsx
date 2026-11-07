@@ -61,7 +61,7 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
     }
     void refresh();
     return () => { requestSerial.current += 1; };
-  }, [token, refresh]);
+  }, [token, refresh, preview?.manifest_hash]);
 
   const candidates = inventoryPage?.complete && preview && resolvedConfig &&
     inventoryPage.document_manifest_hash === preview.manifest_hash &&
@@ -101,7 +101,7 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
         setSelection(readback);
         onSelectionReadback?.(readback);
         if (matches(readback)) {
-          setMessage("The runtime confirmed this report selection. Chroma and model readiness were not checked.");
+          setMessage("Index selected. You can now ask your PDFs.");
         } else {
           setError("The selection response succeeded, but readback did not confirm this report. Refresh selection before proceeding.");
         }
@@ -137,15 +137,15 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
     selection.selection.index_fingerprint === preview.index_fingerprint);
 
   const statusText = !token ? "Connect to the ordinary runtime to inspect or change its active report." :
-    loading ? "Reading the runtime selection…" : selection?.selection_status === "selected" ? "A report identity is selected." :
-      selection?.selection_status === "stale" ? "The saved selection is stale or incompatible." :
+    loading ? "Reading the runtime selection…" : selection?.selection_status === "selected" ? "Index selected." :
+      selection?.selection_status === "stale" ? "Documents changed." :
         selection?.selection_status === "invalid" ? "The saved selection record is invalid." :
           selection?.selection_status === "legacy_configured" ? "A legacy report path is configured; it is not a durable UI selection." :
             "No index is selected.";
 
   return <section className="panel index-selection" aria-labelledby="index-selection-title">
     <div className="bootstrap-detail-heading">
-      <div><span className="eyebrow">ORDINARY RUNTIME · EXPLICIT CHOICE</span><h2 id="index-selection-title">Active index selection</h2></div>
+      <div><span className="eyebrow">DOCUMENT CHAT</span><h2 id="index-selection-title">Selected index</h2></div>
       <button className="button button--quiet" type="button" onClick={() => void refresh()} disabled={!token || loading || selecting !== null}>
         {loading ? "Refreshing…" : "Refresh selection"}
       </button>
@@ -174,7 +174,7 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
       <div className="index-selection__wide"><dt>Run fingerprint</dt><dd><code>{selection.selection.run_fingerprint}</code></dd></div>
       <div><dt>Selection revision</dt><dd>{selection.selection.selection_revision}</dd></div>
     </dl> : null}
-    {selection?.selection_status === "stale" ? <p className="result-error" role="alert">The saved report no longer matches the current source or report identity ({selection.reason_code}). Preview the source again and inspect compatible reports before selecting another.</p> : null}
+    {selection?.selection_status === "stale" ? <p className="result-error" role="alert">Your PDFs or build settings changed. Preview the current documents and select a matching index.</p> : null}
     {selection?.selection_status === "invalid" ? <p className="result-error" role="alert">The saved selection is invalid ({selection.reason_code}). It was not replaced automatically. Runtime state needs operator review.</p> : null}
     {selection?.selection_status === "legacy_configured" ? <p className="index-selection__hint">Legacy report: <code>{selection.legacy_report_reference}</code>. The runtime validates this setting for execution. Selecting a report here records a durable explicit choice.</p> : null}
     {token && preview && inventoryPage ? <div className="index-selection__choices">
@@ -191,8 +191,8 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
               {selecting === candidate.build_id ? "Confirming…" : isSelected ? "Selected" : compact ? "Use this index" : "Select report"}
             </button>
           </div>;
-        }) : <p className="muted">No compatible report is available on this complete inventory page. Inspect another page or build an index explicitly.</p>}
-      <p className="index-selection__note"><strong>Selection is not readiness.</strong> This records a report-level identity only; the runtime has not opened Chroma, checked collections, or loaded models.</p>
+        }) : <p className="muted">No matching completed index on this page.</p>}
+      <details className="index-selection__note"><summary>About index checks</summary><p>Selection verifies the report identity. Retrieval and model availability are checked when you ask a question.</p></details>
     </div> : token && (!preview || !inventoryPage) ? <p className="index-selection__hint">Preview the current configuration and inspect the report inventory to choose a compatible build.</p> : null}
     {!compact ? <div className="index-selection__links"><Link to="/documents">Manage source documents</Link><span>Question answering is a separate next workflow.</span></div> : null}
   </section>;

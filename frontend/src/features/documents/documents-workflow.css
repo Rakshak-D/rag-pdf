@@ -179,3 +179,12 @@
 @media (prefers-reduced-motion: reduce) {
   .documents-workflow *, .documents-workflow *::before, .documents-workflow *::after { scroll-behavior: auto; transition-duration: .01ms; }
 }
+
+/* Keep operational detail secondary to import, preparation and selection. */
+.documents-connection { color: var(--muted); font-size: 12px; }
+.documents-connection > summary { cursor: pointer; padding: 8px 0; }
+.documents-connection .panel { margin-top: 8px; }
+.documents-page details code { overflow-wrap: anywhere; word-break: break-all; }
+.documents-workflow__section { box-shadow: none; }
+.documents-workflow .index-selection { box-shadow: none; border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 18px 0 0; }
+.documents-workflow__note, .documents-workflow__hint { line-height: 1.5; }

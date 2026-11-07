@@ -51,13 +51,13 @@ function JobStatus({ job }: { job: BootstrapJobRecord }) {
   return <div role="group" className={`documents-job documents-job--${job.status}`} aria-label={`Build status ${job.status}`}>
     <div className="documents-job__top"><span className="documents-job__state">{job.status}</span><code>{job.job_id}</code></div>
     <p>{readableStatus(job)}</p>
-    <dl>
+    <details><summary>View build details</summary><dl>
       <div><dt>Created</dt><dd>{job.created_at}</dd></div>
       {job.build_id ? <div><dt>Build ID</dt><dd><code>{job.build_id}</code></dd></div> : null}
       {job.text_records !== null ? <div><dt>Text records</dt><dd>{job.text_records}</dd></div> : null}
       {job.image_records !== null ? <div><dt>Image records</dt><dd>{job.image_records}</dd></div> : null}
       {job.partial_persistence !== null ? <div><dt>Partial persistence</dt><dd>{job.partial_persistence ? "Yes" : "No"}</dd></div> : null}
-    </dl>
+    </dl></details>
     <Link to={`/index-builds/${job.job_id}`}>View build details</Link>
   </div>;
 }
@@ -91,6 +91,7 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
   const submitLock = useRef(false);
   const mounted = useRef(true);
   const currentManifest = useRef(sourceManifestHash);
+  const refreshedCompletedJob = useRef<string | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -126,7 +127,7 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
       .finally(() => { if (active) setConfigurationLoading(false); });
     setHistoryLoading(true);
     void new BootstrapApiClient({ token }).listJobs({ limit: JOB_PAGE_SIZE, offset: 0 })
-      .then((value) => { if (active) setHistory(value.jobs); })
+      .then((value) => { if (active) { setHistory(value.jobs); setActiveJob(value.jobs.find((job) => !terminal.has(job.status)) ?? null); } })
       .catch((error: unknown) => { if (active) setHistoryError(apiErrorText(error)); })
       .finally(() => { if (active) setHistoryLoading(false); });
     return () => { active = false; controller.abort(); };
@@ -160,13 +161,23 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
     setHistoryLoading(true); setHistoryError(null);
     try {
       const result = await client.listJobs({ limit: JOB_PAGE_SIZE, offset: 0 });
-      if (mounted.current && historySerial.current === serial) setHistory(result.jobs);
+      if (mounted.current && historySerial.current === serial) {
+        setHistory(result.jobs);
+        setActiveJob((current) => result.jobs.find((job) => job.job_id === current?.job_id) ?? result.jobs.find((job) => !terminal.has(job.status)) ?? current);
+      }
     } catch (error) {
       if (mounted.current && historySerial.current === serial) setHistoryError(apiErrorText(error));
     } finally {
       if (mounted.current && historySerial.current === serial) setHistoryLoading(false);
     }
   }, [client]);
+
+  useEffect(() => {
+    if (activeJob?.status === "succeeded" && refreshedCompletedJob.current !== activeJob.job_id) {
+      refreshedCompletedJob.current = activeJob.job_id;
+      void createPreview();
+    }
+  }, [activeJob?.job_id, activeJob?.status]);
 
   async function createPreview() {
     if (!client || !config || !sourceManifestHash || !sourceCount) return;
@@ -219,6 +230,10 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
       if (mounted.current && inventorySerial.current === serial) setInventoryLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (preview && client && config) void inspectReports(0);
+  }, [preview, client, config]);
 
   async function submitBuild() {
     if (!client || !token || !config || !preview?.fresh_build_eligible || !acknowledged || !status?.accepting_jobs || submitLock.current || submitting || uncertainRequestId) return;
@@ -296,11 +311,11 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
         <div><span className="documents-workflow__eyebrow">NEXT · PREPARE AN INDEX</span><h2 id="prepare-index-title">Make your PDFs searchable</h2></div>
         {token ? <span className="documents-workflow__connection">Build setup available</span> : null}
       </div>
-      <p className="documents-workflow__copy">The server checks the current source and its configured retrieval models. Previewing does not build or open an index.</p>
+      <p className="documents-workflow__copy">Check your PDFs, then build or select an index.</p>
       {!token ? <p className="documents-workflow__empty">Connect to the bootstrap service above to prepare a build.</p> : null}
       {configurationLoading ? <p role="status">Loading the trusted server configuration…</p> : null}
       {configurationError ? <div className="documents-workflow__error" role="alert"><p>{configurationError}</p><button className="button button--quiet" type="button" onClick={() => { setConfigurationError(null); setConfigurationLoading(true); void getTrustedBootstrapConfiguration(token).then((value) => setConfig(value.resolved_config)).catch((error: unknown) => setConfigurationError(apiErrorText(error))).finally(() => setConfigurationLoading(false)); }}>Retry configuration</button></div> : null}
-      {config && token ? <div className="documents-workflow__config-state"><span aria-hidden="true">✓</span><div><strong>Using the trusted server configuration</strong><small>Model identities and retrieval settings come from the backend. No configuration JSON is needed.</small></div></div> : null}
+      {config && token ? <div className="documents-workflow__config-state"><span aria-hidden="true">✓</span><div><strong>Using the trusted server configuration</strong><small>Default build settings</small></div></div> : null}
       <div className="documents-workflow__actions">
         <button className="button button--primary" type="button" onClick={() => void createPreview()} disabled={!token || !config || !sourceManifestHash || !sourceCount || previewLoading || configurationLoading}>
           {previewLoading ? "Checking source…" : "Preview index"}
@@ -312,10 +327,9 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
         <dl className="documents-workflow__facts" aria-label="Index preview results">
           <div><dt>Source documents</dt><dd>{preview.document_count}</dd></div>
           <div><dt>Build decision</dt><dd>{preview.fresh_build_eligible ? "A fresh build can be submitted" : preview.existing_index ? "An index already exists" : "Not eligible"}</dd></div>
-          <div><dt>Existing fingerprint-owned data</dt><dd>{preview.existing_index ? "Yes · preserved" : "No"}</dd></div>
         </dl>
-        <p className="documents-workflow__note">This is a point-in-time report preview. It does not reserve storage or confirm that Chroma can be opened.</p>
-        {preview.existing_index ? <p className="documents-workflow__warning" role="status">An index already exists for this configuration. This workflow will not reset, repair or overwrite it. Inspect compatible reports below.</p> : null}
+        <p className="documents-workflow__note">No build starts until you confirm.</p>
+        {preview.existing_index && !inventoryPage ? <p className="documents-workflow__warning" role="status">Index files found. Select a matching completed build below.</p> : null}
         <div className="documents-workflow__actions">
           <button className="button button--quiet" type="button" onClick={() => void inspectReports(0)} disabled={inventoryLoading || !config}>
             {inventoryLoading ? "Inspecting reports…" : inventoryPage ? "Refresh compatible reports" : "Find existing indexes"}
@@ -324,11 +338,12 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
         {inventoryError ? <p className="documents-workflow__error" role="alert">{inventoryError}</p> : null}
         {inventoryPage ? <div className="documents-workflow__reports">
           {!inventoryPage.complete ? <p role="alert">The report scan is incomplete ({inventoryPage.reason_code}). No index can be selected from this scan.</p> :
-            inventoryPage.candidates.length ? <p role="status">{inventoryPage.total_candidates ?? "Some"} report candidates inspected. Only reports matching this source and configuration can be selected.</p> :
+            inventoryPage.candidates.length ? <p role="status">{inventoryPage.candidates.filter((item) => item.compatibility === "report_match").length} compatible indexes on this page.</p> :
               <p role="status">No build reports were found for this source and configuration.</p>}
-          {inventoryPage.candidates.filter((item) => item.compatibility !== "report_match").length ? <p className="documents-workflow__hint">Other reports were found but do not match the current source or configuration; they cannot be selected here.</p> : null}
+          {inventoryPage.candidates.filter((item) => item.compatibility !== "report_match").length ? <p className="documents-workflow__hint">Older builds do not cover the current PDFs or settings.</p> : null}
           {hasNextReportPage ? <button className="button button--quiet" type="button" onClick={() => void inspectReports(inventoryOffset + INVENTORY_PAGE_SIZE)} disabled={inventoryLoading}>Next report page</button> : null}
         </div> : null}
+        {preview.existing_index && inventoryOffset === 0 && inventoryPage?.complete && !hasNextReportPage && !inventoryPage.candidates.some((item) => item.compatibility === "report_match") ? <div role="alert" className="documents-workflow__warning"><strong>No usable completed build found.</strong><p>Existing files are preserved. Review failed builds below. To retry an incomplete build, use a separate source and index workspace; do not delete the existing files.</p><Link to="/index-builds">Review build configuration and history</Link><details><summary>View report checks</summary>{inventoryPage.candidates.map((item) => <p key={item.candidate_id}>{item.build_id}: {item.reason_code}</p>)}</details></div> : null}
         <IndexSelectionPanel token={selectionToken} preview={preview} resolvedConfig={config} inventoryPage={inventoryPage} onSelectionReadback={setSelection} compact />
       </> : null}
       {!LOCAL_GATEWAY && token ? <p className="documents-workflow__hint">In direct development mode, report selection uses the separate ordinary-runtime connection on <Link to="/index-builds">advanced Index Builds</Link>. The bootstrap credential is never sent to the ordinary runtime.</p> : null}
@@ -362,14 +377,14 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
       {actionError ? <p className="documents-workflow__error" role="alert">{actionError}</p> : null}
       {token ? history.length ? <ul className="documents-workflow__history" aria-label="Recent index jobs">{history.map((job) => <li key={job.job_id}>
         <Link to={`/index-builds/${job.job_id}`}><span>{job.status}</span><code>{job.job_id}</code></Link>
-      </li>)}</ul> : !historyLoading ? <p className="documents-workflow__empty">No build jobs are recorded yet.</p> : null : <p className="documents-workflow__empty">Connect to bootstrap to inspect build activity.</p>}
+      </li>)}</ul> : !historyLoading ? <p className="documents-workflow__empty">No builds recorded in this app workspace. Completed indexes may still be available above.</p> : null : <p className="documents-workflow__empty">Connect to bootstrap to inspect build activity.</p>}
       <p className="documents-workflow__hint">Builds are explicit and fresh-only. Failed or interrupted data is preserved for review, not repaired automatically.</p>
     </section>
 
-    <section className="documents-workflow__section documents-workflow__use" aria-labelledby="use-documents-title">
-      <div><span className="documents-workflow__eyebrow">USE DOCUMENTS</span><h2 id="use-documents-title">Choose when a report is compatible</h2></div>
-      {currentSelection ? <div className="documents-workflow__selected" role="status"><strong>A report selection matches the current PDF manifest.</strong><span>Report identity is verified; Chroma and model readiness have not been checked.</span><Link className="button button--primary" to="/?mode=document">Ask documents</Link></div> : <p className="documents-workflow__copy">An index is not activated automatically. Select a compatible completed report after previewing this source. General Chat remains available without an index.</p>}
+    {currentSelection ? <section className="documents-workflow__section documents-workflow__use" aria-labelledby="use-documents-title">
+      <div><span className="documents-workflow__eyebrow">USE DOCUMENTS</span><h2 id="use-documents-title">Ask your PDFs</h2></div>
+      {currentSelection ? <div className="documents-workflow__selected" role="status"><strong>Index selected.</strong><span>Your next question will check retrieval and model availability.</span><Link className="button button--primary" to="/?mode=document">Ask documents</Link></div> : <p className="documents-workflow__copy">Select a completed index above to start Document Chat.</p>}
       {sourceManifestHash && preview && preview.manifest_hash !== sourceManifestHash ? <p className="documents-workflow__warning" role="alert">The source manifest changed. Preview and report compatibility were cleared.</p> : null}
-    </section>
+    </section> : null}
   </div>;
 }
