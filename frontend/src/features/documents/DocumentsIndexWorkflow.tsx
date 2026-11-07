@@ -13,6 +13,8 @@ import { IndexSelectionPanel } from "../index-builds/IndexSelectionPanel";
 import { getTrustedBootstrapConfiguration } from "./documentsApi";
 
 interface Props {
+  sourceError?: boolean;
+  sourceChecking?: boolean;
   visible?: boolean;
   token: string | null;
   status: BootstrapStatusResponse | null;
@@ -63,7 +65,7 @@ function JobStatus({ job }: { job: BootstrapJobRecord }) {
   </div>;
 }
 
-export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sourceCount, onRefreshDocuments, visible = true }: Props) {
+export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sourceCount, onRefreshDocuments, visible = true, sourceError = false, sourceChecking = false }: Props) {
   const client = useMemo(() => token ? new BootstrapApiClient({ token }) : null, [token]);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [configurationLoading, setConfigurationLoading] = useState(false);
@@ -210,13 +212,21 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
     const serial = ++inventorySerial.current;
     setInventoryOffset(offset); setInventoryPage(null); setInventoryError(null); setInventoryLoading(true);
     try {
-      const result = await client.inspectIndexInventory({
+      let result = await client.inspectIndexInventory({
         resolved_config: config,
         expected_manifest_hash: preview.manifest_hash,
         limit: INVENTORY_PAGE_SIZE,
         offset,
       }, preview.index_fingerprint);
+      while (result.complete && !result.candidates.some(candidate => candidate.compatibility === "report_match") && result.total_candidates !== null && result.offset + result.candidates.length < result.total_candidates) {
+        const next = result.offset + INVENTORY_PAGE_SIZE;
+        if (!mounted.current || inventorySerial.current !== serial) return;
+        if (next > 512) throw new Error("Report inspection reached its safety limit. Review the advanced build workspace.");
+        if (result.document_manifest_hash !== sourceManifestHash || result.expected_index_fingerprint !== preview.index_fingerprint) break;
+        result = await client.inspectIndexInventory({ resolved_config: config, expected_manifest_hash: preview.manifest_hash, limit: INVENTORY_PAGE_SIZE, offset: next }, preview.index_fingerprint);
+      }
       if (!mounted.current || inventorySerial.current !== serial) return;
+      setInventoryOffset(result.offset);
       if (result.document_manifest_hash !== sourceManifestHash || result.expected_index_fingerprint !== preview.index_fingerprint) {
         setPreview(null); setAcknowledged(false);
         setInventoryError("The source or configuration identity changed during report inspection. Preview again before continuing.");
@@ -241,7 +251,7 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
   }, [preview, client, config]);
 
   async function submitBuild() {
-    if (!client || !token || !config || !preview?.fresh_build_eligible || !acknowledged || !status?.accepting_jobs || submitLock.current || submitting || uncertainRequestId) return;
+    if (sourceChecking || sourceError || !client || !token || !config || !preview?.fresh_build_eligible || !acknowledged || !status?.accepting_jobs || submitLock.current || submitting || uncertainRequestId) return;
     submitLock.current = true;
     setSubmitting(true); setActionError(null);
     let id: string;
@@ -287,7 +297,7 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
         const found = result.jobs.find((item) => item.client_request_id === uncertainRequestId);
         if (found) {
           setActiveJob(found); setHistory((items) => [found, ...items.filter((item) => item.job_id !== found.job_id)].slice(0, JOB_PAGE_SIZE));
-          setUncertainState("found");
+          setUncertainState("found"); setUncertainRequestId(null); setAcknowledged(false);
           return;
         }
         if (result.jobs.length < pageSize) { setUncertainState("not_found"); return; }
@@ -310,91 +320,52 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
   const hasNextReportPage = Boolean(inventoryPage && inventoryPage.total_candidates !== null && inventoryPage.offset + inventoryPage.candidates.length < inventoryPage.total_candidates);
   const selectionToken = LOCAL_GATEWAY ? token : null;
 
-  return <div role="region" className="documents-workflow" aria-label="Prepare and use a document index">
-    <p className="documents-next-step" role="status" aria-label="Document preparation">{sourceCount ? `${sourceCount} ${sourceCount === 1 ? "PDF" : "PDFs"} uploaded. ` : ""}{!sourceCount ? "Add a PDF to begin." : activeJob && ["running", "queued"].includes(activeJob.status) ? "Indexing your PDFs. You can leave this page and return later." : activeJob && ["failed", "interrupted"].includes(activeJob.status) ? "Indexing stopped. Open Build activity for details." : currentSelection ? "Index selected. Ask your PDFs below." : preview?.fresh_build_eligible ? "Your PDFs need an index. Confirm the build below when you are ready." : inventoryPage?.candidates.some(c => c.compatibility === "report_match") ? "A completed index matches your PDFs. Choose Use this index below." : preview?.existing_index && (!inventoryPage || inventoryLoading) ? "Checking existing indexes..." : preview?.existing_index ? "Existing index files need review. See the report checks below." : "Checking your PDF collection…"}</p>
-    <section className="documents-workflow__section" aria-labelledby="prepare-index-title">
-      <div className="documents-workflow__heading">
-        <div><h2 id="prepare-index-title">Prepare for chat</h2></div>
-        {token ? <span className="documents-workflow__connection">Build setup available</span> : null}
-      </div>
-      <p className="documents-workflow__copy">One index covers the whole PDF collection. Adding a PDF requires an updated index.</p>
-      {!token ? <p className="documents-workflow__empty">Connect to the bootstrap service above to prepare a build.</p> : null}
-      {configurationLoading ? <p role="status">Loading the trusted server configuration…</p> : null}
-      {configurationError ? <div className="documents-workflow__error" role="alert"><p>{configurationError}</p><button className="button button--quiet" type="button" onClick={() => { setConfigurationError(null); setConfigurationLoading(true); void getTrustedBootstrapConfiguration(token).then((value) => setConfig(value.resolved_config)).catch((error: unknown) => setConfigurationError(apiErrorText(error))).finally(() => setConfigurationLoading(false)); }}>Retry configuration</button></div> : null}
-      {config && token ? <details className="documents-workflow__config-state"><summary>Build settings</summary><div><span aria-hidden="true">✓</span><div><strong>Using the trusted server configuration</strong><small>Default build settings</small></div></div></details> : null}
-      <div className="documents-workflow__actions">
-        <button className="button button--primary" type="button" onClick={() => void createPreview()} disabled={!token || !config || !sourceManifestHash || !sourceCount || previewLoading || configurationLoading}>
-          {previewLoading ? "Checking source…" : "Check documents"}
-        </button>
-        {!sourceCount && token ? <span className="documents-workflow__hint">Import at least one PDF before previewing.</span> : null}
-      </div>
-      {previewError ? <p className="documents-workflow__error" role="alert">{previewError}</p> : null}
-      {preview ? <>
-        <details><summary>View preparation details</summary><dl className="documents-workflow__facts" aria-label="Index preview results">
-          <div><dt>Source documents</dt><dd>{preview.document_count}</dd></div>
-          <div><dt>Build decision</dt><dd>{preview.fresh_build_eligible ? "A fresh build can be submitted" : preview.existing_index ? "An index already exists" : "Not eligible"}</dd></div>
-        </dl></details>
-        <p className="documents-workflow__note">No build starts until you confirm.</p>
-        {preview.existing_index && !inventoryPage ? <p className="documents-workflow__warning" role="status">Index files found. Select a matching completed build below.</p> : null}
-      {token && preview?.fresh_build_eligible ? <div className="documents-workflow__build-confirm">
-        <p>Starting a build uses the configured models and may take time. It creates new fingerprint-owned index data only; no existing index is modified.</p>
-        <label><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} disabled={!preview.fresh_build_eligible || !status?.accepting_jobs || submitting} /> I reviewed the preview and want to submit one fresh build for this source.</label>
-        <button className="button button--primary" type="button" onClick={() => void submitBuild()} disabled={!acknowledged || !status?.accepting_jobs || submitting || Boolean(uncertainRequestId)}>
-          {submitting ? "Submitting build…" : "Start index build"}
-        </button>
-        {status && !status.accepting_jobs ? <p role="status">The bootstrap worker is not accepting jobs right now.</p> : null}
-      </div> : null}
-        <details open={!preview.fresh_build_eligible} className="documents-existing-indexes"><summary>Existing indexes</summary>
-        <div className="documents-workflow__actions">
-          <button className="button button--quiet" type="button" onClick={() => void inspectReports(0)} disabled={inventoryLoading || !config}>
-            {inventoryLoading ? "Inspecting reports…" : inventoryPage ? "Refresh compatible reports" : "Find existing indexes"}
-          </button>
-        </div>
-        {inventoryError ? <p className="documents-workflow__error" role="alert">{inventoryError}</p> : null}
-        {inventoryPage ? <div className="documents-workflow__reports">
-          {!inventoryPage.complete ? <p role="alert">The report scan is incomplete ({inventoryPage.reason_code}). No index can be selected from this scan.</p> :
-            inventoryPage.candidates.length ? <p role="status">{inventoryPage.candidates.filter((item) => item.compatibility === "report_match").length} compatible indexes on this page.</p> :
-              <p role="status">No build reports were found for this source and configuration.</p>}
-          {inventoryPage.candidates.filter((item) => item.compatibility !== "report_match").length ? <p className="documents-workflow__hint">Older builds do not cover the current PDFs or settings.</p> : null}
-          {hasNextReportPage ? <button className="button button--quiet" type="button" onClick={() => void inspectReports(inventoryOffset + INVENTORY_PAGE_SIZE)} disabled={inventoryLoading}>Next report page</button> : null}
-        </div> : null}
-        {preview.existing_index && inventoryOffset === 0 && inventoryPage?.complete && !hasNextReportPage && !inventoryPage.candidates.some((item) => item.compatibility === "report_match") ? <div role="alert" className="documents-workflow__warning"><strong>No matching completed index found.</strong><p>Existing files are preserved. Review failed builds below. To retry an incomplete build, use a separate source and index workspace; do not delete the existing files.</p><Link to="/index-builds">Review build configuration and history</Link><details><summary>View report checks</summary>{inventoryPage.candidates.map((item) => <p key={item.candidate_id}>{item.build_id}: {item.reason_code}</p>)}</details></div> : null}
-        <IndexSelectionPanel token={selectionToken} preview={preview} resolvedConfig={config} inventoryPage={inventoryPage} onSelectionReadback={setSelection} compact />
-        </details>
-      </> : null}
-      {!LOCAL_GATEWAY && token ? <p className="documents-workflow__hint">In direct development mode, report selection uses the separate ordinary-runtime connection on <Link to="/index-builds">advanced Index Builds</Link>. The bootstrap credential is never sent to the ordinary runtime.</p> : null}
-    </section>
+  const matchingReports = inventoryPage?.complete && inventoryPage.document_manifest_hash === sourceManifestHash && inventoryPage.expected_index_fingerprint === preview?.index_fingerprint && inventoryPage.candidates.some(candidate => candidate.compatibility === "report_match");
+  const belongsToCollection = (job: BootstrapJobRecord) => job.manifest_hash === sourceManifestHash && (!preview || job.index_fingerprint === preview.index_fingerprint);
+  const currentJob = activeJob && belongsToCollection(activeJob) ? activeJob : history.find(belongsToCollection) ?? null;
+  const preparing = currentJob && ["queued", "running"].includes(currentJob.status);
+  const failed = currentJob && ["failed", "interrupted"].includes(currentJob.status);
+  const stage = !token ? "offline" : sourceError ? "unavailable" : sourceCount === null || sourceChecking ? "checking" : sourceCount === 0 ? "empty" : uncertainRequestId ? "uncertain" : currentSelection ? "selected" : preparing ? "building" : configurationError || previewError || inventoryError || inventoryPage?.complete === false ? "unavailable" : previewLoading || configurationLoading || inventoryLoading || !preview ? "checking" : matchingReports ? "reusable" : failed ? "failed" : preview.fresh_build_eligible ? "needed" : "blocked";
+  const heading = { offline: "Connect your workspace", unavailable: "Unable to check documents", checking: "Checking your collection", empty: "Your first PDF awaits", uncertain: "Confirm the last request", selected: "Ready to ask", building: "Preparing your documents", reusable: "Use your prepared collection", failed: "Preparation stopped", needed: "Prepare your documents", blocked: "Preparation needs review" }[stage];
 
-    <details open={Boolean(activeJob || uncertainRequestId || actionError || historyError)} className="documents-workflow__activity"><summary>Build activity</summary>
-    <section className="documents-workflow__section" aria-labelledby="build-status-title">
-      <div className="documents-workflow__heading"><div><h2 id="build-status-title">Index activity</h2></div>
-        <button className="button button--quiet" type="button" onClick={() => void refreshHistory()} disabled={!token || historyLoading}>{historyLoading ? "Refreshing…" : "Refresh jobs"}</button>
-      </div>
-      {historyError ? <p className="documents-workflow__error" role="alert">{historyError}</p> : null}
-      {activeJob ? <JobStatus job={activeJob} /> : null}
-      {uncertainRequestId ? <div className="documents-workflow__warning" role="group" aria-labelledby="uncertain-build-title">
-        <h3 id="uncertain-build-title">Build submission needs confirmation</h3>
-        <p>The response was interrupted. The server may have accepted the request. No retry was sent.</p>
-        <button className="button button--quiet" type="button" onClick={() => void findUncertainJob()} disabled={uncertainState === "searching" || !token}>
-          {uncertainState === "searching" ? "Checking job history…" : "Check whether the build was accepted"}
-        </button>
+  return <aside className={`documents-workflow documents-workflow--${stage}`} aria-label="Prepare and use a document index" aria-busy={stage === "checking"}>
+    <div className="documents-preparation">
+      <p className="documents-step">02 / PREPARE</p><h2>{heading}</h2>
+      <p className="documents-next-step" role="status" aria-label="Document preparation">{sourceCount !== null ? `${sourceCount} ${sourceCount === 1 ? "PDF" : "PDFs"} in this collection. ` : ""}{stage === "selected" ? "A compatible index is selected. Retrieval and model availability are checked when you ask." : stage === "needed" ? "Create one searchable collection from all your PDFs." : stage === "reusable" ? "A completed preparation matches your PDFs. No new build is needed." : stage === "building" ? "You can leave this page and return while the local worker runs." : stage === "empty" ? "Add a PDF to begin. Nothing is prepared automatically." : stage === "failed" ? "Your files and previous indexes are preserved. Review the failure before trying again." : stage === "blocked" ? "Existing files cannot be safely reused yet. Review the details; they will not be overwritten." : stage === "uncertain" ? "The server may have accepted your request. Check before submitting another." : stage === "offline" ? "Open connection details to connect the local service." : stage === "unavailable" ? "Refresh the PDF list and try checking again." : "Verifying the current PDFs and available preparations."}</p>
+      {stage === "empty" ? <button className="button button--primary" type="button" onClick={() => document.getElementById("document-pdf")?.click()}>Choose a PDF</button> : null}
+      {stage === "selected" ? <Link className="button button--primary" to="/?mode=document">Ask PDFs <span aria-hidden="true">→</span></Link> : null}
+      {stage === "checking" ? <p className="documents-progress" role="status">Checking documents…</p> : null}
+      {stage === "unavailable" && !sourceError ? <div role="alert" className="documents-error"><p>{configurationError ?? previewError ?? inventoryError ?? "Completed indexes could not be checked. Try again or review Advanced."}</p><button className="button button--primary" type="button" onClick={() => { if (sourceError) onRefreshDocuments(); else if (!config) { setConfigurationLoading(true); void getTrustedBootstrapConfiguration(token).then(value => { setConfig(value.resolved_config); setConfigurationError(null); }).catch(error => setConfigurationError(apiErrorText(error))).finally(() => setConfigurationLoading(false)); } else void createPreview(); }}>Try again</button></div> : null}
+      {stage === "needed" ? <div className="documents-workflow__build-confirm">
+        <p>Uses your configured local models and may take a few minutes.</p>
+        <label><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} disabled={submitting || sourceChecking || !status?.accepting_jobs} /> Prepare all {sourceCount} PDFs. Keep existing indexes.</label>
+        <button className="button button--primary" type="button" onClick={() => void submitBuild()} disabled={!acknowledged || !status?.accepting_jobs || submitting || Boolean(uncertainRequestId) || sourceChecking}>{submitting ? "Submitting…" : "Prepare documents"}</button>
+        {!status?.accepting_jobs ? <p role="alert">The preparation service is not accepting work. Check its connection in Advanced.</p> : null}
+      </div> : null}
+      {stage === "building" ? <div className="documents-build-progress"><span>{currentJob?.status === "queued" ? "Queued" : "Running"}</span><button className="documents-text-button" type="button" onClick={() => void refreshHistory()} disabled={historyLoading}>Refresh status</button></div> : null}
+      {stage === "blocked" || stage === "failed" ? <Link className="button button--quiet" to="/index-builds">Review preparation</Link> : null}
+      {uncertainRequestId ? <div className="documents-warning" role="group" aria-labelledby="uncertain-build-title"><h3 id="uncertain-build-title">Build submission needs confirmation</h3><p>No retry was sent.</p><button className="button button--primary" type="button" onClick={() => void findUncertainJob()} disabled={uncertainState === "searching" || !token}>{uncertainState === "searching" ? "Checking…" : "Check whether the build was accepted"}</button>
         {uncertainState === "found" ? <p role="status">The original request was found in job history.</p> : null}
-        {uncertainState === "not_found" ? <label><input type="checkbox" checked={confirmNewAttempt} onChange={(event) => setConfirmNewAttempt(event.target.checked)} /> I reviewed the checked history and explicitly intend to submit a new build.</label> : null}
-        {uncertainState === "not_found" ? <button className="button button--quiet" type="button" disabled={!confirmNewAttempt} onClick={allowNewBuildAfterReview}>Allow a new explicit build submission</button> : null}
-        {uncertainState === "limit" ? <p role="alert">The bounded scan checked 10,000 jobs without finding this request. Review more history on the advanced Index Builds page before deciding whether to submit again.</p> : null}
-      </div> : null}
-      {actionError ? <p className="documents-workflow__error" role="alert">{actionError}</p> : null}
-      {token ? history.length ? <ul className="documents-workflow__history" aria-label="Recent index jobs">{history.map((job) => <li key={job.job_id}>
-        <Link to={`/index-builds/${job.job_id}`}><span>{job.status}</span><code>{job.job_id}</code></Link>
-      </li>)}</ul> : !historyLoading ? <p className="documents-workflow__empty">No builds recorded in this app workspace. Completed indexes may still be available above.</p> : null : <p className="documents-workflow__empty">Connect to bootstrap to inspect build activity.</p>}
-      <p className="documents-workflow__hint">Builds are explicit and fresh-only. Failed or interrupted data is preserved for review, not repaired automatically.</p>
-    </section>
-
+        {uncertainState === "not_found" ? <><label><input type="checkbox" checked={confirmNewAttempt} onChange={event => setConfirmNewAttempt(event.target.checked)} /> I reviewed the history and explicitly intend to submit a new build.</label><button className="button button--quiet" type="button" disabled={!confirmNewAttempt} onClick={allowNewBuildAfterReview}>Allow a new explicit build submission</button></> : null}
+        {uncertainState === "limit" ? <p role="alert">The bounded history check reached its limit. Review the advanced build workspace before submitting again.</p> : null}</div> : null}
+      {actionError ? <p className="documents-error" role="alert">{actionError}</p> : null}
+      <IndexSelectionPanel token={selectionToken} preview={preview} resolvedConfig={config} inventoryPage={inventoryPage} onSelectionReadback={setSelection} interactionDisabled={sourceChecking || sourceError || Boolean(uncertainRequestId) || Boolean(preparing)} compact />
+      <p className="documents-preparation-note">Adding a PDF changes the collection. Earlier indexes stay preserved.</p>
+    </div>
+    <details className="documents-advanced" open={Boolean(failed || historyError)}><summary>Advanced</summary>
+      <div className="documents-advanced__body">
+        <p>Preparation validates reports without opening Chroma or loading models. Selection is not proof of retrieval readiness.</p>
+        {config ? <details><summary>Build configuration</summary><p>Using the trusted server configuration</p><p>Scientific settings come from the server.</p></details> : null}
+        {preview ? <dl className="documents-workflow__facts" aria-label="Index preview results"><div><dt>Source documents</dt><dd>{preview.document_count}</dd></div><div><dt>Build decision</dt><dd>{preview.fresh_build_eligible ? "A fresh build can be submitted" : "An index already exists"}</dd></div><div><dt>Index identity</dt><dd><code>{preview.index_fingerprint}</code></dd></div></dl> : null}
+        <button className="documents-text-button" type="button" onClick={() => void createPreview()} disabled={!config || !sourceCount || previewLoading}>Check documents</button>
+        {preview ? <button className="documents-text-button" type="button" onClick={() => void inspectReports(0)} disabled={inventoryLoading}>Refresh compatible reports</button> : null}
+        {inventoryPage ? <div><p>{inventoryPage.complete ? "Report check complete." : "Report check incomplete."}</p>{inventoryPage.candidates.map(item => <p key={item.candidate_id}><code>{item.build_id ?? item.candidate_id}</code> · {item.reason_code}</p>)}{hasNextReportPage ? <button className="documents-text-button" type="button" onClick={() => void inspectReports(inventoryOffset + INVENTORY_PAGE_SIZE)}>More reports</button> : null}</div> : null}
+        {stage === "blocked" ? <p>Do not delete or reset existing files. An incomplete preparation requires a separately configured workspace. Custom research configurations can be inspected in the advanced build workspace.</p> : null}
+        <div className="documents-section-heading"><h3>Build activity</h3><button className="documents-text-button" type="button" onClick={() => void refreshHistory()} disabled={!token || historyLoading}>Refresh jobs</button></div>
+        {historyError ? <p role="alert">{historyError}</p> : null}{currentJob ? <JobStatus job={currentJob} /> : null}
+        {history.length ? <ul className="documents-workflow__history">{history.map(job => <li key={job.job_id}><Link to={`/index-builds/${job.job_id}`}>{job.status} · {job.job_id}</Link></li>)}</ul> : <p>No jobs in this app workspace. Completed indexes are checked separately.</p>}
+        {!LOCAL_GATEWAY ? <p>Report selection uses the ordinary connection in the <Link to="/index-builds">advanced build workspace</Link>.</p> : null}
+      </div>
     </details>
-    {currentSelection ? <section className="documents-workflow__section documents-workflow__use" aria-labelledby="use-documents-title">
-      <div><h2 id="use-documents-title">Ask your PDFs</h2></div>
-      {currentSelection ? <div className="documents-workflow__selected" role="status"><strong>Index selected.</strong><span>Your next question will check retrieval and model availability.</span><Link className="button button--primary" to="/?mode=document">Ask documents</Link></div> : <p className="documents-workflow__copy">Select a completed index above to start Document Chat.</p>}
-      {sourceManifestHash && preview && preview.manifest_hash !== sourceManifestHash ? <p className="documents-workflow__warning" role="alert">The source manifest changed. Preview and report compatibility were cleared.</p> : null}
-    </section> : null}
-  </div>;
+  </aside>;
 }

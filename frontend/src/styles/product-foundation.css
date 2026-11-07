@@ -1,0 +1,32 @@
+:root {
+  --ink: #131d35; --muted: #59667d; --paper: #f5f7fb; --panel: #fff;
+  --accent: #294ff2; --accent-hover: #1e3dcd; --accent-soft: #edf1ff;
+  --success: #147968; --success-soft: #edf7f4; --warning: #b34e43; --warning-soft: #fff1ee;
+  --line: #dce2ed; --side: #131d35; --green: var(--accent); --green-dark: var(--accent-hover);
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px;
+  --radius: 6px; --display: Georgia, "Times New Roman", serif;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  color: var(--ink); background: var(--paper);
+}
+body { color: var(--ink); background: var(--paper); }
+button, input, select, textarea { font: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.sidebar { background: var(--side); color: #f4f6ff; border-color: #26314c; }
+.brand { color: #fff; }.brand__mark { color: #a8b9ff; }.brand__copy small { color: #b3bfd6; }
+.sidebar-collapse { color: #b3bfd6; }.sidebar-collapse:hover { background: #243254; color: #fff; border-color: #3e4d6c; }
+.nav-item { color: #c2cbe0; border-radius: var(--radius); font-size: 14px; }.nav-item:hover { color: #fff; background: #243254; }
+.nav-item--active { background: #294ff2; border-color: #294ff2; color: #fff; }.nav-item--active .nav-icon { color: #fff; }
+.sidebar__footer { color: #b3bfd6; border-color: #2e3954; }.local-mark { background: #66baa7; box-shadow: none; }
+.topbar { background: var(--panel); border-color: var(--line); }.topbar__crumb strong { color: var(--ink); }
+.main-content { max-width: 1440px; padding: 34px 36px 48px; }
+a { color: var(--accent); }.button { min-height: 40px; border-radius: var(--radius); font-size: 13px; }
+.button--primary { background: var(--accent); border-color: var(--accent); color: white; }.button--primary:hover:not(:disabled) { background: var(--accent-hover); }
+.button--quiet { background: var(--panel); color: var(--ink); border-color: var(--line); }.button--quiet:hover:not(:disabled) { background: var(--accent-soft); }
+.panel, .connection-panel { background: var(--panel); border-color: var(--line); box-shadow: none; }
+.chat-mode-control { background: var(--paper); border-color: var(--line); }.chat-mode-control button.is-active { color: var(--accent); background: var(--panel); }
+.chat-send, .settings-save { background: var(--accent); border-color: var(--accent); }.chat-send:hover:not(:disabled), .settings-save:hover:not(:disabled) { background: var(--accent-hover); }
+.chat-message--user .chat-message__body { background: var(--accent-soft); border-color: #d5ddfb; }.chat-dot--rust { background: var(--success); }
+@media(max-width: 800px) { .main-content { padding: 24px 18px 36px; }.sidebar--mobile-open { background: var(--side); }.mobile-menu-button { background: var(--panel); border-color: var(--line); color: var(--ink); } }
+@media(prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
+
+.sidebar :focus-visible { outline-color: #a8b9ff; }

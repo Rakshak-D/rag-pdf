@@ -5,6 +5,7 @@ import type { BootstrapInventoryPage, BootstrapPreviewResponse, IndexSelectionSt
 import { apiErrorText } from "../../components/apiErrorText";
 
 interface Props {
+  interactionDisabled?: boolean;
   token: string | null;
   preview: BootstrapPreviewResponse | null;
   resolvedConfig: Record<string, unknown> | null;
@@ -20,7 +21,7 @@ function operationId(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryPage, onSelectionReadback, compact = false }: Props) {
+export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryPage, onSelectionReadback, compact = false, interactionDisabled = false }: Props) {
   const client = useMemo(() => new WorkbenchApiClient({ token }), [token]);
   const [selection, setSelection] = useState<IndexSelectionState | null>(null);
   const [loading, setLoading] = useState(false);
@@ -73,7 +74,7 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
     : [];
 
   const select = useCallback(async (buildId: string) => {
-    if (submitLock.current || !token || !preview || !resolvedConfig ||
+    if (interactionDisabled || submitLock.current || !token || !preview || !resolvedConfig ||
       !inventoryPage?.complete || !selection || selection.revision === null || selection.selection_status === "invalid") return;
     const candidate = candidates.find((item) => item.build_id === buildId);
     if (!candidate || candidate.build_id === null || candidate.compatibility !== "report_match") return;
@@ -130,7 +131,7 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
       submitLock.current = false;
       if (requestSerial.current === serial) setSelecting(null);
     }
-  }, [candidates, client, inventoryPage, onSelectionReadback, preview, resolvedConfig, selection, token]);
+  }, [candidates, client, interactionDisabled, inventoryPage, onSelectionReadback, preview, resolvedConfig, selection, token]);
 
   const selectedForCurrentPreview = Boolean(preview && selection?.selection_status === "selected" &&
     selection.selection?.document_manifest_hash === preview.manifest_hash &&
@@ -142,6 +143,15 @@ export function IndexSelectionPanel({ token, preview, resolvedConfig, inventoryP
         selection?.selection_status === "invalid" ? "The saved selection record is invalid." :
           selection?.selection_status === "legacy_configured" ? "A legacy report path is configured; it is not a durable UI selection." :
             "No index is selected.";
+
+  if (compact) return <div className="documents-selection" aria-label="Index selection">
+    {error ? <p className="documents-error" role="alert">{error}</p> : null}
+    {selection?.selection_status === "stale" ? <p className="documents-selection-warning">Your PDFs changed. Prepare an updated collection before asking questions.</p> : null}
+    {selection?.selection_status === "invalid" ? <p className="documents-error" role="alert">The saved selection needs review in the advanced build workspace.</p> : null}
+    {!selectedForCurrentPreview && candidates.map(candidate => <div className="documents-selection-choice" key={candidate.candidate_id}><p>Prepared collection available</p><button className="button button--primary" type="button" onClick={() => void select(candidate.build_id!)} disabled={!token || !selection || interactionDisabled || loading || selecting !== null || selection?.revision === null || selection?.selection_status === "invalid"}>{selecting === candidate.build_id ? "Confirming…" : "Use this index"}</button></div>)}
+    {message && !selectedForCurrentPreview ? <p role="status">{message}</p> : null}
+    <details className="documents-selection-details"><summary>Selection details</summary><p>{statusText}</p>{selection?.selection ? <dl><dt>Build</dt><dd><code>{selection.selection.build_id}</code></dd><dt>Index</dt><dd><code>{selection.selection.index_fingerprint}</code></dd><dt>Source</dt><dd><code>{selection.selection.document_manifest_hash}</code></dd><dt>Report SHA-256</dt><dd><code>{selection.selection.report_sha256}</code></dd></dl> : null}<button className="documents-text-button" type="button" onClick={() => void refresh()} disabled={!token || loading || selecting !== null}>Refresh selection</button></details>
+  </div>;
 
   return <section className="panel index-selection" aria-labelledby="index-selection-title">
     <div className="bootstrap-detail-heading">

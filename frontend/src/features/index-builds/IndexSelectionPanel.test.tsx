@@ -203,4 +203,27 @@ describe("IndexSelectionPanel", () => {
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);
   });
+  it("keeps compact selection disabled without an ordinary connection", () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>());
+    render(<MemoryRouter><IndexSelectionPanel token={null} preview={preview} resolvedConfig={config} inventoryPage={inventory} compact /></MemoryRouter>);
+    expect(screen.getByRole("button", { name: "Use this index" })).toBeDisabled();
+  });
+
+  it("confirms compact selection through readback and hides the completed selection action", async () => {
+    let selected = false;
+    const readback = vi.fn();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      if (init?.method === "POST") { selected = true; return json(state("selected", 1)); }
+      return json(selected ? state("selected", 1) : state());
+    });
+    vi.stubGlobal("fetch", fetcher); const user = userEvent.setup();
+    render(<MemoryRouter><IndexSelectionPanel token="ordinary-test-token" preview={preview} resolvedConfig={config} inventoryPage={inventory} onSelectionReadback={readback} compact /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Use this index" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Use this index" }));
+    await waitFor(() => expect(readback).toHaveBeenLastCalledWith(state("selected", 1)));
+    expect(screen.queryByRole("button", { name: "Use this index" })).not.toBeInTheDocument();
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method !== "POST")).toHaveLength(2);
+  });
+
 });

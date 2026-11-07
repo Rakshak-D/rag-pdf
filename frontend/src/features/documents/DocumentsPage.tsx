@@ -4,7 +4,6 @@ import { ApiError, BootstrapApiClient } from "../../api/client";
 import type { BootstrapDocumentRecord, BootstrapDocumentsResponse, BootstrapStatusResponse } from "../../api/types";
 import { apiErrorText } from "../../components/apiErrorText";
 import { BootstrapConnectionPanel } from "../index-builds/BootstrapConnectionPanel";
-import { PageHeading } from "../shared";
 import { DocumentsIndexWorkflow } from "./DocumentsIndexWorkflow";
 import "./documents-workflow.css";
 
@@ -52,10 +51,9 @@ function uploadOutcomeUncertain(error: unknown): boolean {
 
 function DocumentRow({ document }: { document: BootstrapDocumentRecord }) {
   return <tr>
-    <th scope="row"><span className="document-file-mark" aria-hidden="true">PDF</span><span className="document-filename">{document.relative_path}</span></th>
+    <th scope="row"><div className="document-row-name"><span className="document-file-mark" aria-hidden="true">PDF</span><div><span className="document-filename">{document.relative_path}</span><details><summary>File details</summary><code className="document-hash" title={document.sha256}>{document.sha256}</code></details></div></div></th>
     <td>{formatBytes(document.size_bytes)}</td>
-    <td><details><summary>View details</summary><code className="document-hash" title={document.sha256}>{document.sha256}</code></details></td>
-    <td><span className="document-source-state">Available for indexing</span></td>
+    <td><span className="document-source-state">In collection</span></td>
   </tr>;
 }
 
@@ -67,6 +65,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [offset, setOffset] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadNeedsInventoryRefresh, setUploadNeedsInventoryRefresh] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -136,7 +135,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !selectedFile || !inventory || submitting.current) return;
+    if (!token || !selectedFile || !inventory || submitting.current || requiresUploadRefresh.current || uploadNeedsInventoryRefresh || inventoryError || loading) return;
     if (!filenamePattern.test(selectedFile.name)) {
       setUploadError("Use an ASCII filename with letters, numbers, spaces, parentheses, underscores or hyphens, ending in lowercase .pdf.");
       return;
@@ -208,83 +207,49 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
   const hasNext = Boolean(inventory && offset + inventory.documents.length < inventory.total);
   const maxUploadBytes = inventory?.max_upload_bytes ?? null;
 
+  const canChoose = Boolean(token && inventory && !inventoryError && !uploading && !loading && !uploadNeedsInventoryRefresh);
   return <div className="documents-page">
-    <PageHeading
-      eyebrow="YOUR DOCUMENTS"
-      title="Documents"
-      description="Add PDFs, prepare them for chat, then ask questions."
-      actions={<Link className="button button--quiet" to="/index-builds">Advanced job details</Link>}
-    />
-
-    <details open={!LOCAL_GATEWAY || !token || Boolean(connectionError)} className="documents-connection"><summary>Connection details</summary><BootstrapConnectionPanel
-      connected={token !== null} checking={checking} busy={false} status={status} error={connectionError}
-      onConnect={connect} onDisconnect={disconnect}
-    /></details>
-
-    <section className="panel documents-import" aria-labelledby="documents-import-title">
-      <div className="panel__heading"><div><h2 id="documents-import-title">Import a PDF</h2></div></div>
-      <p className="documents-copy">Import PDFs, then prepare an index below.</p>
-      {maxUploadBytes !== null ? <p className="documents-limit">Maximum file size {formatBytes(maxUploadBytes)} · maximum {inventory?.max_pages} pages · readable, unencrypted PDFs</p>
-        : <p className="documents-limit">Connect to the bootstrap service to read its configured upload limit.</p>}
-      <form className="documents-upload-form" onSubmit={(event) => { void submit(event); }}>
-        <label htmlFor="document-pdf">PDF file</label>
-        <input
-          ref={fileInput}
-          id="document-pdf"
-          type="file"
-          accept="application/pdf,.pdf"
-          disabled={!token || uploading || loading || !inventory || uploadNeedsInventoryRefresh}
-          onChange={(event) => {
-            setSelectedFile(event.currentTarget.files?.[0] ?? null);
-            setUploadError(null); setFeedback(null); setWarning(null);
-          }}
-        />
-        <details className="documents-filename-help"><summary>Filename requirements</summary><p>Use a simple ASCII filename with lowercase <code>.pdf</code>; path characters and Windows device names are rejected.</p></details>
-        {selectedFile ? <p className="documents-selected-file">Selected: <strong>{selectedFile.name}</strong> · {formatBytes(selectedFile.size)}</p> : null}
-        <div className="documents-upload-actions">
-          <button className="button button--primary" type="submit" disabled={!token || !inventory || !selectedFile || uploading || loading || uploadNeedsInventoryRefresh}>
-            {uploading ? "Importing PDF…" : "Import PDF"}
-          </button>
-          {uploading ? <span role="status">Validating and publishing the selected PDF.</span> : null}
-        </div>
-        {uploadError ? <p className="inline-error" role="alert">{uploadError}</p> : null}
-        {feedback ? <p className="documents-feedback" role="status" aria-label="PDF import">{feedback}</p> : null}
-        {warning ? <p className="documents-warning" role="alert">{warning}</p> : null}
-      </form>
-    </section>
-
-    <section className="panel documents-inventory" aria-labelledby="documents-inventory-title">
-      <div className="panel__heading">
-        <div><h2 id="documents-inventory-title">Imported documents</h2></div>
-        <button className="button button--quiet" type="button" onClick={() => setRefreshVersion((value) => value + 1)} disabled={!token || loading || uploading}>Refresh</button>
+    <header className="documents-heading"><div><p className="documents-kicker">YOUR WORKSPACE</p><h1>Documents</h1><p>Add PDFs. Prepare your collection. Ask better questions.</p></div><span className="documents-count">{inventoryError ? "Library unavailable" : inventory ? `${inventory.total} ${inventory.total === 1 ? "PDF" : "PDFs"}` : "Library"}</span></header>
+    <details open={!LOCAL_GATEWAY || !token || Boolean(connectionError)} className="documents-connection"><summary>Connection details</summary><BootstrapConnectionPanel connected={token !== null} checking={checking} busy={false} status={status} error={connectionError} onConnect={connect} onDisconnect={disconnect} /></details>
+    <div className="documents-layout">
+      <div className="documents-library">
+        <section className={`documents-upload${dragging ? " is-dragging" : ""}`} aria-labelledby="documents-import-title"
+          onDragOver={event => { event.preventDefault(); if (canChoose) setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={event => {
+            event.preventDefault(); setDragging(false);
+            if (!canChoose) return;
+            const files = event.dataTransfer.files;
+            if (files.length !== 1) { setUploadError("Add one PDF at a time so each upload can be confirmed."); return; }
+            setSelectedFile(files.item(0)); setUploadError(null); setFeedback(null);
+          }}>
+          <div className="documents-upload__heading"><span className="documents-page-icon" aria-hidden="true">PDF</span><div><h2 id="documents-import-title">Add a PDF</h2><p>Choose a file or drop it here.</p></div></div>
+          {maxUploadBytes !== null ? <p className="documents-limit">Up to {formatBytes(maxUploadBytes)} per PDF · {inventory?.max_pages} pages · unencrypted files</p> : <p className="documents-limit">Connect to load upload limits.</p>}
+          <form onSubmit={event => void submit(event)} className="documents-upload-form">
+            <label className="sr-only" htmlFor="document-pdf">PDF file</label>
+            <input ref={fileInput} id="document-pdf" type="file" accept="application/pdf,.pdf" disabled={!canChoose} onChange={event => { setSelectedFile(event.currentTarget.files?.[0] ?? null); setUploadError(null); setFeedback(null); setWarning(null); }} />
+            {selectedFile ? <p className="documents-selected-file">{selectedFile.name} <span>{formatBytes(selectedFile.size)}</span></p> : null}
+            <button className="button button--primary" type="submit" disabled={!canChoose || !selectedFile}>{uploading ? "Adding PDF…" : "Add PDF"}</button>
+            {uploading ? <p role="status">Adding and validating your PDF…</p> : null}
+            {uploadError ? <p className="documents-error" role="alert">{uploadError}</p> : null}
+            {feedback ? <p className="documents-feedback" role="status" aria-label="PDF import">{feedback}</p> : null}
+            {warning ? <div className="documents-warning" role="alert"><p>{warning}</p>{uploadNeedsInventoryRefresh ? <button className="button button--quiet" type="button" onClick={() => setRefreshVersion(v => v + 1)} disabled={loading}>Refresh PDF list</button> : null}</div> : null}
+          </form>
+          <details className="documents-upload-help"><summary>File requirements</summary><p>Use a simple filename ending in lowercase .pdf. Uploads are validated by the server. Existing files are never renamed or replaced.</p></details>
+        </section>
+        <section className="documents-library-list" aria-labelledby="documents-inventory-title">
+          <div className="documents-section-heading"><h2 id="documents-inventory-title">Your PDFs</h2><button className="documents-text-button" type="button" onClick={() => setRefreshVersion(v => v + 1)} disabled={!token || loading || uploading}>{loading ? "Refreshing…" : "Refresh"}</button></div>
+          {!token ? <p className="documents-empty">Connect to view your PDFs.</p> : loading && !inventory ? <p role="status" className="documents-empty">Loading your library…</p> : inventoryError ? <div role="alert" className="documents-error"><p>{inventoryError}</p><button className="button button--quiet" type="button" onClick={() => setRefreshVersion(v => v + 1)}>Retry library</button></div> : inventory ? <>
+            {inventory.documents.length === 0 ? <div className="documents-empty"><h3>Your library starts here.</h3><p>Add your first PDF above. Preparing it for chat is a separate, confirmed step.</p></div> : <>
+              <div className="documents-table-wrap"><table className="documents-table"><thead><tr><th scope="col">Document</th><th scope="col">Size</th><th scope="col">Status</th></tr></thead><tbody>{inventory.documents.map(document => <DocumentRow key={document.document_id} document={document} />)}</tbody></table></div>
+              {inventory.total > pageSize ? <nav className="documents-pagination" aria-label="Document inventory pages"><button className="button button--quiet" type="button" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - pageSize))}>Previous</button><span>{offset + 1}–{offset + inventory.documents.length} of {inventory.total}</span><button className="button button--quiet" type="button" disabled={!hasNext || loading} onClick={() => setOffset(offset + pageSize)}>Next</button></nav> : null}
+            </>}
+            <p className="documents-library-note">These files form one collection. Adding a PDF does not start a build.</p>
+          </> : null}
+        </section>
       </div>
-      {!token ? <p className="documents-empty">Connect to the bootstrap service to inspect its PDF source inventory.</p>
-        : loading && !inventory ? <p className="documents-empty" role="status">Loading source inventory…</p>
-          : inventoryError ? <div className="documents-load-error" role="alert"><p>{inventoryError}</p><button className="button button--quiet" type="button" onClick={() => setRefreshVersion((value) => value + 1)}>Retry inventory</button></div>
-            : inventory ? <>
-              <div className="documents-inventory-meta"><span>{inventory.total} {inventory.total === 1 ? "document" : "documents"} in the configured source</span><details><summary>Source identity</summary><code>{inventory.manifest_hash}</code></details></div>
-              {inventory.documents.length === 0 ? <p className="documents-empty">No PDF documents are present in the trusted source yet.</p> : <>
-                <div className="documents-table-wrap"><table className="documents-table">
-                  <thead><tr><th scope="col">Document</th><th scope="col">Size</th><th scope="col">Details</th><th scope="col">Source state</th></tr></thead>
-                  <tbody>{inventory.documents.map((document) => <DocumentRow key={document.document_id} document={document} />)}</tbody>
-                </table></div>
-                <nav className="documents-pagination" aria-label="Document inventory pages">
-                  <button className="button button--quiet" type="button" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - pageSize))}>Previous</button>
-                  <span>Showing {offset + 1}–{offset + inventory.documents.length} of {inventory.total}</span>
-                  <button className="button button--quiet" type="button" disabled={!hasNext || loading} onClick={() => setOffset(offset + pageSize)}>Next</button>
-                </nav>
-              </>}
-            </> : null}
-      <p className="documents-indexing-note">Importing adds a PDF to your collection. Build or select an index before asking questions.</p>
-    </section>
-
-    <DocumentsIndexWorkflow
-      visible={visible}
-      token={token}
-      status={status}
-      sourceManifestHash={inventory?.manifest_hash ?? null}
-      sourceCount={inventory?.total ?? null}
-      onRefreshDocuments={() => setRefreshVersion((value) => value + 1)}
-    />
+      <DocumentsIndexWorkflow visible={visible} token={token} status={status} sourceManifestHash={inventoryError ? null : inventory?.manifest_hash ?? null} sourceCount={inventoryError ? null : inventory?.total ?? null} sourceError={Boolean(inventoryError)} sourceChecking={loading || uploading} onRefreshDocuments={() => setRefreshVersion(v => v + 1)} />
+    </div>
+    <footer className="documents-footer"><Link to="/index-builds">Advanced build workspace</Link><span>Files and previous indexes are preserved.</span></footer>
   </div>;
 }

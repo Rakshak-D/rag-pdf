@@ -49,7 +49,7 @@ describe("Documents page", () => {
     stubBootstrapFetch(fetcher);
     mount();
     expect(screen.getByRole("heading", { name: "Documents" })).toBeInTheDocument();
-    expect(screen.getByText("Connect to the bootstrap service to inspect its PDF source inventory.")).toBeInTheDocument();
+    expect(screen.getByText("Connect to view your PDFs.")).toBeInTheDocument();
     expect(screen.getByLabelText("PDF file")).toBeDisabled();
     expect(screen.getAllByRole("link", { name: "Documents" })).toHaveLength(1);
     expect(fetcher).not.toHaveBeenCalled();
@@ -74,14 +74,14 @@ describe("Documents page", () => {
     const user = userEvent.setup();
     const router = mount();
     await connect(user);
-    await screen.findByText("No PDF documents are present in the trusted source yet.");
+    await screen.findByText("Your library starts here.");
     const uploadLimit = document.querySelector(".documents-limit");
-    expect(uploadLimit?.textContent).toContain("Maximum file size 1.0 MiB");
-    expect(uploadLimit?.textContent).toContain("maximum 200 pages");
+    expect(uploadLimit?.textContent).toContain("Up to 1.0 MiB");
+    expect(uploadLimit?.textContent).toContain("200 pages");
 
     const file = new File(["%PDF-test payload"], "Research note.pdf", { type: "application/pdf" });
     await user.upload(screen.getByLabelText("PDF file"), file);
-    await user.click(screen.getByRole("button", { name: "Import PDF" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
     expect(await screen.findByRole("status", { name: "PDF import" })).toHaveTextContent("imported and confirmed in the source inventory");
     expect(await screen.findByText("Research note.pdf", { exact: true })).toBeInTheDocument();
 
@@ -96,11 +96,11 @@ describe("Documents page", () => {
 
     await user.click(screen.getByRole("button", { name: "Disconnect bootstrap" }));
     expect(screen.getByLabelText("Bootstrap bearer token")).toHaveValue("");
-    expect(screen.getByText("Connect to the bootstrap service to inspect its PDF source inventory.")).toBeInTheDocument();
+    expect(screen.getByText("Connect to view your PDFs.")).toBeInTheDocument();
     expect(localStorage.getItem("bootstrapToken")).toBeNull();
     expect(sessionStorage.getItem("bootstrapToken")).toBeNull();
 
-    await user.click(screen.getByRole("link", { name: "Advanced job details" }));
+    await user.click(screen.getByRole("link", { name: "Advanced build workspace" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/index-builds"));
     expect(screen.getByRole("heading", { name: "Index Builds" })).toBeInTheDocument();
   });
@@ -118,11 +118,11 @@ describe("Documents page", () => {
     });
     stubBootstrapFetch(fetcher);
     const user = userEvent.setup(); mount(); await connect(user);
-    await screen.findByText("No PDF documents are present in the trusted source yet.");
+    await screen.findByText("Your library starts here.");
     await user.upload(screen.getByLabelText("PDF file"), new File(["%PDF-test payload"], "Research note.pdf", { type: "application/pdf" }));
-    await user.click(screen.getByRole("button", { name: "Import PDF" }));
-    expect(screen.getByRole("button", { name: "Importing PDF…" })).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Importing PDF…" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
+    expect(screen.getByRole("button", { name: "Adding PDF…" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Adding PDF…" }));
     expect(fetcher.mock.calls.filter(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST")).toHaveLength(1);
     releaseUpload?.(json({ outcome: "imported", document: record, manifest_hash: "b".repeat(64), max_upload_bytes: 1024 * 1024, error_code: null }, 201));
     await screen.findByRole("status", { name: "PDF import" });
@@ -145,10 +145,10 @@ describe("Documents page", () => {
     const user = userEvent.setup(); mount(); await connect(user);
     expect(await screen.findByRole("alert")).toHaveTextContent("document_manifest_unavailable");
     failInventory = false;
-    await user.click(screen.getByRole("button", { name: "Retry inventory" }));
-    await screen.findByText("No PDF documents are present in the trusted source yet.");
+    await user.click(screen.getByRole("button", { name: "Retry library" }));
+    await screen.findByText("Your library starts here.");
     await user.upload(screen.getByLabelText("PDF file"), new File(["%PDF-test payload"], "Research note.pdf", { type: "application/pdf" }));
-    await user.click(screen.getByRole("button", { name: "Import PDF" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("already exists in the trusted source");
   });
 
@@ -170,18 +170,18 @@ describe("Documents page", () => {
     });
     stubBootstrapFetch(fetcher);
     const user = userEvent.setup(); mount(); await connect(user);
-    await screen.findByText("No PDF documents are present in the trusted source yet.");
+    await screen.findByText("Your library starts here.");
     await user.upload(screen.getByLabelText("PDF file"), new File(["%PDF-test payload"], "Research note.pdf", { type: "application/pdf" }));
-    await user.click(screen.getByRole("button", { name: "Import PDF" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("published but could not confirm the updated inventory");
     expect(screen.queryByText(/was imported and confirmed/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Import PDF" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add PDF" })).toBeDisabled();
     expect(screen.getByLabelText("PDF file")).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     expect(await screen.findByText("Research note.pdf", { exact: true })).toBeInTheDocument();
     expect(screen.getByLabelText("PDF file")).toBeEnabled();
     await user.upload(screen.getByLabelText("PDF file"), new File(["%PDF-test payload"], "Research note.pdf", { type: "application/pdf" }));
-    expect(screen.getByRole("button", { name: "Import PDF" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Add PDF" })).toBeEnabled();
   });
 
   it("rejects unsafe local filenames before making an upload request", async () => {
@@ -192,11 +192,52 @@ describe("Documents page", () => {
     });
     stubBootstrapFetch(fetcher);
     const user = userEvent.setup(); mount(); await connect(user);
-    await screen.findByText("No PDF documents are present in the trusted source yet.");
+    await screen.findByText("Your library starts here.");
     const unsafe = new File(["%PDF"], "bad:name.pdf", { type: "application/pdf" });
     fireEvent.change(screen.getByLabelText("PDF file"), { target: { files: [unsafe] } });
-    await user.click(screen.getByRole("button", { name: "Import PDF" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Use an ASCII filename");
     expect(fetcher.mock.calls.some(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST")).toBe(false);
   });
+  it("accepts one dropped PDF only after explicit submission and rejects multiple-file drops", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async input => String(input).endsWith("/status") ? json(status) : json(inventory()));
+    stubBootstrapFetch(fetcher); const user = userEvent.setup(); mount(); await connect(user);
+    await screen.findByText("Your library starts here.");
+    const area = screen.getByRole("heading", { name: "Add a PDF" }).closest("section")!;
+    const file = new File(["%PDF-test"], "Dropped.pdf", { type: "application/pdf" });
+    fireEvent.drop(area, { dataTransfer: { files: { length: 1, item: () => file } } });
+    expect(screen.getByText("Dropped.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add PDF" })).toBeEnabled();
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    fireEvent.drop(area, { dataTransfer: { files: { length: 2 } } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Add one PDF at a time");
+  });
+
+  it("blocks uploads and preparation when a refreshed source inventory cannot be verified", async () => {
+    let unavailable = false;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async input => {
+      if (String(input).endsWith("/status")) return json(status);
+      if (String(input).includes("/documents?")) return unavailable ? json({ error: { code: "document_manifest_unavailable" } }, 503) : json(inventory([record]));
+      return json({ error: { code: "not_found" } }, 404);
+    });
+    stubBootstrapFetch(fetcher); const user = userEvent.setup(); mount(); await connect(user);
+    await screen.findByText(record.relative_path, { exact: true });
+    unavailable = true; await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByRole("button", { name: "Retry library" });
+    expect(screen.getByLabelText("PDF file")).toBeDisabled();
+    expect(screen.getByText("Library unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Prepare documents" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Ask PDFs/ })).not.toBeInTheDocument();
+  });
+
+  it("uses the actual server upload limit before sending PDF bytes", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async input => String(input).endsWith("/status") ? json(status) : json({ ...inventory(), max_upload_bytes: 4 }));
+    stubBootstrapFetch(fetcher); const user = userEvent.setup(); mount(); await connect(user);
+    await screen.findByText("Your library starts here.");
+    await user.upload(screen.getByLabelText("PDF file"), new File(["%PDF-too-large"], "Large.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/limit|exceeds|large/i);
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+
 });
