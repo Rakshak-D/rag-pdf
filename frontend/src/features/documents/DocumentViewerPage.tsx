@@ -22,12 +22,21 @@ type RouteContext = {
 };
 type ViewerState = { kind: "loading" } | { kind: "ready"; content: Omit<BootstrapDocumentContent, "bytes">; pdf: PDFDocumentProxy } | { kind: "error"; message: string };
 
+class PageDisplayError extends Error {}
+
+function clearCanvas(canvas: HTMLCanvasElement): void {
+  canvas.width = 0;
+  canvas.height = 0;
+  canvas.style.width = "";
+  canvas.style.height = "";
+}
+
 function apiFailureMessage(error: unknown): string {
   if (!(error instanceof ApiError)) return "The local service could not open this PDF. Check that RAG-PDF is running, then try again.";
   if (error.code === "document_manifest_changed") return "This PDF changed after the citation or document list was created. Refresh Documents and open the current source.";
   if (error.code === "document_not_found" || error.code === "document_unavailable") return "The original PDF is no longer available in this source collection.";
   if (error.code === "document_changed") return "The PDF changed while it was being opened. Refresh Documents before trying again.";
-  if (error.code === "document_too_large" || error.code === "document_response_too_large") return "This PDF is larger than the 16 MiB viewing limit.";
+  if (error.code === "document_too_large" || error.code === "document_response_too_large") return "This PDF exceeds the current viewing limit. The maximum is 16 MiB, and your configured limit may be lower.";
   if (error.code === "document_source_busy") return "The PDF is being changed or indexed. Wait for that operation to finish, then reopen it.";
   if (error.code === "document_invalid" || error.code === "document_pdf_invalid") return "This file is not a supported, readable PDF.";
   if (error.code === "authentication_required") return "Reconnect to the local document service to open this PDF.";
@@ -67,6 +76,8 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
   const canvasHost = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
+  const pageOperationRef = useRef<Promise<void> | null>(null);
+  const pageGenerationRef = useRef(0);
   const pdfRef = useRef<PDFDocumentProxy | null>(null);
   const actualScaleRef = useRef(1);
   const routeState = (location.state && typeof location.state === "object" ? location.state : {}) as RouteContext;
@@ -148,10 +159,14 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
       renderTaskRef.current = null;
       const pdf = pdfRef.current;
       pdfRef.current = null;
-      if (pdf) void pdf.cleanup().catch(() => undefined);
-      if (loadingTask) void loadingTask.destroy().catch(() => undefined);
+      const pageOperation = pageOperationRef.current;
+      void (async () => {
+        await pageOperation?.catch(() => undefined);
+        if (pdf) await pdf.cleanup().catch(() => undefined);
+        if (loadingTask) await loadingTask.destroy().catch(() => undefined);
+      })();
       const currentCanvas = canvas.current;
-      if (currentCanvas) { currentCanvas.width = 0; currentCanvas.height = 0; }
+      if (currentCanvas) clearCanvas(currentCanvas);
     };
   }, [client, documentId, identity, pageRequest.invalid]);
 
@@ -159,75 +174,107 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
 
   useEffect(() => {
     if (viewer.kind !== "ready") return;
+    let active = true;
+    let pageTask: RenderTask | null = null;
+    const generation = ++pageGenerationRef.current;
+    const isCurrent = () => active && pageGenerationRef.current === generation;
+    const previousOperation = pageOperationRef.current;
+    renderTaskRef.current?.cancel();
+
     if (page < 1 || page > viewer.content.page_count) {
       setPageError(`Page ${page} is not in this PDF. It has ${viewer.content.page_count} pages.`);
       setRenderStatus("error");
-      if (canvas.current) { canvas.current.width = 0; canvas.current.height = 0; }
-      return;
+      const targetCanvas = canvas.current;
+      if (previousOperation && targetCanvas) {
+        let clearOperation!: Promise<void>;
+        clearOperation = previousOperation.catch(() => undefined).then(() => {
+          if (isCurrent() && canvas.current === targetCanvas) clearCanvas(targetCanvas);
+        }).finally(() => {
+          if (pageOperationRef.current === clearOperation) pageOperationRef.current = null;
+        });
+        pageOperationRef.current = clearOperation;
+      } else if (targetCanvas) {
+        clearCanvas(targetCanvas);
+      }
+      return () => { active = false; };
     }
     const targetCanvas = canvas.current;
-    if (!targetCanvas || !hostWidth) return;
-    let active = true;
-    let pageTask: RenderTask | null = null;
-    setPageError(null);
-    setRenderStatus("rendering");
-    renderTaskRef.current?.cancel();
-    void viewer.pdf.getPage(page).then((pdfPage) => {
-      if (!active) { pdfPage.cleanup(); return; }
-      const unit = pdfPage.getViewport({ scale: 1 });
-      const desired = fitWidth ? Math.min((hostWidth - 32) / unit.width, MAX_ZOOM) : zoom;
-      let scale = Math.max(MIN_ZOOM, desired);
-      const area = unit.width * unit.height * scale * scale;
-      if (area > MAX_CANVAS_PIXELS) scale *= Math.sqrt(MAX_CANVAS_PIXELS / area);
-      actualScaleRef.current = scale;
-      const viewport = pdfPage.getViewport({ scale });
-      const deviceScale = Math.min(window.devicePixelRatio || 1, 1.5);
-      const pixels = viewport.width * viewport.height * deviceScale * deviceScale;
-      const ratio = Math.min(deviceScale, Math.sqrt(MAX_CANVAS_PIXELS / pixels));
-      if (!Number.isFinite(ratio) || ratio < 0.25) {
-        setPageError("This PDF page is too large to display safely.");
-        setRenderStatus("error");
-        pdfPage.cleanup();
-        return;
-      }
-      targetCanvas.width = Math.ceil(viewport.width * ratio);
-      targetCanvas.height = Math.ceil(viewport.height * ratio);
-      targetCanvas.style.width = `${Math.ceil(viewport.width)}px`;
-      targetCanvas.style.height = `${Math.ceil(viewport.height)}px`;
-      const context = targetCanvas.getContext("2d", { alpha: false });
-      if (!context) {
-        setPageError("The browser could not create a PDF canvas.");
-        setRenderStatus("error");
-        pdfPage.cleanup();
-        return;
-      }
-      pageTask = pdfPage.render({
-        canvas: targetCanvas,
-        canvasContext: context,
-        viewport,
-        annotationMode: AnnotationMode.DISABLE,
-        ...(ratio === 1 ? {} : { transform: [ratio, 0, 0, ratio, 0, 0] }),
-      });
-      renderTaskRef.current = pageTask;
-      return pageTask.promise.then(() => {
-        if (active) setRenderStatus("ready");
-      }).catch((error: unknown) => {
-        if (active && (!(error instanceof Error) || error.name !== "RenderingCancelledException")) {
-          setPageError("This page could not be rendered. Try another page or return to Documents.");
-          setRenderStatus("error");
+    if (!targetCanvas || !hostWidth) return () => { active = false; };
+
+    // Keep the canvas mounted through errors so a later valid page can render.
+    let operation!: Promise<void>;
+    operation = Promise.resolve().then(async () => {
+      let pdfPage: Awaited<ReturnType<PDFDocumentProxy["getPage"]>> | null = null;
+      try {
+        // PDF.js only permits one active render task per canvas. Wait for its
+        // cancellation to settle before starting the next page operation.
+        await previousOperation?.catch(() => undefined);
+        if (!isCurrent()) return;
+        setPageError(null);
+        setRenderStatus("rendering");
+        clearCanvas(targetCanvas);
+        pdfPage = await viewer.pdf.getPage(page);
+        if (!isCurrent()) return;
+
+        const unit = pdfPage.getViewport({ scale: 1 });
+        const desired = fitWidth ? Math.min((hostWidth - 32) / unit.width, MAX_ZOOM) : zoom;
+        let scale = Math.max(MIN_ZOOM, desired);
+        const area = unit.width * unit.height * scale * scale;
+        if (area > MAX_CANVAS_PIXELS) scale *= Math.sqrt(MAX_CANVAS_PIXELS / area);
+        actualScaleRef.current = scale;
+        const viewport = pdfPage.getViewport({ scale });
+        const deviceScale = Math.min(window.devicePixelRatio || 1, 1.5);
+        const pixels = viewport.width * viewport.height * deviceScale * deviceScale;
+        const ratio = Math.min(deviceScale, Math.sqrt(MAX_CANVAS_PIXELS / pixels));
+        if (!Number.isFinite(ratio) || ratio < 0.25) {
+          throw new PageDisplayError("This PDF page is too large to display safely.");
         }
-      }).finally(() => pdfPage.cleanup());
-    }).catch((error: unknown) => {
-      if (active) {
-        setPageError("This page could not be read from the PDF.");
-        setRenderStatus("error");
+
+        targetCanvas.width = Math.ceil(viewport.width * ratio);
+        targetCanvas.height = Math.ceil(viewport.height * ratio);
+        targetCanvas.style.width = `${Math.ceil(viewport.width)}px`;
+        targetCanvas.style.height = `${Math.ceil(viewport.height)}px`;
+        const context = targetCanvas.getContext("2d", { alpha: false });
+        if (!context) throw new PageDisplayError("The browser could not create a PDF canvas.");
+
+        pageTask = pdfPage.render({
+          canvas: targetCanvas,
+          canvasContext: context,
+          viewport,
+          annotationMode: AnnotationMode.DISABLE,
+          ...(ratio === 1 ? {} : { transform: [ratio, 0, 0, ratio, 0, 0] }),
+        });
+        renderTaskRef.current = pageTask;
+        await pageTask.promise;
+        if (isCurrent()) setRenderStatus("ready");
+      } catch (error: unknown) {
+        const cancelled = error instanceof Error && error.name === "RenderingCancelledException";
+        if (isCurrent() && !cancelled) {
+          const message = error instanceof PageDisplayError
+            ? error.message
+            : pdfPage
+              ? "This page could not be rendered. Try another page or return to Documents."
+              : "This page could not be read from the PDF.";
+          setPageError(message);
+          setRenderStatus("error");
+          clearCanvas(targetCanvas);
+        }
+      } finally {
+        try { pdfPage?.cleanup(); } catch { /* Releasing page resources is best-effort. */ }
+        if (pageTask && renderTaskRef.current === pageTask) renderTaskRef.current = null;
       }
-      void error;
+    }).finally(() => {
+      if (pageOperationRef.current === operation) pageOperationRef.current = null;
     });
+    pageOperationRef.current = operation;
+    void operation;
+
     return () => {
       active = false;
-      pageTask?.cancel();
-      if (renderTaskRef.current === pageTask) renderTaskRef.current = null;
+      if (pageTask) {
+        pageTask.cancel();
+        if (renderTaskRef.current === pageTask) renderTaskRef.current = null;
+      }
     };
   }, [viewer, page, fitWidth, zoom, hostWidth]);
 
@@ -290,7 +337,7 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
         {viewer.kind === "error" ? <div className="pdf-viewer__state pdf-viewer__state--error" role="alert"><p>{viewer.message}</p><button type="button" className="button button--secondary" onClick={close}>Return to Documents</button></div> : null}
         {viewer.kind === "ready" ? <div className="pdf-viewer__canvas-scroll" ref={canvasHost}>
           <div className="pdf-viewer__canvas-wrap">
-            {!pageError ? <canvas ref={canvas} aria-label={`PDF page ${page} of ${viewer.content.page_count}`} /> : null}
+            <canvas ref={canvas} aria-label={`PDF page ${page} of ${viewer.content.page_count}`} aria-hidden={pageError ? true : undefined} />
           </div>
           {renderStatus === "rendering" ? <p className="pdf-viewer__render-status" role="status">Rendering page {page}…</p> : null}
           {pageError ? <p className="pdf-viewer__page-error" role="alert">{pageError}</p> : null}
