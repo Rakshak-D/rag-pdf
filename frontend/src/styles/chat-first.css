@@ -144,6 +144,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .evidence-list { display: grid; gap: 12px; overflow-y: auto; padding: 0 4px 18px 0; }
 .evidence-item { scroll-margin-top: 12px; padding: 11px; border: 1px solid #e5dfd5; border-radius: 8px; background: #fbf9f5; }
 .evidence-item.is-selected { border-color: #c98973; box-shadow: 0 0 0 2px #b65a431c; }
+.evidence-open-document { display: inline-flex; min-height: 34px; align-items: center; margin-top: 8px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--accent); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.evidence-open-document:hover { background: var(--accent-soft); }
 .evidence-item__top { display: grid; gap: 4px; margin-bottom: 8px; }
 .evidence-item__top strong { color: #a14d36; font-family: var(--mono); font-size: 10px; }
 .evidence-item__top span { color: #77766f; font-size: 9px; overflow-wrap: anywhere; }

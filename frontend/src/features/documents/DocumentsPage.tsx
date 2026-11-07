@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { ApiError, BootstrapApiClient } from "../../api/client";
 import type { BootstrapDocumentRecord, BootstrapDocumentsResponse, BootstrapStatusResponse } from "../../api/types";
 import { apiErrorText } from "../../components/apiErrorText";
@@ -49,15 +49,19 @@ function uploadOutcomeUncertain(error: unknown): boolean {
     error.kind === "malformed_response" || error.status === null || error.status >= 500;
 }
 
-function DocumentRow({ document }: { document: BootstrapDocumentRecord }) {
+function DocumentRow({ document, manifestHash }: { document: BootstrapDocumentRecord; manifestHash: string }) {
+  const query = new URLSearchParams({ manifest_hash: manifestHash, page: "1" });
+  const focusId = `document-preview-${document.document_id}`;
   return <tr>
     <th scope="row"><div className="document-row-name"><span className="document-file-mark" aria-hidden="true">PDF</span><div><span className="document-filename">{document.relative_path}</span><details><summary>File details</summary><code className="document-hash" title={document.sha256}>{document.sha256}</code></details></div></div></th>
     <td>{formatBytes(document.size_bytes)}</td>
     <td><span className="document-source-state">In collection</span></td>
+    <td><Link id={focusId} className="document-preview-link" to={`/documents/view/${document.document_id}?${query.toString()}`} state={{ returnTo: "/documents", returnFocusId: focusId, documentName: document.relative_path }}>Preview</Link></td>
   </tr>;
 }
 
 export function DocumentsPage({ token, status, checking, connectionError, onConnect, onDisconnect, visible = true }: Props) {
+  const location = useLocation();
   const client = useMemo(() => new BootstrapApiClient({ token }), [token]);
   const [inventory, setInventory] = useState<BootstrapDocumentsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -204,6 +208,14 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
     previouslyVisible.current = visible;
   }, [visible]);
 
+  useEffect(() => {
+    if (!visible || !location.state || typeof location.state !== "object") return;
+    const focusId = (location.state as { restoreFocusId?: unknown }).restoreFocusId;
+    if (typeof focusId === "string" && /^document-preview-doc_[0-9a-f]{64}$/.test(focusId)) {
+      document.getElementById(focusId)?.focus();
+    }
+  }, [visible, location.key, location.state]);
+
   const hasNext = Boolean(inventory && offset + inventory.documents.length < inventory.total);
   const maxUploadBytes = inventory?.max_upload_bytes ?? null;
 
@@ -241,7 +253,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
           <div className="documents-section-heading"><h2 id="documents-inventory-title">Your PDFs</h2><button className="documents-text-button" type="button" onClick={() => setRefreshVersion(v => v + 1)} disabled={!token || loading || uploading}>{loading ? "Refreshing…" : "Refresh"}</button></div>
           {!token ? <p className="documents-empty">Connect to view your PDFs.</p> : loading && !inventory ? <p role="status" className="documents-empty">Loading your library…</p> : inventoryError ? <div role="alert" className="documents-error"><p>{inventoryError}</p><button className="button button--quiet" type="button" onClick={() => setRefreshVersion(v => v + 1)}>Retry library</button></div> : inventory ? <>
             {inventory.documents.length === 0 ? <div className="documents-empty"><h3>Your library starts here.</h3><p>Add your first PDF above. Preparing it for chat is a separate, confirmed step.</p></div> : <>
-              <div className="documents-table-wrap"><table className="documents-table"><thead><tr><th scope="col">Document</th><th scope="col">Size</th><th scope="col">Status</th></tr></thead><tbody>{inventory.documents.map(document => <DocumentRow key={document.document_id} document={document} />)}</tbody></table></div>
+              <div className="documents-table-wrap"><table className="documents-table"><thead><tr><th scope="col">Document</th><th scope="col">Size</th><th scope="col">Status</th><th scope="col"><span className="sr-only">Open document</span></th></tr></thead><tbody>{inventory.documents.map(document => <DocumentRow key={document.document_id} document={document} manifestHash={inventory.manifest_hash} />)}</tbody></table></div>
               {inventory.total > pageSize ? <nav className="documents-pagination" aria-label="Document inventory pages"><button className="button button--quiet" type="button" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - pageSize))}>Previous</button><span>{offset + 1}–{offset + inventory.documents.length} of {inventory.total}</span><button className="button button--quiet" type="button" disabled={!hasNext || loading} onClick={() => setOffset(offset + pageSize)}>Next</button></nav> : null}
             </>}
             <p className="documents-library-note">These files form one collection. Adding a PDF does not start a build.</p>

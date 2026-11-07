@@ -46,14 +46,14 @@ function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function citationSegments(text: string, response: AskResponse, onOpen: (label: string) => void) {
+function citationSegments(text: string, response: AskResponse, messageId: string, onOpen: (label: string) => void) {
   const allowed = new Set(response.referenced_citations);
   const parts = text.split(/(\[[TI][0-9]{1,3}\])/g);
   return parts.map((part, index) => {
     const match = /^\[([TI][0-9]{1,3})\]$/.exec(part);
     const label = match?.[1];
     if (!label || !allowed.has(label)) return <span key={`${index}-${part}`}>{part}</span>;
-    return <button className="chat-citation" type="button" key={`${index}-${part}`} onClick={() => onOpen(label)}>{part}</button>;
+    return <button id={`citation-${messageId}-${label}`} className="chat-citation" type="button" key={`${index}-${part}`} onClick={() => onOpen(label)}>{part}</button>;
   });
 }
 
@@ -220,6 +220,32 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     setActiveEvidence(label);
   };
 
+  const openDocument = (message: Message, evidence: AskResponse["text_evidence"][number] | AskResponse["image_evidence"][number]) => {
+    const response = message.document;
+    if (!response || message.evidenceExpired || !response.referenced_citations.includes(evidence.label) ||
+      !/^doc_[0-9a-f]{64}$/.test(evidence.document_id) || !/^[0-9a-f]{64}$/.test(response.document_manifest_hash) ||
+      (evidence.page_number !== null && (!Number.isSafeInteger(evidence.page_number) || evidence.page_number < 1))) return;
+    const query = new URLSearchParams({ manifest_hash: response.document_manifest_hash });
+    if (evidence.page_number !== null) query.set("page", String(evidence.page_number));
+    navigate(`/documents/view/${evidence.document_id}?${query.toString()}`, {
+      state: {
+        returnTo: `${location.pathname}${location.search}`,
+        returnFocusId: "chat-question",
+        citation: { label: evidence.label, page: evidence.page_number },
+      },
+    });
+  };
+
+  useEffect(() => {
+    if (!visible || !location.state || typeof location.state !== "object") return;
+    if ((location.state as { restoreFocusId?: unknown }).restoreFocusId === "chat-question") textarea.current?.focus();
+  }, [visible, location.key, location.state]);
+
+  useEffect(() => {
+    if (!drawerMessage || !activeEvidence) return;
+    document.getElementById(`evidence-${drawerMessage.id}-${activeEvidence}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [drawerMessage, activeEvidence]);
+
   async function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const normalized = question.trim();
@@ -292,6 +318,9 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     }
   }
 
+  const evidenceMessage = drawerMessage;
+  const evidenceResponse = evidenceMessage?.document;
+
   return <div className={`chat-workspace${drawerMessage ? " chat-workspace--with-evidence" : ""}`}>
     <section className="chat-main" aria-label="Conversation">
       <header className="chat-heading">
@@ -345,7 +374,7 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
         </div> : messages.map((message) => <article className={`chat-message chat-message--${message.role}${message.error ? " chat-message--error" : ""}`} key={message.id}>
           <div className="chat-message__meta"><span className={`chat-avatar chat-avatar--${message.mode}`} aria-hidden="true">{message.role === "user" ? "Y" : "R"}</span><strong>{message.role === "user" ? "You" : "RAG-PDF"}</strong><span>{message.mode === "general" ? "General Chat" : "Document Chat"}</span></div>
           <div className="chat-message__body">
-            {message.document && message.document.outcome === "answered" ? <p>{citationSegments(message.text, message.document, (label) => openEvidence(message, label))}</p> : <p>{message.text}</p>}
+            {message.document && message.document.outcome === "answered" ? <p>{citationSegments(message.text, message.document, message.id, (label) => openEvidence(message, label))}</p> : <p>{message.text}</p>}
             {message.evidenceExpired ? <p className="chat-note">Evidence expired after reload. Ask again to retrieve current sources.</p> : null}
             {message.document && message.document.index_fingerprint !== selection?.selection?.index_fingerprint ? <p className="chat-note">Sources belong to the index used for this answer.</p> : null}
             {message.document?.model_reported_insufficient_evidence ? <p className="chat-note">The configured model reported that the supplied evidence was insufficient.</p> : null}
@@ -371,22 +400,24 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
       <p className="chat-footnote">{mode === "general" ? "General Chat is not document-grounded." : "PDF questions use the selected index."} Conversations stay in this browser tab session. Evidence is not saved across reloads.</p>
     </section>
 
-    {drawerMessage?.document ? <>
+    {evidenceMessage && evidenceResponse ? <>
       <button className="evidence-scrim" aria-label="Close evidence" onClick={() => { setDrawerMessage(null); releaseImages(); }} />
       <aside className="evidence-drawer" aria-label="Document evidence">
         <header><div><span className="chat-kicker">SOURCE MATERIAL</span><h2>Evidence</h2></div><button type="button" aria-label="Close evidence" onClick={() => { setDrawerMessage(null); releaseImages(); }}>×</button></header>
         <p className="evidence-disclaimer">These are the passages and images returned for this question. A citation identifies supplied evidence, not a factuality guarantee.</p>
         <div className="evidence-list">
-          {drawerMessage.document.text_evidence.map((item) => <article key={item.label} className={`evidence-item${activeEvidence === item.label ? " is-selected" : ""}`} id={`evidence-${drawerMessage.id}-${item.label}`}>
+          {evidenceResponse.text_evidence.map((item) => <article key={item.label} className={`evidence-item${activeEvidence === item.label ? " is-selected" : ""}`} id={`evidence-${evidenceMessage.id}-${item.label}`}>
             <div className="evidence-item__top"><strong>{item.label}</strong><span>{item.source_path} · {pageName(item.page_number)}</span></div><p>{item.passage}</p>
             {item.truncated ? <small>Passage shortened for the answer context</small> : null}
+            {evidenceResponse.referenced_citations.includes(item.label) ? <button className="evidence-open-document" type="button" onClick={() => openDocument(evidenceMessage, item)}>Open in document</button> : null}
           </article>)}
-          {drawerMessage.document.image_evidence.map((item) => {
-            const key = `${drawerMessage.id}:${item.label}`;
-            return <figure key={item.label} className={`evidence-item evidence-item--image${activeEvidence === item.label ? " is-selected" : ""}`} id={`evidence-${drawerMessage.id}-${item.label}`}>
+          {evidenceResponse.image_evidence.map((item) => {
+            const key = `${evidenceMessage.id}:${item.label}`;
+            return <figure key={item.label} className={`evidence-item evidence-item--image${activeEvidence === item.label ? " is-selected" : ""}`} id={`evidence-${evidenceMessage.id}-${item.label}`}>
               <div className="evidence-item__top"><strong>{item.label}</strong><span>{item.source_path} · {pageName(item.page_number)}</span></div>
               {imageUrls[key] ? <img src={imageUrls[key]} alt={item.caption || `Retrieved image ${item.label}`} /> : <div className="evidence-image-state" role="status">{imageErrors[key] ? "Image evidence is unavailable or expired." : "Loading authenticated image evidence…"}</div>}
               {item.caption ? <figcaption>{item.caption}</figcaption> : null}
+              {evidenceResponse.referenced_citations.includes(item.label) ? <button className="evidence-open-document" type="button" onClick={() => openDocument(evidenceMessage, item)}>Open in document</button> : null}
             </figure>;
           })}
         </div>

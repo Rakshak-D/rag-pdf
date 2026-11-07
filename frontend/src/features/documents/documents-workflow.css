@@ -38,15 +38,18 @@
 .documents-page .documents-table { width: 100%; min-width: 0; border-collapse: collapse; table-layout: fixed; }
 .documents-page .documents-table th, .documents-page .documents-table td { padding: 16px 4px; border-bottom: 1px solid var(--line); background: transparent; font-size: 12px; color: var(--muted); vertical-align: top; }
 .documents-page .documents-table thead th { padding-top: 0; font-weight: 500; text-align: left; color: var(--muted); font-size: 11px; text-transform: none; letter-spacing: 0; }
-.documents-page .documents-table th:first-child { width: 59%; min-width: 0; }
-.documents-page .documents-table th:nth-child(2) { width: 17%; }
-.documents-page .documents-table th:last-child { width: 24%; }
+.documents-page .documents-table th:first-child { width: 45%; min-width: 0; }
+.documents-page .documents-table th:nth-child(2) { width: 14%; }
+.documents-page .documents-table th:nth-child(3) { width: 22%; }
+.documents-page .documents-table th:last-child { width: 19%; }
 .documents-page .document-row-name { display: flex; gap: 12px; align-items: start; }
 .document-row-name > div { min-width: 0; }
 .documents-page .document-filename { display: block; color: var(--ink); font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .documents-page .document-row-name details { margin-top: 7px; font-weight: normal; font-size: 11px; }
 .documents-page .document-hash { white-space: normal; overflow-wrap: anywhere; word-break: break-all; display: block; max-width: 100%; margin-top: 8px; }
 .documents-page .document-source-state { color: var(--success); background: none; padding: 0; font-size: 11px; white-space: normal; }
+.documents-page .document-preview-link { display: inline-flex; min-height: 34px; align-items: center; padding: 5px 9px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.documents-page .document-preview-link:hover { background: var(--accent-soft); }
 .documents-page .documents-library-note { margin: 20px 0 0; font-size: 12px; color: var(--muted); }
 .documents-page .documents-empty { padding: 32px 0; color: var(--muted); }
 .documents-empty h3 { color: var(--ink); font: 24px var(--display); margin: 0 0 10px; }

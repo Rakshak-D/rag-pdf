@@ -12,6 +12,7 @@ import type {
   BootstrapInventoryPage,
   BootstrapInventoryRequest,
   BootstrapDocumentImportResponse,
+  BootstrapDocumentContent,
   BootstrapDocumentRecord,
   BootstrapDocumentsResponse,
   BootstrapJobEnvelope,
@@ -314,6 +315,47 @@ async function parseJson(response: Response): Promise<unknown> {
   } catch {
     throw new ApiError("malformed_response", "malformed_response", response.status);
   }
+}
+
+async function readBoundedBytes(response: Response, maximumBytes: number): Promise<Uint8Array> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > maximumBytes)) {
+    throw new ApiError("malformed_response", "document_response_too_large", response.status);
+  }
+  if (!response.body) malformed(response.status);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maximumBytes) {
+        await reader.cancel();
+        throw new ApiError("malformed_response", "document_response_too_large", response.status);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (declared !== null && Number(declared) !== total) malformed(response.status);
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
+
+async function boundedJsonError(response: Response): Promise<never> {
+  if (!(response.headers.get("content-type") ?? "").toLowerCase().includes("application/json")) {
+    throw new ApiError("non_json", "bootstrap_proxy_unavailable", response.status);
+  }
+  const bytes = await readBoundedBytes(response, 64 * 1024);
+  let payload: unknown;
+  try { payload = JSON.parse(new TextDecoder().decode(bytes)) as unknown; }
+  catch { throw new ApiError("malformed_response", "malformed_response", response.status); }
+  throw new ApiError("http", errorCode(payload) ?? "http_error", response.status);
 }
 
 function errorCode(payload: unknown): string | null {
@@ -892,6 +934,57 @@ export class BootstrapApiClient {
     );
     if (!isBootstrapDocuments(value, limit, offset)) malformed();
     return value;
+  }
+
+  async getDocumentContent(
+    documentId: string,
+    manifestHash: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<BootstrapDocumentContent> {
+    const maximumBytes = 16 * 1024 * 1024;
+    if (!/^doc_[0-9a-f]{64}$/.test(documentId) || !/^[0-9a-f]{64}$/.test(manifestHash)) {
+      throw new ApiError("malformed_response", "document_identity_invalid");
+    }
+    const headers = new Headers({ Accept: "application/pdf" });
+    if (!this.localGateway) {
+      if (!this.token) throw new ApiError("http", "authentication_required", 401);
+      headers.set("Authorization", `Bearer ${this.token}`);
+    }
+    const query = new URLSearchParams({ manifest_hash: manifestHash });
+    let response: Response;
+    try {
+      response = await this.fetcher(
+        `${this.prefix}/v1/bootstrap/documents/${documentId}/content?${query.toString()}`,
+        { method: "GET", headers, ...(options.signal ? { signal: options.signal } : {}) },
+      );
+    } catch {
+      if (options.signal?.aborted) throw new ApiError("network", "request_aborted");
+      throw new ApiError("network", "bootstrap_proxy_unavailable");
+    }
+    if (!response.ok) await boundedJsonError(response);
+    if (response.status !== 200 || (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() !== "application/pdf" ||
+      response.headers.get("cache-control")?.toLowerCase() !== "no-store" || response.headers.get("x-content-type-options")?.toLowerCase() !== "nosniff") {
+      throw new ApiError("malformed_response", "document_response_invalid", response.status);
+    }
+    const responseId = response.headers.get("x-rag-document-id");
+    const responseDigest = response.headers.get("x-rag-document-sha256");
+    const responseManifest = response.headers.get("x-rag-manifest-hash");
+    const encodedName = response.headers.get("x-rag-document-name");
+    const pageCountText = response.headers.get("x-rag-page-count");
+    let documentName = "";
+    try { documentName = encodedName ? decodeURIComponent(encodedName) : ""; } catch { malformed(response.status); }
+    const pageCount = pageCountText && /^\d{1,3}$/.test(pageCountText) ? Number(pageCountText) : 0;
+    if (responseId !== documentId || responseManifest !== manifestHash || !responseDigest || !/^[0-9a-f]{64}$/.test(responseDigest) ||
+      !documentName || documentName.length > 1024 || documentName.startsWith("/") || documentName.includes("\\") ||
+      documentName.split("/").some(part => !part || part === "." || part === "..") || /[\u0000-\u001f\u007f]/.test(documentName) ||
+      !Number.isInteger(pageCount) || pageCount < 1 || pageCount > 200) {
+      throw new ApiError("malformed_response", "document_response_identity_invalid", response.status);
+    }
+    const bytes = await readBoundedBytes(response, maximumBytes);
+    if (bytes.byteLength < 5 || new TextDecoder("ascii").decode(bytes.subarray(0, 5)) !== "%PDF-") {
+      throw new ApiError("malformed_response", "document_pdf_invalid", response.status);
+    }
+    return { document_id: responseId, manifest_hash: responseManifest, document_name: documentName, page_count: pageCount, bytes };
   }
 
   async uploadDocument(file: File, options: { signal?: AbortSignal } = {}): Promise<BootstrapDocumentImportResponse> {

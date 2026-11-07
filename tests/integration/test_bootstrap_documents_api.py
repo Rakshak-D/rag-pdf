@@ -83,6 +83,123 @@ def test_document_inventory_returns_real_manifest_pages(tmp_path):
     assert first.json()["manifest_hash"] == second.json()["manifest_hash"] == manifest.content_hash
 
 
+def test_authenticated_document_content_is_manifest_bound_and_has_safe_headers(tmp_path):
+    runtime, source, *_ = _document_fixture(tmp_path)
+    pdf_bytes = _pdf(pages=3)
+    (source / "research note.pdf").write_bytes(pdf_bytes)
+    manifest = build_document_manifest(source)
+    entry = manifest.entries[0]
+    url = f"/api/v1/bootstrap/documents/{entry.document_id}/content?manifest_hash={manifest.content_hash}"
+
+    with TestClient(runtime.app) as client:
+        unauthorized = client.get(url)
+        response = client.get(url, headers=_headers())
+        stale = client.get(
+            f"/api/v1/bootstrap/documents/{entry.document_id}/content?manifest_hash={'0' * 64}",
+            headers=_headers(),
+        )
+        malformed = client.get(
+            f"/api/v1/bootstrap/documents/not-a-document/content?manifest_hash={manifest.content_hash}",
+            headers=_headers(),
+        )
+        missing = client.get(
+            f"/api/v1/bootstrap/documents/doc_{'f' * 64}/content?manifest_hash={manifest.content_hash}",
+            headers=_headers(),
+        )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 200
+    assert response.content == pdf_bytes
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-security-policy"] == "default-src 'none'; sandbox"
+    assert response.headers["x-rag-document-id"] == entry.document_id
+    assert response.headers["x-rag-document-sha256"] == entry.sha256
+    assert response.headers["x-rag-manifest-hash"] == manifest.content_hash
+    assert response.headers["x-rag-document-name"] == "research%20note.pdf"
+    assert response.headers["x-rag-page-count"] == "3"
+    assert str(tmp_path) not in response.headers["x-rag-document-name"]
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "document_manifest_changed"
+    assert malformed.status_code == 400 and malformed.json()["error"]["code"] == "document_id_invalid"
+    assert missing.status_code == 404 and missing.json()["error"]["code"] == "document_not_found"
+
+
+def test_document_content_rejects_source_changes_ranges_and_build_contention(tmp_path):
+    runtime, source, *_ = _document_fixture(tmp_path, limit=1024 * 1024)
+    pdf_bytes = _pdf()
+    document_path = source / "source.pdf"
+    document_path.write_bytes(pdf_bytes)
+    manifest = build_document_manifest(source)
+    entry = manifest.entries[0]
+    url = f"/api/v1/bootstrap/documents/{entry.document_id}/content?manifest_hash={manifest.content_hash}"
+
+    with TestClient(runtime.app) as client:
+        with runtime.app.state.bootstrap_job_manager.source_mutation():
+            busy = client.get(url, headers=_headers())
+        ranged = client.get(url, headers={**_headers(), "Range": "bytes=0-10"})
+        document_path.write_bytes(_pdf(pages=2))
+        changed = client.get(url, headers=_headers())
+
+    assert busy.status_code == 409 and busy.json()["error"]["code"] == "document_source_busy"
+    assert ranged.status_code == 416 and ranged.json()["error"]["code"] == "document_range_unsupported"
+    assert changed.status_code == 409 and changed.json()["error"]["code"] == "document_manifest_changed"
+
+
+def test_document_content_rejects_symlinked_sources_and_oversized_pdfs(tmp_path):
+    runtime, source, *_ = _document_fixture(tmp_path, limit=1024)
+    pdf_bytes = _pdf()
+    document_path = source / "large.pdf"
+    document_path.write_bytes(pdf_bytes + b"\n%" + b"x" * 2048)
+    manifest = build_document_manifest(source)
+    entry = manifest.entries[0]
+    url = f"/api/v1/bootstrap/documents/{entry.document_id}/content?manifest_hash={manifest.content_hash}"
+
+    with TestClient(runtime.app) as client:
+        oversized = client.get(url, headers=_headers())
+    assert oversized.status_code == 413
+    assert oversized.json()["error"]["code"] == "document_too_large"
+
+    target = tmp_path / "outside.pdf"
+    target.write_bytes(pdf_bytes)
+    link = source / "linked.pdf"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not available for this test account")
+    with TestClient(runtime.app) as client:
+        linked = client.get(url, headers=_headers())
+    assert linked.status_code in {400, 503}
+
+
+def test_document_content_rejects_non_pdf_bytes_and_race_replacement(tmp_path, monkeypatch):
+    runtime, source, *_ = _document_fixture(tmp_path)
+    invalid_path = source / "not a pdf.pdf"
+    invalid_path.write_bytes(b"not a PDF document")
+    manifest = build_document_manifest(source)
+    entry = manifest.entries[0]
+    url = f"/api/v1/bootstrap/documents/{entry.document_id}/content?manifest_hash={manifest.content_hash}"
+    with TestClient(runtime.app) as client:
+        invalid = client.get(url, headers=_headers())
+    assert invalid.status_code == 400 and invalid.json()["error"]["code"] == "document_invalid"
+
+    (source / "not a pdf.pdf").unlink()
+    valid_path = source / "stable.pdf"
+    valid_path.write_bytes(_pdf())
+    stable_manifest = build_document_manifest(source)
+    stable_entry = stable_manifest.entries[0]
+    original_reader = documents_service._read_open_file
+
+    def replace_after_manifest(root, current_entry, maximum_bytes):
+        valid_path.write_bytes(_pdf(pages=2))
+        return original_reader(root, current_entry, maximum_bytes)
+
+    monkeypatch.setattr(documents_service, "_read_open_file", replace_after_manifest)
+    with pytest.raises(documents_service.BootstrapDocumentError) as error:
+        documents_service.read_document_content(source, stable_entry.document_id, stable_manifest.content_hash)
+    assert error.value.code == "document_changed"
+
+
 def test_valid_import_uses_manifest_identity_survives_restart_and_previews(tmp_path):
     def forbid_builder():
         pytest.fail("document import and preview must not construct an index adapter")

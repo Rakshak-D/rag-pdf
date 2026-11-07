@@ -9,11 +9,12 @@ from pathlib import Path
 import re
 import sqlite3
 from typing import Any, Literal
+from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from backend.api.experiments import ApiRequestError, _read_json, _response_error
@@ -31,6 +32,7 @@ from backend.services.bootstrap_documents import (
     BootstrapDocumentError,
     import_pdf,
     list_documents,
+    read_document_content,
 )
 from backend.services.index_inventory import IndexInventoryInputError
 
@@ -432,6 +434,47 @@ async def list_documents_route(request: Request) -> JSONResponse:
         return _map_bootstrap_error(exc)
 
 
+async def document_content_route(request: Request) -> Response:
+    """Serve one bounded PDF only when its current source manifest matches."""
+
+    try:
+        _trusted_state(request)
+        source, _storage = _trusted_roots(request)
+        document_id = request.path_params.get("document_id", "")
+        manifest_values = request.query_params.getlist("manifest_hash")
+        if len(manifest_values) != 1 or len(request.query_params) != 1:
+            raise BootstrapDocumentError("document_manifest_invalid", 400)
+        if request.headers.get("range") is not None or request.headers.get("if-range") is not None:
+            raise BootstrapDocumentError("document_range_unsupported", 416)
+        settings = request.app.state.bootstrap_settings
+        with _manager(request).source_mutation():
+            item = await run_in_threadpool(
+                read_document_content,
+                source,
+                document_id,
+                manifest_values[0],
+                maximum_bytes=min(settings.max_request_body_bytes, 16 * 1024 * 1024),
+            )
+        response = Response(item.content, media_type="application/pdf")
+        response.headers.update({
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "X-Frame-Options": "DENY",
+            "Content-Disposition": 'inline; filename="document.pdf"',
+            "X-RAG-Document-ID": item.entry.document_id,
+            "X-RAG-Document-SHA256": item.entry.sha256,
+            "X-RAG-Manifest-Hash": item.manifest_hash,
+            "X-RAG-Document-Name": quote(item.entry.relative_path, safe="/"),
+            "X-RAG-Page-Count": str(item.page_count),
+        })
+        return response
+    except Exception as exc:
+        return _map_bootstrap_error(exc)
+
+
 async def import_document_route(request: Request) -> JSONResponse:
     try:
         _trusted_state(request)
@@ -611,7 +654,7 @@ def _map_bootstrap_error(exc: BaseException) -> JSONResponse:
             return _response_error(code, 409 if code != "job_input_invalid" else 400)
         if code in {"manager_not_accepting", "job_store_unavailable", "job_admission_failed", "bootstrap_instance_owned", "bootstrap_ownership_unavailable"}:
             return _response_error(code, 503)
-        if code == "source_mutation_active":
+        if code in {"source_mutation_active", "source_build_active"}:
             return _response_error("document_source_busy", 409)
         if code == "job_schema_unsupported":
             return _response_error(code, 503)
@@ -629,6 +672,7 @@ def build_bootstrap_routes() -> list[Route]:
         Route("/api/v1/bootstrap/configuration", configuration, methods=["GET"]),
         Route("/api/v1/bootstrap/documents", list_documents_route, methods=["GET"]),
         Route("/api/v1/bootstrap/documents", import_document_route, methods=["POST"]),
+        Route("/api/v1/bootstrap/documents/{document_id}/content", document_content_route, methods=["GET"]),
         Route("/api/v1/bootstrap/preview", preview, methods=["POST"]),
         Route("/api/v1/bootstrap/index-inventory", index_inventory, methods=["POST"]),
         Route("/api/v1/bootstrap/jobs", submit_job, methods=["POST"]),

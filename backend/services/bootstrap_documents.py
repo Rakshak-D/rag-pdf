@@ -7,6 +7,7 @@ import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import tempfile
 from typing import AsyncIterable
 
@@ -26,7 +27,10 @@ MAX_DOCUMENT_PAGES = 200
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
 MAX_OFFSET = 1_000_000
+MAX_VIEWER_BYTES = 16 * 1024 * 1024
 _FILENAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _().-]{0,114}\.pdf\Z", re.ASCII)
+_DOCUMENT_ID_RE = re.compile(r"doc_[0-9a-f]{64}\Z", re.ASCII)
+_MANIFEST_HASH_RE = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
 _WINDOWS_RESERVED_STEMS = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
@@ -55,6 +59,14 @@ class DocumentImportResult:
     error_code: str | None
 
 
+@dataclass(frozen=True)
+class DocumentContent:
+    entry: DocumentManifestEntry
+    manifest_hash: str
+    page_count: int
+    content: bytes
+
+
 def validate_filename(value: object) -> str:
     """Accept a short ASCII basename with a lowercase .pdf suffix only."""
     if not isinstance(value, str) or len(value) > 120 or not _FILENAME_RE.fullmatch(value):
@@ -73,7 +85,7 @@ def _validate_source_root(value: str | Path) -> Path:
     try:
         for part in root.parts[1:]:
             current = current / part
-            if current.is_symlink():
+            if current.is_symlink() or _is_reparse_point(current):
                 raise BootstrapDocumentError("document_source_unavailable", 503)
         resolved = root.resolve(strict=True)
         if not resolved.is_dir() or os.path.normcase(str(resolved)) != os.path.normcase(str(root)):
@@ -83,6 +95,199 @@ def _validate_source_root(value: str | Path) -> Path:
     except OSError as exc:
         raise BootstrapDocumentError("document_source_unavailable", 503) from exc
     return resolved
+
+
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def _relative_parts(value: str) -> tuple[str, ...]:
+    relative = PurePosixPath(value)
+    if (not value or str(relative) != value or relative.is_absolute() or "\\" in value or
+            any(part in {"", ".", ".."} for part in relative.parts)):
+        raise BootstrapDocumentError("document_unavailable", 404)
+    return relative.parts
+
+
+def _open_posix_manifest_file(source: Path, parts: tuple[str, ...]) -> int:
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+    if not directory_flag or not nofollow_flag or os.open not in getattr(os, "supports_dir_fd", set()):
+        raise BootstrapDocumentError("document_source_unavailable", 503)
+    current = os.open(source, os.O_RDONLY | directory_flag | nofollow_flag)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | directory_flag | nofollow_flag, dir_fd=current)
+            os.close(current)
+            current = child
+        return os.open(parts[-1], os.O_RDONLY | nofollow_flag | getattr(os, "O_NONBLOCK", 0) |
+                       getattr(os, "O_BINARY", 0), dir_fd=current)
+    finally:
+        os.close(current)
+
+
+def _windows_final_path(handle: int) -> str:
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_final = kernel32.GetFinalPathNameByHandleW
+    get_final.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32]
+    get_final.restype = ctypes.c_uint32
+    required = get_final(ctypes.c_void_p(handle), None, 0, 0)
+    if not 1 <= required <= 32768:
+        raise BootstrapDocumentError("document_unavailable", 404)
+    buffer = ctypes.create_unicode_buffer(required + 1)
+    written = get_final(ctypes.c_void_p(handle), buffer, len(buffer), 0)
+    if not 1 <= written < len(buffer):
+        raise BootstrapDocumentError("document_unavailable", 404)
+    value = buffer.value
+    if value.startswith("\\\\?\\UNC\\"):
+        value = "\\\\" + value[8:]
+    elif value.startswith("\\\\?\\"):
+        value = value[4:]
+    return os.path.normcase(os.path.abspath(value)).rstrip("\\/")
+
+
+def _open_windows_manifest_file(source: Path, parts: tuple[str, ...]) -> int:
+    import ctypes
+    import msvcrt
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+                            ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    create_file.restype = ctypes.c_void_p
+    handle = create_file(str(source.joinpath(*parts)), 0x80000000, 0x00000001, None,
+                         3, 0x00200000 | 0x08000000, None)  # GENERIC_READ; share-read; OPEN_EXISTING; OPEN_REPARSE_POINT | SEQUENTIAL_SCAN
+    invalid = ctypes.c_void_p(-1).value
+    if handle in (None, invalid):
+        error = ctypes.get_last_error()
+        if error in {2, 3}:
+            raise BootstrapDocumentError("document_unavailable", 404)
+        raise BootstrapDocumentError("document_source_unavailable", 503)
+    try:
+        class FileTime(ctypes.Structure):
+            _fields_ = [("low", ctypes.c_uint32), ("high", ctypes.c_uint32)]
+
+        class FileInformation(ctypes.Structure):
+            _fields_ = [("attributes", ctypes.c_uint32), ("creation", FileTime), ("access", FileTime),
+                        ("write", FileTime), ("size_high", ctypes.c_uint32), ("size_low", ctypes.c_uint32),
+                        ("links", ctypes.c_uint32), ("volume", ctypes.c_uint32),
+                        ("index_high", ctypes.c_uint32), ("index_low", ctypes.c_uint32)]
+
+        get_info = kernel32.GetFileInformationByHandle
+        get_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(FileInformation)]
+        get_info.restype = ctypes.c_int
+        get_type = kernel32.GetFileType
+        get_type.argtypes = [ctypes.c_void_p]
+        get_type.restype = ctypes.c_uint32
+        info = FileInformation()
+        if not get_info(handle, ctypes.byref(info)) or get_type(handle) != 1:  # FILE_TYPE_DISK
+            raise BootstrapDocumentError("document_source_unavailable", 503)
+        if info.attributes & (0x10 | 0x400):  # directory or reparse point
+            raise BootstrapDocumentError("document_unavailable", 404)
+        expected = os.path.normcase(os.path.abspath(str(source.joinpath(*parts)))).rstrip("\\/")
+        if _windows_final_path(handle) != expected:
+            raise BootstrapDocumentError("document_unavailable", 404)
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+        handle = None
+        return descriptor
+    finally:
+        if handle not in (None, invalid):
+            kernel32.CloseHandle(ctypes.c_void_p(handle))
+
+
+def _read_open_file(source: Path, entry: DocumentManifestEntry, maximum_bytes: int) -> bytes:
+    parts = _relative_parts(entry.relative_path)
+    for index, _part in enumerate(parts[:-1], start=1):
+        candidate = source.joinpath(*parts[:index])
+        if candidate.is_symlink() or _is_reparse_point(candidate):
+            raise BootstrapDocumentError("document_unavailable", 404)
+    if os.name == "nt":
+        descriptor = _open_windows_manifest_file(source, parts)
+    elif os.name == "posix":
+        try:
+            descriptor = _open_posix_manifest_file(source, parts)
+        except FileNotFoundError as exc:
+            raise BootstrapDocumentError("document_unavailable", 404) from exc
+        except OSError as exc:
+            if getattr(exc, "errno", None) in {getattr(os, "ELOOP", 40), 40}:
+                raise BootstrapDocumentError("document_unavailable", 404) from exc
+            raise BootstrapDocumentError("document_source_unavailable", 503) from exc
+    else:
+        raise BootstrapDocumentError("document_source_unavailable", 503)
+
+    try:
+        with os.fdopen(descriptor, "rb", closefd=True) as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise BootstrapDocumentError("document_unavailable", 404)
+            if before.st_size < 1 or before.st_size > maximum_bytes:
+                raise BootstrapDocumentError("document_too_large", 413) if before.st_size > maximum_bytes else BootstrapDocumentError("document_invalid", 400)
+            content = stream.read(maximum_bytes + 1)
+            after = os.fstat(stream.fileno())
+            if len(content) > maximum_bytes:
+                raise BootstrapDocumentError("document_too_large", 413)
+            stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+            if any(getattr(before, field, None) != getattr(after, field, None) for field in stable_fields):
+                raise BootstrapDocumentError("document_changed", 409)
+            if len(content) != entry.size_bytes or hashlib.sha256(content).hexdigest() != entry.sha256:
+                raise BootstrapDocumentError("document_changed", 409)
+            if not content.startswith(b"%PDF-"):
+                raise BootstrapDocumentError("document_invalid", 400)
+            return content
+    except BootstrapDocumentError:
+        raise
+    except OSError as exc:
+        raise BootstrapDocumentError("document_unavailable", 404) from exc
+
+
+def read_document_content(
+    source_root: str | Path,
+    document_id: str,
+    expected_manifest_hash: str,
+    *,
+    maximum_bytes: int = MAX_VIEWER_BYTES,
+) -> DocumentContent:
+    """Read one unchanged PDF selected by its current manifest identity."""
+
+    if not isinstance(document_id, str) or not _DOCUMENT_ID_RE.fullmatch(document_id):
+        raise BootstrapDocumentError("document_id_invalid", 400)
+    if not isinstance(expected_manifest_hash, str) or not _MANIFEST_HASH_RE.fullmatch(expected_manifest_hash):
+        raise BootstrapDocumentError("document_manifest_invalid", 400)
+    if isinstance(maximum_bytes, bool) or not isinstance(maximum_bytes, int) or not 1 <= maximum_bytes <= MAX_VIEWER_BYTES:
+        raise BootstrapDocumentError("document_view_limit_invalid", 503)
+    source = _validate_source_root(source_root)
+    manifest = _check_manifest(source)
+    if manifest.content_hash != expected_manifest_hash:
+        raise BootstrapDocumentError("document_manifest_changed", 409)
+    entry = next((item for item in manifest.entries if item.document_id == document_id), None)
+    if entry is None:
+        raise BootstrapDocumentError("document_not_found", 404)
+    if entry.size_bytes > maximum_bytes:
+        raise BootstrapDocumentError("document_too_large", 413)
+    content = _read_open_file(source, entry, maximum_bytes)
+    try:
+        import pymupdf
+
+        document = pymupdf.open(stream=content, filetype="pdf")
+        try:
+            if not document.is_pdf or document.is_encrypted or document.needs_pass:
+                raise BootstrapDocumentError("document_invalid", 400)
+            pages = document.page_count
+            if not 1 <= pages <= MAX_DOCUMENT_PAGES:
+                raise BootstrapDocumentError("document_invalid", 400)
+        finally:
+            document.close()
+    except BootstrapDocumentError:
+        raise
+    except Exception as exc:
+        raise BootstrapDocumentError("document_invalid", 400) from exc
+    return DocumentContent(entry=entry, manifest_hash=manifest.content_hash, page_count=pages, content=content)
 
 
 def _check_manifest(source: Path):

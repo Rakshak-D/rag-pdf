@@ -12,7 +12,7 @@ import ipaddress
 import os
 import re
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote_to_bytes, urlsplit
 
 import httpx
 from starlette.applications import Starlette
@@ -24,6 +24,8 @@ from starlette.routing import Route
 
 _MAX_REQUEST_BYTES = 24 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+_MAX_PDF_RESPONSE_BYTES = 16 * 1024 * 1024
+_MAX_PDF_ERROR_BYTES = 64 * 1024
 _JSON_TYPES = {"application/json", "application/problem+json"}
 _IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp"}
 _ORDINARY_EXACT: dict[str, set[str]] = {
@@ -64,6 +66,7 @@ _BOOTSTRAP_EXACT: dict[str, set[str]] = {
 }
 _BOOTSTRAP_DYNAMIC = (
     (re.compile(r"^/api/v1/bootstrap/jobs/[0-9a-f-]{36}$"), {"GET"}),
+    (re.compile(r"^/api/v1/bootstrap/documents/doc_[0-9a-f]{64}/content$"), {"GET"}),
 )
 _FORWARDED_REQUEST_HEADERS = ("accept", "content-type", "x-document-filename")
 
@@ -206,6 +209,36 @@ def _allowed(mapping: dict[str, set[str]], dynamic: tuple[tuple[re.Pattern[str],
     return any(method in methods and pattern.fullmatch(path) is not None for pattern, methods in dynamic)
 
 
+_PDF_SOURCE_PATH = re.compile(r"^/api/v1/bootstrap/documents/(doc_[0-9a-f]{64})/content$", re.ASCII)
+_SHA256 = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
+_ENCODED_RELATIVE_NAME = re.compile(r"^(?:[A-Za-z0-9_.~/-]|%[0-9A-Fa-f]{2}){1,1024}$", re.ASCII)
+
+
+def _pdf_route_identity(request: Request, upstream_path: str) -> tuple[str, str] | None:
+    match = _PDF_SOURCE_PATH.fullmatch(upstream_path)
+    if match is None or request.method != "GET":
+        return None
+    query = request.query_params.multi_items()
+    if (len(query) != 1 or query[0][0] != "manifest_hash" or
+            not _SHA256.fullmatch(query[0][1])):
+        return None
+    return match.group(1), query[0][1]
+
+
+def _encoded_relative_name_valid(value: str) -> bool:
+    if not _ENCODED_RELATIVE_NAME.fullmatch(value):
+        return False
+    try:
+        decoded = unquote_to_bytes(value).decode("utf-8", errors="strict")
+    except (UnicodeDecodeError, ValueError):
+        return False
+    parts = decoded.split("/")
+    return (bool(decoded) and len(decoded) <= 1024 and quote(decoded, safe="/") == value and
+            not decoded.startswith("/") and "\\" not in decoded and
+            not any(part in {"", ".", ".."} for part in parts) and
+            not any(ord(char) < 32 or ord(char) == 127 for char in decoded))
+
+
 class _GatewayProxy:
     def __init__(self, settings: LocalGatewaySettings, *, client_factory=None) -> None:
         self.settings = settings
@@ -227,6 +260,7 @@ class _GatewayProxy:
         if not _path_is_safe(request):
             return _error("gateway_path_rejected", 400)
         path = request.url.path
+        pdf_identity: tuple[str, str] | None = None
         if role == "ordinary":
             if not _allowed(_ORDINARY_EXACT, _ORDINARY_DYNAMIC, path, request.method):
                 return _error("gateway_route_rejected", 404)
@@ -239,6 +273,12 @@ class _GatewayProxy:
             upstream_path = "/health" if path == "/bootstrap-api/health" else f"/api{path.removeprefix('/bootstrap-api')}"
             if not _allowed(_BOOTSTRAP_EXACT, _BOOTSTRAP_DYNAMIC, upstream_path, request.method):
                 return _error("gateway_route_rejected", 404)
+            if _PDF_SOURCE_PATH.fullmatch(upstream_path):
+                pdf_identity = _pdf_route_identity(request, upstream_path)
+                if pdf_identity is None:
+                    return _error("gateway_route_rejected", 404)
+                if request.headers.get("range") is not None or request.headers.get("if-range") is not None:
+                    return _error("document_range_unsupported", 416)
             target = self.settings.bootstrap_target
             token = self.settings.bootstrap_token
 
@@ -263,20 +303,56 @@ class _GatewayProxy:
             async with self.client_factory() as client:
                 async with client.stream(request.method, url, headers=headers, content=body) as upstream:
                     media_type = upstream.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-                    if media_type not in _JSON_TYPES | _IMAGE_TYPES:
+                    if pdf_identity is not None:
+                        allowed_pdf_response = media_type == "application/pdf" and upstream.status_code == 200
+                        allowed_pdf_error = media_type in _JSON_TYPES and upstream.status_code >= 400
+                        if not (allowed_pdf_response or allowed_pdf_error):
+                            return _error("gateway_response_type_rejected", 502)
+                        declared_length = upstream.headers.get("content-length")
+                        limit = _MAX_PDF_RESPONSE_BYTES if allowed_pdf_response else _MAX_PDF_ERROR_BYTES
+                        if declared_length is not None and (not declared_length.isdecimal() or int(declared_length) > limit):
+                            return _error("gateway_response_too_large", 502)
+                    elif media_type not in _JSON_TYPES | _IMAGE_TYPES:
                         return _error("gateway_response_type_rejected", 502)
                     result: list[bytes] = []
                     size = 0
                     async for chunk in upstream.aiter_bytes():
                         size += len(chunk)
-                        if size > _MAX_RESPONSE_BYTES:
+                        response_limit = limit if pdf_identity is not None else _MAX_RESPONSE_BYTES
+                        if size > response_limit:
                             return _error("gateway_response_too_large", 502)
                         result.append(chunk)
+                    if pdf_identity is not None and media_type == "application/pdf":
+                        route_document_id, route_manifest = pdf_identity
+                        document_id = upstream.headers.get("x-rag-document-id", "")
+                        document_digest = upstream.headers.get("x-rag-document-sha256", "")
+                        manifest_hash = upstream.headers.get("x-rag-manifest-hash", "")
+                        encoded_name = upstream.headers.get("x-rag-document-name", "")
+                        page_count = upstream.headers.get("x-rag-page-count", "")
+                        try:
+                            page_total = int(page_count)
+                        except ValueError:
+                            page_total = 0
+                        if (document_id != route_document_id or manifest_hash != route_manifest or
+                                not _SHA256.fullmatch(document_digest) or not 1 <= page_total <= 200 or
+                                not _encoded_relative_name_valid(encoded_name)):
+                            return _error("gateway_response_identity_rejected", 502)
                     response = Response(b"".join(result), status_code=upstream.status_code, media_type=media_type)
                     response.headers["Cache-Control"] = "no-store"
                     response.headers["X-Content-Type-Options"] = "nosniff"
                     response.headers["Referrer-Policy"] = "no-referrer"
-                    if media_type in _IMAGE_TYPES:
+                    if media_type == "application/pdf" and pdf_identity is not None:
+                        response.headers.update({
+                            "Content-Security-Policy": "default-src 'none'; sandbox",
+                            "Cross-Origin-Resource-Policy": "same-origin",
+                            "X-Frame-Options": "DENY",
+                            "X-RAG-Document-ID": document_id,
+                            "X-RAG-Document-SHA256": document_digest,
+                            "X-RAG-Manifest-Hash": manifest_hash,
+                            "X-RAG-Document-Name": encoded_name,
+                            "X-RAG-Page-Count": str(page_total),
+                        })
+                    elif media_type in _IMAGE_TYPES:
                         response.headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
                     return response
         except httpx.TimeoutException:

@@ -240,4 +240,20 @@ describe("Documents page", () => {
     expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
   });
 
+  it("opens a library PDF using its real document and manifest identities", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      if (String(input) === "/bootstrap-api/v1/bootstrap/status") return json(status);
+      if (String(input).startsWith("/bootstrap-api/v1/bootstrap/documents?")) return json(inventory([record]));
+      return json({ error: { code: "document_not_found" } }, 404);
+    });
+    stubBootstrapFetch(fetcher);
+    const user = userEvent.setup();
+    const router = mount();
+    await connect(user);
+    await user.click(await screen.findByRole("link", { name: "Preview" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/documents/view/${record.document_id}`));
+    expect(router.state.location.search).toBe(`?manifest_hash=${"a".repeat(64)}&page=1`);
+    expect(await screen.findByRole("alert")).toHaveTextContent("original PDF is no longer available");
+  });
+
 });

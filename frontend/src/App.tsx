@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { BootstrapApiClient, WorkbenchApiClient } from "./api/client";
 import type { BootstrapStatusResponse, CatalogArtifactRecord, ExperimentJobRecord, HealthResponse, RuntimeModelsResponse } from "./api/types";
@@ -24,6 +24,9 @@ import type { GeneralChatPreferences } from "./features/settings/preferences";
 
 type DataState = "disconnected" | "loading" | "ready" | "error";
 const localGateway = import.meta.env.VITE_RAG_LOCAL_GATEWAY === "true";
+const DocumentViewerPage = lazy(() => import("./features/documents/DocumentViewerPage").then((module) => ({
+  default: module.DocumentViewerPage,
+})));
 // This marker represents local gateway access only; it is never a credential.
 const gatewaySessionMarker = "local-gateway-session";
 
@@ -169,7 +172,7 @@ export default function App() {
   useEffect(() => { if (location.pathname === "/documents") setDocumentsVisited(true); }, [location.pathname]);
 
   return <AppShell>
-    {!localGateway && !location.pathname.startsWith("/index-builds") && location.pathname !== "/documents" ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
+    {!localGateway && !location.pathname.startsWith("/index-builds") && !location.pathname.startsWith("/documents") ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
     <div hidden={location.pathname !== "/"}>
       <ChatPage token={token} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onResetUnavailableModel={resetUnavailableChatModel} conversations={conversations} visible={location.pathname === "/"} />
     </div>
@@ -180,6 +183,7 @@ export default function App() {
       <Route path="/" element={null} />
       <Route path="/settings" element={<SettingsPage token={token} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onSave={saveChatPreferences} onResetUnavailableModel={resetUnavailableChatModel} />} />
       <Route path="/documents" element={null} />
+      <Route path="/documents/view/:documentId" element={<Suspense fallback={<p className="pdf-viewer__state" role="status">Loading the PDF viewer…</p>}><DocumentViewerPage token={bootstrapToken} /></Suspense>} />
       <Route path="/artifacts" element={<ArtifactsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/artifacts/:artifactId" element={<ArtifactDetailPage key={location.pathname} client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
       <Route path="/jobs" element={<JobsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />

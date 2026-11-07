@@ -47,6 +47,14 @@ export interface BootstrapDocumentsResponse {
   max_pages: 200;
 }
 
+export interface BootstrapDocumentContent {
+  document_id: string;
+  manifest_hash: string;
+  document_name: string;
+  page_count: number;
+  bytes: Uint8Array;
+}
+
 export interface BootstrapDocumentImportResponse {
   outcome: "imported" | "committed_inventory_unavailable";
   document: BootstrapDocumentRecord;

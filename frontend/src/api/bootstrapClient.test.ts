@@ -42,6 +42,53 @@ function inventoryPage(candidate: Record<string, unknown> = reportCandidate) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("BootstrapApiClient", () => {
+  it("fetches bounded PDF bytes through the bootstrap route and validates document identity", async () => {
+    const documentId = `doc_${"a".repeat(64)}`;
+    const manifestHash = "b".repeat(64);
+    const digest = "c".repeat(64);
+    const pdf = new TextEncoder().encode("%PDF-1.7\nfixture");
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(pdf, { headers: {
+      "Content-Type": "application/pdf", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+      "X-RAG-Document-ID": documentId, "X-RAG-Document-SHA256": digest,
+      "X-RAG-Manifest-Hash": manifestHash, "X-RAG-Document-Name": "notes%20one.pdf", "X-RAG-Page-Count": "2",
+    } }));
+    const result = await new BootstrapApiClient({ token: "bootstrap-only", localGateway: true, fetcher })
+      .getDocumentContent(documentId, manifestHash);
+    expect(result.document_id).toBe(documentId);
+    expect(result.manifest_hash).toBe(manifestHash);
+    expect(result.document_name).toBe("notes one.pdf");
+    expect(result.page_count).toBe(2);
+    expect(new TextDecoder().decode(result.bytes)).toContain("%PDF-");
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe(`/bootstrap-api/v1/bootstrap/documents/${documentId}/content?manifest_hash=${manifestHash}`);
+    expect(init?.method).toBe("GET");
+    expect(new Headers(init?.headers).get("Accept")).toBe("application/pdf");
+    expect(new Headers(init?.headers).has("Authorization")).toBe(false);
+  });
+
+  it("requires a token in direct mode and rejects stale identity, malformed PDF, and oversize responses", async () => {
+    const documentId = `doc_${"a".repeat(64)}`;
+    const manifestHash = "b".repeat(64);
+    const noFetch = vi.fn<typeof fetch>();
+    await expect(new BootstrapApiClient({ fetcher: noFetch, localGateway: false }).getDocumentContent(documentId, manifestHash))
+      .rejects.toMatchObject({ code: "authentication_required", status: 401 });
+    expect(noFetch).not.toHaveBeenCalled();
+
+    const response = (body: BodyInit, headers: Record<string, string> = {}) => new Response(body, { headers: {
+      "Content-Type": "application/pdf", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+      "X-RAG-Document-ID": documentId, "X-RAG-Document-SHA256": "c".repeat(64),
+      "X-RAG-Manifest-Hash": manifestHash, "X-RAG-Document-Name": "notes.pdf", "X-RAG-Page-Count": "1", ...headers,
+    } });
+    const stale = new BootstrapApiClient({ token: "token", localGateway: false, fetcher: vi.fn<typeof fetch>().mockResolvedValue(response("%PDF-1.7", { "X-RAG-Manifest-Hash": "d".repeat(64) })) });
+    await expect(stale.getDocumentContent(documentId, manifestHash)).rejects.toMatchObject({ code: "document_response_identity_invalid" });
+    const invalid = new BootstrapApiClient({ token: "token", localGateway: false, fetcher: vi.fn<typeof fetch>().mockResolvedValue(response("not pdf")) });
+    await expect(invalid.getDocumentContent(documentId, manifestHash)).rejects.toMatchObject({ code: "document_pdf_invalid" });
+    const oversized = new BootstrapApiClient({ token: "token", localGateway: false, fetcher: vi.fn<typeof fetch>().mockResolvedValue(response("%PDF-1.7", { "Content-Length": String(16 * 1024 * 1024 + 1) })) });
+    await expect(oversized.getDocumentContent(documentId, manifestHash)).rejects.toMatchObject({ code: "document_response_too_large" });
+    await expect(new BootstrapApiClient({ token: "secret-token", localGateway: false, fetcher: vi.fn<typeof fetch>().mockResolvedValue(response("%PDF-1.7")) })
+      .getDocumentContent("doc_../private", manifestHash)).rejects.toMatchObject({ code: "document_identity_invalid" });
+  });
+
   it("uses only the bootstrap proxy, authenticates protected calls, and validates status and preview", async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json({ status: "ok", api_version: "v1" }))

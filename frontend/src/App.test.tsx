@@ -376,6 +376,9 @@ describe("chat-first local application", () => {
       if (path === "/api/v1/index/selection") return jsonResponse(selected);
       if (path === "/api/v1/ask") return jsonResponse(askAnswer);
       if (path === "/api/v1/ask/images/" + "a".repeat(32)) return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "image/png" } });
+      if (path.startsWith(`/bootstrap-api/v1/bootstrap/documents/doc_${"d".repeat(64)}/content?`)) {
+        return jsonResponse({ error: { code: "document_unavailable" } }, 404);
+      }
       return jsonResponse({ error: { code: "not_found" } }, 404);
     });
     const create = vi.fn(() => "blob:document-evidence");
@@ -386,7 +389,7 @@ describe("chat-first local application", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     vi.stubGlobal("fetch", fetcher);
-    mount("/?mode=document");
+    const router = mount("/?mode=document");
     expect(await screen.findByText("PDF collection selected")).toBeInTheDocument();
     const input = await screen.findByRole("textbox", { name: "Message" });
     await user.type(input, "What does the figure show?");
@@ -402,7 +405,20 @@ describe("chat-first local application", () => {
     const askCall = fetcher.mock.calls.find(([url]) => String(url) === "/api/v1/ask");
     expect(JSON.parse(String(askCall?.[1]?.body))).toEqual({ question: "What does the figure show?" });
     expect(fetcher.mock.calls.some(([url]) => String(url) === "/api/v1/chat")).toBe(false);
-    await user.click(within(screen.getByRole("complementary", { name: "Document evidence" })).getByRole("button", { name: "Close evidence" }));
+    await user.type(input, "Draft while I inspect the source");
+    const citedPassage = screen.getByText("The figure rises from left to right.").closest("article");
+    expect(citedPassage).not.toBeNull();
+    await user.click(within(citedPassage as HTMLElement).getByRole("button", { name: "Open in document" }));
+    expect(router.state.location.pathname).toBe(`/documents/view/doc_${"d".repeat(64)}`);
+    expect(new URLSearchParams(router.state.location.search).get("manifest_hash")).toBe("b".repeat(64));
+    expect(new URLSearchParams(router.state.location.search).get("page")).toBe("2");
+    expect(await screen.findByRole("alert")).toHaveTextContent("The original PDF is no longer available");
+    const sourceCall = fetcher.mock.calls.find(([url]) => String(url).startsWith("/bootstrap-api/v1/bootstrap/documents/") && String(url).includes("/content?"));
+    expect(sourceCall?.[0]).toBe(`/bootstrap-api/v1/bootstrap/documents/doc_${"d".repeat(64)}/content?manifest_hash=${"b".repeat(64)}`);
+    expect(new Headers(sourceCall?.[1]?.headers).has("Authorization")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Return to previous page" }));
+    expect(await screen.findByRole("button", { name: "[T1]" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Draft while I inspect the source");
     expect(revoke).toHaveBeenCalledWith("blob:document-evidence");
   });
 

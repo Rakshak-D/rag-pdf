@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 import { createBootstrapProxyConfigurationError } from "./src/viteProxy.ts";
@@ -34,29 +35,66 @@ const bootstrapProxyConfigurationError = createBootstrapProxyConfigurationError(
   localGateway,
 });
 
-export default defineConfig({
-  // Worktrees may share installed dependencies, but must not share optimizer state.
-  cacheDir: ".vite-cache",
-  plugins: [react(), bootstrapProxyConfigurationError],
-  server: {
-    proxy: {
-      "/health": { target: localGateway ? gatewayTarget! : apiTarget, changeOrigin: false },
-      "/api": { target: localGateway ? gatewayTarget! : apiTarget, changeOrigin: false },
-      ...(localGateway ? { "/bootstrap-api": {
-        target: gatewayTarget!,
-        changeOrigin: false,
-      } } : bootstrapTarget ? { "/bootstrap-api": {
-        target: bootstrapTarget,
-        changeOrigin: false,
-        rewrite: (path: string) => path === "/bootstrap-api/health" ? "/health" : path.replace(/^\/bootstrap-api/, "/api"),
-      } } : {}),
+function applicationContentSecurityPolicy(nonce?: string): string {
+  return [
+    "default-src 'self'",
+    `script-src 'self'${nonce ? ` 'nonce-${nonce}'` : ""}`,
+    "worker-src 'self' blob:",
+    "connect-src 'self' ws://localhost:* ws://127.0.0.1:*",
+    "img-src 'self' blob: data:",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+export default defineConfig(({ command, mode }) => {
+  // Vite's React Fast Refresh preamble is inline in development HTML. Give it
+  // an unpredictable nonce instead of allowing all inline scripts. Production
+  // preview remains strict because its built entrypoint is an external module.
+  const developmentNonce = command === "serve" && mode === "development"
+    ? randomBytes(18).toString("base64")
+    : undefined;
+  return {
+    ...(developmentNonce ? { html: { cspNonce: developmentNonce } } : {}),
+    // Worktrees may share installed dependencies, but must not share optimizer state.
+    cacheDir: ".vite-cache",
+    plugins: [react(), bootstrapProxyConfigurationError],
+    server: {
+      headers: {
+        "Content-Security-Policy": applicationContentSecurityPolicy(developmentNonce),
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+      },
+      proxy: {
+        "/health": { target: localGateway ? gatewayTarget! : apiTarget, changeOrigin: false },
+        "/api": { target: localGateway ? gatewayTarget! : apiTarget, changeOrigin: false },
+        ...(localGateway ? { "/bootstrap-api": {
+          target: gatewayTarget!,
+          changeOrigin: false,
+        } } : bootstrapTarget ? { "/bootstrap-api": {
+          target: bootstrapTarget,
+          changeOrigin: false,
+          rewrite: (path: string) => path === "/bootstrap-api/health" ? "/health" : path.replace(/^\/bootstrap-api/, "/api"),
+        } } : {}),
+      },
     },
-  },
-  test: {
-    environment: "jsdom",
-    setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.{test,spec}.{ts,tsx}"],
-    clearMocks: true,
-    restoreMocks: true,
-  },
+    preview: {
+      headers: {
+        "Content-Security-Policy": applicationContentSecurityPolicy(),
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+      },
+    },
+    test: {
+      environment: "jsdom",
+      setupFiles: ["./src/test/setup.ts"],
+      include: ["src/**/*.{test,spec}.{ts,tsx}"],
+      clearMocks: true,
+      restoreMocks: true,
+    },
+  };
 });
