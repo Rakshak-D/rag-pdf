@@ -152,7 +152,7 @@ describe("DocumentsIndexWorkflow", () => {
     await waitFor(() => expect(screen.getByLabelText("Build status succeeded")).toBeInTheDocument(), { timeout: 4000 });
     await waitFor(() => expect(inventoryCalls).toBe(2));
     expect(previewCalls).toBe(2);
-    expect(screen.getByText("No usable completed build found.")).toBeInTheDocument();
+    expect(screen.getByText("No matching completed index found.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start index build" })).not.toBeInTheDocument();
     expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST" && String(init.body).includes("client_request_id"))).toBe(false);
   });

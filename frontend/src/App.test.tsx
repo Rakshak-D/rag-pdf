@@ -282,6 +282,21 @@ describe("chat-first local application", () => {
     expect(JSON.parse(String(call?.[1]?.body)).model).toBe("qwen2.5:3b");
   });
 
+  it("keeps the active chat when history points to a deleted conversation", async () => {
+    vi.stubGlobal("fetch", defaultFetch()); vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup(); const router = mount();
+    await user.type(screen.getByRole("textbox", {name:"Message"}), "Preserve A");
+    const a = (screen.getByRole("combobox", {name:"Conversation"}) as HTMLSelectElement).value;
+    await user.click(screen.getByRole("button", {name:"New chat"}));
+    const deletedUrl = `${router.state.location.pathname}${router.state.location.search}`;
+    await user.click(screen.getByRole("button", {name:"Delete conversation"}));
+    await act(async () => { await router.navigate(deletedUrl); });
+    const picker = screen.getByRole("combobox", {name:"Conversation"}) as HTMLSelectElement;
+    expect(picker.value).toBe(a); expect(picker.options).toHaveLength(1);
+    expect(screen.getByRole("textbox", {name:"Message"})).toHaveValue("Preserve A");
+    expect(router.state.location.search).toContain(a);
+  });
+
   it("shows a truthful Ollama-unavailable error and does not fabricate an answer", async () => {
     const fetcher = defaultFetch();
     fetcher.mockImplementation(async (input) => {

@@ -202,10 +202,14 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
       if (`${location.pathname}${location.search}` !== canonical) navigate(canonical, { replace: true });
       return;
     }
+    if (params.has("conversation")) {
+      navigate(conversationUrl(mode, conversations.active.id), { replace: true });
+      return;
+    }
     const requested = params.get("mode");
     if (requested === "document" || requested === "general") {
       const id = requested === mode ? conversations.active.id : setMode(requested);
-      if (id) navigate(conversationUrl(requested, id), { replace: true });
+      navigate(conversationUrl(id ? requested : mode, id ?? conversations.active.id), { replace: true });
     }
   }, [location.pathname, location.search, location.key, conversations.active.id, mode, busy]);
 

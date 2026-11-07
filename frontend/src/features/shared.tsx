@@ -12,7 +12,7 @@ export function PageHeading({ eyebrow, title, description, actions }: {
 }
 
 export function LoadingState({ label }: { label: string }) {
-  return <div className="loading-state" role="status"><span className="loading-spinner" aria-hidden="true" />Loading {label}â€¦</div>;
+  return <div className="loading-state" role="status"><span className="loading-spinner" aria-hidden="true" />Loading {label}...</div>;
 }
 
 export function ProtectedState({ connected, loading, error, empty, emptyDetail, retry }: {

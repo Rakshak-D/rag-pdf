@@ -224,7 +224,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
     <section className="panel documents-import" aria-labelledby="documents-import-title">
       <div className="panel__heading"><div><h2 id="documents-import-title">Import a PDF</h2></div></div>
       <p className="documents-copy">Import PDFs, then prepare an index below.</p>
-      {maxUploadBytes !== null ? <p className="documents-limit">Maximum file size {formatBytes(maxUploadBytes)} ({maxUploadBytes.toLocaleString()} bytes) · maximum {inventory?.max_pages} pages · readable, unencrypted PDFs</p>
+      {maxUploadBytes !== null ? <p className="documents-limit">Maximum file size {formatBytes(maxUploadBytes)} · maximum {inventory?.max_pages} pages · readable, unencrypted PDFs</p>
         : <p className="documents-limit">Connect to the bootstrap service to read its configured upload limit.</p>}
       <form className="documents-upload-form" onSubmit={(event) => { void submit(event); }}>
         <label htmlFor="document-pdf">PDF file</label>
@@ -239,7 +239,7 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
             setUploadError(null); setFeedback(null); setWarning(null);
           }}
         />
-        <p className="documents-filename-help">Use a simple ASCII filename with lowercase <code>.pdf</code>; path characters and Windows device names are rejected.</p>
+        <details className="documents-filename-help"><summary>Filename requirements</summary><p>Use a simple ASCII filename with lowercase <code>.pdf</code>; path characters and Windows device names are rejected.</p></details>
         {selectedFile ? <p className="documents-selected-file">Selected: <strong>{selectedFile.name}</strong> · {formatBytes(selectedFile.size)}</p> : null}
         <div className="documents-upload-actions">
           <button className="button button--primary" type="submit" disabled={!token || !inventory || !selectedFile || uploading || loading || uploadNeedsInventoryRefresh}>

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import argparse
+import socket
 from pathlib import Path
 import secrets
 import signal
@@ -25,6 +27,30 @@ class StartupError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+def _port_values(offset: int) -> tuple[int, int, int, int]:
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 10000:
+        raise StartupError("local_port_offset_invalid")
+    return tuple(port + offset for port in (5173, 8000, 8010, 8020))
+
+
+def _check_ports(ports: tuple[int, ...]) -> None:
+    # Detect an already-running checkout before starting any child. This is a
+    # preflight, not a reservation; service startup still has its health checks.
+    sockets = []
+    try:
+        for port in ports:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sockets.append(sock)
+            if os.name == "nt":
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            sock.bind((_HOST, port))
+    except OSError as exc:
+        raise StartupError("local_ports_in_use_choose_another_offset") from exc
+    finally:
+        for sock in sockets:
+            sock.close()
 
 
 def _checked_path(value: str | Path, code: str) -> Path:
@@ -247,11 +273,14 @@ def _stop_owned(processes: list[subprocess.Popen]) -> None:
                 process.wait(timeout=5)
 
 
-def main() -> int:
+def main(*, port_offset: int = 0) -> int:
+    global _APP_PORT, _ORDINARY_PORT, _BOOTSTRAP_PORT, _GATEWAY_PORT
     repo = Path(__file__).resolve().parents[1]
     frontend = repo / "frontend"
     processes: list[subprocess.Popen] = []
     try:
+        _APP_PORT, _ORDINARY_PORT, _BOOTSTRAP_PORT, _GATEWAY_PORT = _port_values(port_offset)
+        _check_ports((_APP_PORT, _ORDINARY_PORT, _BOOTSTRAP_PORT, _GATEWAY_PORT))
         runtime_env = _runtime_environment()
         node = shutil.which("node")
         vite = frontend / "node_modules" / "vite" / "bin" / "vite.js"
@@ -275,6 +304,7 @@ def main() -> int:
         processes.append(vite_process)
         _wait_http("vite", vite_process, f"http://{_HOST}:{_APP_PORT}/", expected=200)
         _wait_http("vite_bootstrap_proxy", vite_process, bootstrap_proxy, expected=200)
+        print(f"Source checkout: {repo}")
         print(f"RAG-PDF is running at http://{_HOST}:{_APP_PORT}")
         print("Local bearer credentials are generated for this run and remain in server processes.")
         print("Press Ctrl+C to stop the services started by this command.")
@@ -293,4 +323,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port-offset", type=int, default=0, help="Add 0..10000 to all four loopback ports; default 0")
+    raise SystemExit(main(port_offset=parser.parse_args().port_offset))

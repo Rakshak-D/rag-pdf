@@ -190,3 +190,24 @@ def test_readiness_timeout_identifies_only_the_local_service_role(monkeypatch):
         start_local_app._wait_http("bootstrap_api", RunningProcess(), "http://127.0.0.1:8010/health", expected=200)
     assert error.value.code == "bootstrap_api_readiness_timeout"
     assert "private path" not in str(error.value)
+
+
+@pytest.mark.parametrize("offset,expected", [(0, (5173,8000,8010,8020)), (100,(5273,8100,8110,8120))])
+def test_port_offset_preserves_distinct_loopback_service_ports(offset, expected):
+    assert start_local_app._port_values(offset) == expected
+
+
+@pytest.mark.parametrize("offset", [-1, 10001, True, "100"])
+def test_invalid_port_offset_is_rejected(offset):
+    with pytest.raises(start_local_app.StartupError, match="local_port_offset_invalid"):
+        start_local_app._port_values(offset)
+
+
+def test_port_collision_is_rejected_without_starting_children():
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        if start_local_app.os.name == "nt":
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        listener.bind(("127.0.0.1", 0)); listener.listen()
+        with pytest.raises(start_local_app.StartupError, match="local_ports_in_use"):
+            start_local_app._check_ports((listener.getsockname()[1],))

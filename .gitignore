@@ -219,3 +219,6 @@ rag-env
 /frontend/test-results/
 /frontend/.env
 /frontend/.env.*
+
+# Frontend optimizer state belongs to each checkout, even with shared dependencies.
+/frontend/.vite-cache/

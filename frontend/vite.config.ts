@@ -35,6 +35,8 @@ const bootstrapProxyConfigurationError = createBootstrapProxyConfigurationError(
 });
 
 export default defineConfig({
+  // Worktrees may share installed dependencies, but must not share optimizer state.
+  cacheDir: ".vite-cache",
   plugins: [react(), bootstrapProxyConfigurationError],
   server: {
     proxy: {

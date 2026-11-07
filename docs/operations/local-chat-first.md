@@ -127,3 +127,30 @@ consolidated into the chat-first interface.
 
 For the verified local text-RAG example and its resource limits, see
 [`docs/DEMO.md`](../DEMO.md).
+
+## Conversation navigation
+
+General Chat and Chat with PDFs keep distinct conversations and drafts. Mode
+switching returns to the last conversation selected in that mode, including an
+older chat chosen from the picker. An internal switch writes a non-secret
+conversation ID and mode to the URL; no message text or credential is placed
+there. An explicit valid conversation ID is authoritative. A mode-only URL
+chooses the remembered conversation of that mode. Plain `/` preserves the
+active conversation. Back/Forward restores the conversation in its history
+entry. Picker choices, new chats, and mode buttons use this same policy. A link to a deleted or unknown conversation falls back to the active chat without creating a replacement.
+
+Navigation intent is remembered without changing the displayed conversation
+before the router commits. URL reconciliation and bounded session persistence
+complete before paint, avoiding rapid Back/Forward and reload races. Older
+version-1 session records without per-mode memory remain supported. Model
+discovery must finish before General Chat can send, so an early request does
+not silently omit the saved model preference.
+
+For parallel checkout verification use `python scripts/start_local_app.py
+--port-offset 100` (on one command line). All four loopback ports move together;
+the gateway's exact Host and Origin protections move with them. The accepted
+offset range is 0..10000. The launcher reports its source checkout and rejects
+occupied ports before starting children. This does not qualify Windows strict
+listener enumeration; it is a local startup collision check.
+
+Vite keeps optimizer state in each frontend checkout under `.vite-cache`, so parallel worktrees can reuse installed dependencies without sharing their generated optimizer cache. This directory is ignored by Git. Existing dependency caches are not deleted.

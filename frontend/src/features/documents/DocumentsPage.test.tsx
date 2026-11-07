@@ -76,7 +76,7 @@ describe("Documents page", () => {
     await connect(user);
     await screen.findByText("No PDF documents are present in the trusted source yet.");
     const uploadLimit = document.querySelector(".documents-limit");
-    expect(uploadLimit?.textContent).toContain(`Maximum file size 1.0 MiB (${new Intl.NumberFormat().format(1024 * 1024)} bytes)`);
+    expect(uploadLimit?.textContent).toContain("Maximum file size 1.0 MiB");
     expect(uploadLimit?.textContent).toContain("maximum 200 pages");
 
     const file = new File(["%PDF-test payload"], "Research note.pdf", { type: "application/pdf" });
