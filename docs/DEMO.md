@@ -37,8 +37,8 @@ The commands below are the historical overnight-worktree launch configuration. V
     Set-Location $repo
     $env:RAG_WORKBENCH_DATA_DIR = Join-Path $demo 'pdf-source'
     $env:RAG_WORKBENCH_INDEX_STORAGE_ROOT = Join-Path $demo 'index-storage'
-    $env:RAG_WORKBENCH_LOCAL_STATE_DIR = Join-Path $demo 'ordinary-state'
-    $env:RAG_WORKBENCH_BOOTSTRAP_STATE_DIR = Join-Path $demo 'bootstrap-state-run3'
+    $env:RAG_WORKBENCH_LOCAL_STATE_DIR = Join-Path $demo 'ordinary-state-sprint5-demo'
+    $env:RAG_WORKBENCH_BOOTSTRAP_STATE_DIR = Join-Path $demo 'bootstrap-state-sprint5-demo'
     $env:RAG_WORKBENCH_MODEL_LIFECYCLE_POLICY = 'transient_serialized'
     $env:TRANSFORMERS_OFFLINE = '1'
     $env:HF_HUB_OFFLINE = '1'
@@ -47,7 +47,7 @@ The commands below are the historical overnight-worktree launch configuration. V
     ollama list
     & $python scripts/start_local_app.py
 
-Confirm the output says the app is running, then open http://127.0.0.1:5173. Do not open a second copy if the services are already running. The launcher creates fresh server-side ordinary and bootstrap credentials and sends them only to the local gateway. Do not copy them into the browser.
+Confirm the output says the app is running, then open http://127.0.0.1:5173. These separate state directories avoid inheriting the saved one-PDF selection. In Documents, select the completed report that matches the current two-PDF collection and verify the ordinary-runtime readback before opening Document Chat. Do not build again. Do not open a second app copy if the services are already running. The launcher creates fresh server-side ordinary and bootstrap credentials and sends them only to the local gateway. Do not copy them into the browser.
 
 Before the demo, check that the workspace folders and Ollama models still exist. Ollama must already be running at 127.0.0.1:11434, with nemotron-3-nano:4b and gemma4:e2b listed. The normal startup does not download models. Do not run ollama pull during the presentation. Stop the app with Ctrl+C in the same interactive PowerShell console; the launcher stops only its owned service processes. If the bootstrap ownership marker remains after shutdown, do not delete it manually; verify that owned services and ports are closed and preserve the state for diagnosis.
 
