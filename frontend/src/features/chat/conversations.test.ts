@@ -1,8 +1,29 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { useConversations, SESSION_KEY, decodeSession, encodeSession } from "./conversations";
+import { useConversations, SESSION_KEY, decodeSession, encodeSession, hasConversationExchangeCapacity } from "./conversations";
 const session = () => ({ version: 1 as const, activeId: "one", conversations: [{ id: "one", mode: "general" as const, question: "Draft", messages: [], generalTurns: [] }] });
 describe("conversation session boundary", () => {
+  it("reserves two message slots for an exchange at the 100-message boundary", () => {
+    expect(hasConversationExchangeCapacity(98)).toBe(true);
+    expect(hasConversationExchangeCapacity(99)).toBe(false);
+    expect(hasConversationExchangeCapacity(100)).toBe(false);
+    expect(hasConversationExchangeCapacity(-1)).toBe(false);
+    expect(hasConversationExchangeCapacity(Number.NaN)).toBe(false);
+  });
+
+  it("accepts bounded restored conversations with unfinished user turns", () => {
+    for (const count of [98, 99, 100]) {
+      const messages = Array.from({ length: count }, (_, index) => ({
+        id: `message-${index}`,
+        role: index === count - 1 ? "user" as const : "assistant" as const,
+        mode: "general" as const,
+        text: `message ${index}`,
+      }));
+      const restored = { ...session(), conversations: [{ ...session().conversations[0]!, messages }] };
+      expect(decodeSession(encodeSession(restored)).conversations[0]?.messages).toHaveLength(count);
+    }
+  });
+
   it("restores a versioned session with its active draft", () => { expect(decodeSession(encodeSession(session()))).toEqual(session()); });
   it("rejects corrupt, oversized, extra-field, invalid active and over-limit history records", () => {
     for (const raw of ["{", "x".repeat(256*1024+1), JSON.stringify({ ...session(), token: "private" }), JSON.stringify({ ...session(), activeId: "missing" }), JSON.stringify({ ...session(), version: 2 }), JSON.stringify({ ...session(), conversations: [{ ...session().conversations[0], generalTurns: Array(9).fill({ user: "hi", assistant: "hello" }) }] })]) expect(() => decodeSession(raw)).toThrow();

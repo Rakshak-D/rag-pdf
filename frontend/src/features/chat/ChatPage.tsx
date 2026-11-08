@@ -9,7 +9,7 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatMessage } from "./ChatMessage";
 import { ConversationRail } from "./ConversationRail";
 import { EvidenceInspector, type SourceEvidence } from "./EvidenceInspector";
-import type { Mode, Message, Conversation, ConversationStore } from "./conversations";
+import { hasConversationExchangeCapacity, type Mode, type Message, type Conversation, type ConversationStore } from "./conversations";
 
 interface Props {
   conversations: ConversationStore;
@@ -68,6 +68,7 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ChatModelCatalog | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogChecking, setCatalogChecking] = useState(false);
   const [selection, setSelection] = useState<IndexSelectionState | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [sourceInventory, setSourceInventory] = useState<BootstrapDocumentsResponse | null>(null);
@@ -85,6 +86,8 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   const evidenceTrigger = useRef<HTMLElement | null>(null);
   const requestSequence = useRef(0);
   const requestController = useRef<AbortController | null>(null);
+  const catalogRequestSequence = useRef(0);
+  const catalogRequestController = useRef<AbortController | null>(null);
   const imageControllers = useRef<Set<AbortController>>(new Set());
   const requestedImages = useRef<Set<string>>(new Set());
   const objectUrls = useRef<Set<string>>(new Set());
@@ -110,6 +113,25 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   const modelResolution = resolveChatModel(preferences, catalog);
   const generalModel = modelResolution.model;
   const modelIsVerified = catalog?.availability === "available" && generalModel !== null && catalog.available_models.includes(generalModel);
+
+  const checkModelAvailability = useCallback(() => {
+    catalogRequestController.current?.abort();
+    const controller = new AbortController();
+    const request = ++catalogRequestSequence.current;
+    catalogRequestController.current = controller;
+    setCatalogChecking(true);
+    setCatalogError(null);
+    void client.chatModels(controller.signal).then((value) => {
+      if (request === catalogRequestSequence.current) setCatalog(value);
+    }).catch((error: unknown) => {
+      if (request === catalogRequestSequence.current && !(error instanceof DOMException && error.name === "AbortError")) setCatalogError(messageFor(error));
+    }).finally(() => {
+      if (request === catalogRequestSequence.current) {
+        setCatalogChecking(false);
+        catalogRequestController.current = null;
+      }
+    });
+  }, [client]);
   const selectedFingerprint = selection?.selection_status === "selected" ? selection.selection?.index_fingerprint ?? null : null;
   const currentManifest = sourceInventory?.manifest_hash ?? null;
   const selectedManifestMatches = selection?.selection_status === "selected" && selection.selection !== null && currentManifest !== null && selection.selection.document_manifest_hash === currentManifest;
@@ -118,16 +140,14 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   const activePending = pendingConversationId === activeId;
 
   useEffect(() => {
-    let active = true;
-    const controller = new AbortController();
-    if (!visible) return () => controller.abort();
-    void client.chatModels(controller.signal).then((value) => {
-      if (active) { setCatalog(value); setCatalogError(null); }
-    }).catch((error: unknown) => {
-      if (active && !(error instanceof DOMException && error.name === "AbortError")) setCatalogError(messageFor(error));
-    });
-    return () => { active = false; controller.abort(); };
-  }, [client, visible]);
+    if (!visible) return;
+    checkModelAvailability();
+    return () => {
+      catalogRequestSequence.current += 1;
+      catalogRequestController.current?.abort();
+      catalogRequestController.current = null;
+    };
+  }, [checkModelAvailability, visible]);
 
   useEffect(() => {
     if (!visible || modelResolution.status !== "saved-model-unavailable" || !preferences.selectedModel) return;
@@ -331,7 +351,7 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   async function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const normalized = question.trim();
-    if (!normalized || normalized.length > 4000 || messages.length >= 100 || busy ||
+    if (!normalized || normalized.length > 4000 || !hasConversationExchangeCapacity(messages.length) || busy ||
       (mode === "general" && (catalog === null || (catalog.availability === "available" && !modelIsVerified))) ||
       (mode === "document" && !hasIndex)) return;
     const currentMode = mode;
@@ -405,7 +425,7 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
     }
   }
 
-  const modelStatus = catalogError ? "Model status unavailable" : catalog?.availability === "unavailable" ? "Local model unavailable" :
+  const modelStatus = catalogError ? "Model status unavailable" : catalogChecking ? "Checking model availability" : catalog?.availability === "unavailable" ? "Local model unavailable" :
     !catalog || !modelIsVerified ? "Checking installed models" : `Local model · ${generalModel}`;
   const pdfCountLabel = (count: number) => `${count} ${count === 1 ? "PDF" : "PDFs"}`;
   const documentsState = selectionError || sourceError ? "unavailable" : sourceInventory?.total === 0 ? "empty" :
@@ -425,8 +445,9 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
               ? { title: `${pdfCountLabel(sourceInventory?.total ?? 0)} · index selected`, detail: "Retrieval is checked when you ask; report selection alone does not verify runtime readiness.", action: null, tone: "selected" }
               : { title: `${pdfCountLabel(sourceInventory?.total ?? 0)} uploaded`, detail: "Select a compatible index before asking questions.", action: "Prepare documents", tone: "neutral" };
   const disabledReason = activePending ? null : busy ? "Another conversation is finishing a response. You can keep a draft here." :
-    messages.length >= 100 ? "This conversation reached its message limit. Start a new chat to continue." :
+    !hasConversationExchangeCapacity(messages.length) ? "This conversation has no room for another complete exchange. Start a new chat to continue." :
     mode === "general" && catalog === null ? "Checking local model availability…" :
+    mode === "general" && catalog?.availability === "unavailable" ? "Start the configured Ollama service, then check again before sending." :
     mode === "general" && catalog?.availability === "available" && !modelIsVerified ? "Choose an installed local model in Settings before sending." :
     mode === "document" && !hasIndex ? (documentsState === "empty" ? "Add a PDF to start Chat with PDFs." : "Select a compatible index in Documents before sending.") : null;
 
@@ -472,6 +493,10 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
 
       {mode === "general" && unavailableModelNotice ? <p className="chat-inline-notice" role="status">{unavailableModelNotice}</p> : null}
       {mode === "general" && preferenceLoadStatus === "invalid" ? <p className="chat-inline-notice" role="status">Invalid saved preferences were reset to safe defaults.</p> : null}
+      {mode === "general" && (catalog?.availability === "unavailable" || catalogError) ? <div className="chat-model-recovery" role={catalogError ? "alert" : "status"}>
+        <div><strong>{catalogError ? "Model availability could not be checked" : "Ollama is unavailable"}</strong><p>{catalogError ?? "Start the configured local Ollama service, then check its availability again."}</p></div>
+        <button type="button" className="button button--quiet button--small" onClick={checkModelAvailability} disabled={catalogChecking}>{catalogChecking ? "Checking…" : "Check again"}</button>
+      </div> : null}
       {mode === "document" && indexState ? <div className={`chat-index-state chat-index-state--${indexState.tone}`} role={indexState.tone === "warning" ? "alert" : "status"}>
         <div><strong>{indexState.title}</strong><p>{indexState.detail}</p></div>
         {indexState.action ? <Link to="/documents" className="chat-index-action">{indexState.action}</Link> : null}
@@ -491,8 +516,8 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
           <div className="chat-empty__glyph" aria-hidden="true"><span /><span /><span /></div>
           <h2>{mode === "general" ? "What would you like to explore?" : "Ask a question about your PDFs"}</h2>
           <p>{mode === "general" ? "Your conversation uses the selected local model, without document retrieval." : hasIndex ? "Questions are sent to the selected index and document answer model." : "Prepare or select an index in Documents to begin."}</p>
-          {mode === "general" ? <p className={`chat-model-status${modelIsVerified ? " is-available" : " is-unavailable"}`} role="status">
-            {catalogError ?? (catalog?.availability === "unavailable" ? "Ollama is unavailable. Check the local service." : modelResolution.status === "configured-default-unavailable" ? `Configured model ${catalog?.configured_model ?? ""} is not installed. Choose an installed model in Settings.` : modelResolution.status === "checking" ? "Checking installed models…" : modelIsVerified ? `Using ${generalModel}.` : "Choose an installed model in Settings to begin.")}
+          {mode === "general" && !catalogError && catalog?.availability !== "unavailable" ? <p className={`chat-model-status${modelIsVerified ? " is-available" : " is-unavailable"}`} role="status">
+            {modelResolution.status === "configured-default-unavailable" ? `Configured model ${catalog?.configured_model ?? ""} is not installed. Choose an installed model in Settings.` : modelResolution.status === "checking" || catalogChecking ? "Checking installed models…" : modelIsVerified ? `Using ${generalModel}.` : "Choose an installed model in Settings to begin."}
           </p> : null}
         </div> : messages.map((message) => <ChatMessage key={message.id} message={message} selectedFingerprint={selectedFingerprint} onOpenEvidence={openEvidence} onCopy={(text) => void copyAnswer(text)} />)}
         {activePending ? <div className="chat-thinking" role="status"><span className="chat-thinking__dots" aria-hidden="true"><i /><i /><i /></span><span>{mode === "general" ? "Waiting for the local model…" : "Retrieving evidence and preparing an answer…"}</span></div> : null}

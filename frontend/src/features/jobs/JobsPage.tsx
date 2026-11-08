@@ -49,7 +49,7 @@ export function JobsPage({ client, connected, refreshKey, onRefresh }: JobsPageP
   return <>
     <PageHeading eyebrow="EXECUTION QUEUE" title="Jobs" description="Inspect queued, running, and completed evaluation or ablation work." actions={<><Link className="button button--quiet" to="/experiments/evaluation">New evaluation</Link><Link className="button button--quiet" to="/experiments/ablation">New ablation</Link><button className="button button--quiet" type="button" onClick={onRefresh} disabled={loading}>Refresh</button></>} />
     <section className="panel explorer-panel" aria-labelledby="job-filters-heading">
-      <div className="panel__heading"><div><span className="eyebrow">CATALOG QUERY</span><h2 id="job-filters-heading">Filter jobs</h2></div><span className="active-filter-note">{filters.job_type ?? "all types"} Â· {filters.status ?? "all statuses"}</span></div>
+      <div className="panel__heading"><div><span className="eyebrow">CATALOG QUERY</span><h2 id="job-filters-heading">Filter jobs</h2></div><span className="active-filter-note">{filters.job_type ?? "all types"} · {filters.status ?? "all statuses"}</span></div>
       <form className="filter-form" onSubmit={(event) => { event.preventDefault(); apply(); }}>
         <label>Job type<select value={typeDraft} onChange={(event) => setTypeDraft(event.target.value)}><option value="">All types</option><option value="evaluation">Evaluation</option><option value="ablation">Ablation</option></select></label>
         <label>Status<select value={statusDraft} onChange={(event) => setStatusDraft(event.target.value)}><option value="">All statuses</option>{statuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
@@ -73,7 +73,7 @@ export function JobsPage({ client, connected, refreshKey, onRefresh }: JobsPageP
         </tr>)}</tbody></table></div>
         <Pagination offset={offset} limit={pageSize} count={shown.length} hasMore={hasMore} onPrevious={() => setOffset(Math.max(0, offset - pageSize))} onNext={() => setOffset(offset + pageSize)} />
       </> : null}
-      {connected && !loading && !error && jobs.length === 0 ? <div className="filter-summary">Page {Math.floor(offset / pageSize) + 1} Â· No records on this page</div> : null}
+      {connected && !loading && !error && jobs.length === 0 ? <div className="filter-summary">Page {Math.floor(offset / pageSize) + 1} · No records on this page</div> : null}
     </section>
   </>;
 }

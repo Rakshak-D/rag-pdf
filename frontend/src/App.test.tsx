@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ComponentType } from "react";
-import { SESSION_KEY } from "./features/chat/conversations";
+import { decodeSession, SESSION_KEY } from "./features/chat/conversations";
 
 let App: ComponentType = (() => null) as ComponentType;
 beforeAll(async () => {
@@ -99,6 +99,22 @@ function defaultFetch() {
 function storedActiveConversationId(): string {
   const raw = window.sessionStorage.getItem(SESSION_KEY);
   return raw ? (JSON.parse(raw) as { activeId: string }).activeId : "";
+}
+
+function seededConversation(messageCount: number, unfinished = false) {
+  const id = "boundary-conversation";
+  const messages = Array.from({ length: messageCount }, (_, index) => ({
+    id: `boundary-message-${index}`,
+    role: unfinished && index === messageCount - 1 ? "user" : index % 2 === 0 ? "user" : "assistant",
+    mode: "general",
+    text: `Existing message ${index}`,
+  }));
+  return {
+    version: 1,
+    activeId: id,
+    conversations: [{ id, mode: "general", messages, generalTurns: [], question: "" }],
+    lastActiveByMode: { general: id },
+  };
 }
 
 describe("chat-first local application", () => {
@@ -325,6 +341,109 @@ describe("chat-first local application", () => {
     await user.keyboard("{Enter}");
     expect(await screen.findByText("Ollama is not responding. Start the configured local Ollama service and try again.")).toBeInTheDocument();
     expect(screen.queryByText(/Here is an answer/)).not.toBeInTheDocument();
+  });
+
+  it("uses the final two message slots for a successful exchange and restores all 100 messages", async () => {
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(seededConversation(98)));
+    const fetcher = defaultFetch();
+    const fallback = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/chat") return jsonResponse({ mode: "general", answer: "Final retained answer", model: "gemma4:e2b" });
+      return fallback(input, init);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    const route = "/?mode=general&conversation=boundary-conversation";
+    mount(route);
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "Final retained question");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("Final retained answer")).toBeInTheDocument();
+    const saved = decodeSession(window.sessionStorage.getItem(SESSION_KEY) ?? "");
+    expect(saved.conversations[0]?.messages).toHaveLength(100);
+    cleanup();
+    mount(route);
+    const restored = decodeSession(window.sessionStorage.getItem(SESSION_KEY) ?? "");
+    expect(restored.conversations[0]?.messages).toHaveLength(100);
+    expect(screen.getByText("Final retained question")).toBeInTheDocument();
+    expect(screen.getByText("Final retained answer")).toBeInTheDocument();
+  });
+
+  it("retains a failed response in the last slot of a 98-message conversation", async () => {
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(seededConversation(98)));
+    const fetcher = defaultFetch();
+    const fallback = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/chat") return jsonResponse({ error: { code: "chat_generation_failed" } }, 503);
+      return fallback(input, init);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    const route = "/?mode=general&conversation=boundary-conversation";
+    mount(route);
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "Question with failed answer");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("The local model could not complete this response.")).toBeInTheDocument();
+    const saved = decodeSession(window.sessionStorage.getItem(SESSION_KEY) ?? "");
+    expect(saved.conversations[0]?.messages).toHaveLength(100);
+    cleanup();
+    mount(route);
+    expect(decodeSession(window.sessionStorage.getItem(SESSION_KEY) ?? "").conversations[0]?.messages).toHaveLength(100);
+    expect(screen.getByText("The local model could not complete this response.")).toBeInTheDocument();
+  });
+
+  it.each([99, 100])("does not submit or corrupt a restored unfinished conversation at %i messages", async (count) => {
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(seededConversation(count, true)));
+    const fetcher = defaultFetch();
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    const route = "/?mode=general&conversation=boundary-conversation";
+    mount(route);
+    const input = screen.getByRole("textbox", { name: "Message" });
+    await user.type(input, "Keep this draft");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(screen.getByText("This conversation has no room for another complete exchange. Start a new chat to continue.")).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    const saved = decodeSession(window.sessionStorage.getItem(SESSION_KEY) ?? "");
+    expect(saved.conversations[0]?.messages).toHaveLength(count);
+    expect(saved.conversations[0]?.question).toBe("Keep this draft");
+    expect(fetcher.mock.calls.some(([url]) => String(url) === "/api/v1/chat")).toBe(false);
+    cleanup();
+    mount(route);
+    expect(decodeSession(window.sessionStorage.getItem(SESSION_KEY) ?? "").conversations[0]?.messages).toHaveLength(count);
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Keep this draft");
+  });
+
+  it("rechecks known Ollama unavailability without retrying generation or losing the draft", async () => {
+    let catalogCalls = 0;
+    const fetcher = defaultFetch();
+    const fallback = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/chat/models") {
+        catalogCalls += 1;
+        return jsonResponse(catalogCalls === 1 ? {
+          ...models, availability: "unavailable", configured_model_available: false, available_models: [], error_code: "ollama_unavailable",
+        } : models);
+      }
+      if (String(input) === "/api/v1/chat") return jsonResponse({ mode: "general", answer: "Available after explicit retry", model: "gemma4:e2b" });
+      return fallback(input, init);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    mount();
+    const input = await screen.findByRole("textbox", { name: "Message" });
+    await user.type(input, "Keep my question while Ollama starts");
+    expect(await screen.findByText("Ollama is unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(fetcher.mock.calls.some(([url]) => String(url) === "/api/v1/chat")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(catalogCalls).toBe(2));
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Keep my question while Ollama starts");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    expect(fetcher.mock.calls.some(([url]) => String(url) === "/api/v1/chat")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("Available after explicit retry")).toBeInTheDocument();
+    expect(catalogCalls).toBe(2);
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1);
   });
 
   it("prevents duplicate sends and keeps a pending response in its conversation", async () => {

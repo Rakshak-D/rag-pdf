@@ -37,7 +37,7 @@ export function formatTimestamp(value: string | null): string {
 }
 
 export function displayValue(value: string | number | null | undefined): string {
-  return value === null || value === undefined || value === "" ? "â€”" : String(value);
+  return value === null || value === undefined || value === "" ? "—" : String(value);
 }
 
 export function Pagination({ offset, limit, count, hasMore, onPrevious, onNext }: {
@@ -49,5 +49,5 @@ export function Pagination({ offset, limit, count, hasMore, onPrevious, onNext }
   onNext: () => void;
 }) {
   const page = Math.floor(offset / limit) + 1;
-  return <nav className="pagination" aria-label="Result pages"><button className="button button--quiet" type="button" onClick={onPrevious} disabled={offset === 0}>Previous</button><span role="status">Page {page} Â· {count} shown</span><button className="button button--quiet" type="button" onClick={onNext} disabled={!hasMore}>Next</button></nav>;
+  return <nav className="pagination" aria-label="Result pages"><button className="button button--quiet" type="button" onClick={onPrevious} disabled={offset === 0}>Previous</button><span role="status">Page {page} · {count} shown</span><button className="button button--quiet" type="button" onClick={onNext} disabled={!hasMore}>Next</button></nav>;
 }

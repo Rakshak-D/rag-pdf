@@ -143,6 +143,10 @@
 .chat-context-label.is-unavailable { color: #a14843; }
 
 .chat-inline-notice { margin: 0 0 10px; padding: 8px 10px; border-left: 2px solid #b34e43; background: #fff6f3; color: #783b37; font-size: 11px; line-height: 1.45; }
+.chat-model-recovery { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 12px; padding: 11px 13px; border: 1px solid #e6c7c2; border-radius: 7px; background: #fff8f6; color: #713e3a; }
+.chat-model-recovery strong { display: block; font-size: 12px; }
+.chat-model-recovery p { margin: 3px 0 0; color: #79534f; font-size: 12px; line-height: 1.45; }
+@media (max-width: 620px) { .chat-model-recovery { align-items: flex-start; flex-direction: column; } }
 .chat-index-state { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 14px; margin: 0 0 12px; padding: 10px 12px; border-left: 2px solid #73819b; background: #f5f7fb; }
 .chat-index-state--warning { border-left-color: #cf655a; background: #fff7f4; }
 .chat-index-state--selected { border-left-color: #16806a; background: #f2f8f6; }

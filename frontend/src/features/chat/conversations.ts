@@ -4,6 +4,13 @@ import { boundedChatHistory } from "./history";
 export type Mode = "general" | "document";
 export type Message = { id: string; role: "user" | "assistant"; mode: Mode; text: string; error?: boolean; document?: AskResponse; indexFingerprint?: string; sourceManifest?: string; evidenceExpired?: boolean };
 export type Conversation = { id: string; mode: Mode; messages: Message[]; generalTurns: ChatTurn[]; question: string };
+export const MAX_CONVERSATION_MESSAGES = 100;
+
+/** A submitted exchange always needs room for its user turn and one response. */
+export function hasConversationExchangeCapacity(messageCount: number): boolean {
+  return Number.isSafeInteger(messageCount) && messageCount >= 0 && messageCount + 2 <= MAX_CONVERSATION_MESSAGES;
+}
+
 type Session = { version: 1; activeId: string; conversations: Conversation[]; lastActiveByMode?: Partial<Record<Mode, string>> };
 export const SESSION_KEY = "rag-pdf.conversations.v1";
 const MAX_BYTES = 256 * 1024;
@@ -18,7 +25,7 @@ export function decodeSession(raw: string): Session {
   if (!record(v) || !keys(v, ["version", "activeId", "conversations", "lastActiveByMode"]) || v.version !== 1 || !text(v.activeId, 80) || !Array.isArray(v.conversations) || !v.conversations.length || v.conversations.length > 10) throw Error("session_invalid");
   const ids = new Set<string>();
   for (const c of v.conversations) {
-    if (!record(c) || !keys(c, ["id", "mode", "messages", "generalTurns", "question"]) || !text(c.id, 80) || !c.id || ids.has(c.id) || !["general", "document"].includes(String(c.mode)) || !text(c.question, 4000) || !Array.isArray(c.messages) || c.messages.length > 100 || !Array.isArray(c.generalTurns) || c.generalTurns.length > 8) throw Error("conversation_invalid");
+    if (!record(c) || !keys(c, ["id", "mode", "messages", "generalTurns", "question"]) || !text(c.id, 80) || !c.id || ids.has(c.id) || !["general", "document"].includes(String(c.mode)) || !text(c.question, 4000) || !Array.isArray(c.messages) || c.messages.length > MAX_CONVERSATION_MESSAGES || !Array.isArray(c.generalTurns) || c.generalTurns.length > 8) throw Error("conversation_invalid");
     ids.add(c.id);
     const messageIds = new Set<string>();
     for (const m of c.messages) {
