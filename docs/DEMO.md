@@ -1,11 +1,13 @@
 # RAG-PDF demonstration runbook
 
-## Verified on this machine
+## Previously verified demonstration (2026-11-07)
 
 This runbook reuses one real, task-owned local workspace created during acceptance. It is outside the repository so its Chroma database and local runtime state are not committed.
 
+**Sprint 5 revalidation (2026-11-08):** in a separate disposable workspace, the checked-in Orbit PDF was imported through the browser, one explicitly confirmed build completed with 3 text records and 0 image records, the matching index was selected and read back, and the persisted Chroma collections reopened after restart. General Chat produced 42 from the installed nemotron-3-nano:4b model. Document Chat was not re-run: at the final model gate, about 2.1 GiB RAM, 4.4 GiB commit headroom, and 5.0 GiB free VRAM remained for the configured 7.2 GB gemma4:e2b bundle; prior Gemma requests nearly exhausted host RAM. The prior successful Gemma answer below remains historical rather than a current-branch requalification. Image retrieval remains unverified.
+
 - Demo PDF: examples/demo/Orbit_Field_Notes.pdf
-- Matching imported source and selected index: %TEMP%\rag-pdf-overnight-evidence\demo-workspace
+- Source and index as verified on 2026-11-07: %TEMP%\rag-pdf-overnight-evidence\demo-workspace
 - PDF: 3 pages, 0 embedded image objects
 - Expected facts, kept outside model prompts: [expected-facts.json](../examples/demo/expected-facts.json)
 - Build: 96cf88843eb2480f8b5b52d81a8054cc, completed; 3 text records, 0 image records
@@ -20,11 +22,13 @@ This runbook reuses one real, task-owned local workspace created during acceptan
 
 The selected RunPlan used hybrid retrieval with reranking enabled. The store reopened successfully after the app was stopped; its three text records remained present, the image collection was empty, and the writer lease was released. A later real Document Chat request retrieved the page 1 passage and returned [T1] pointing to that passage.
 
-The external workspace is under the Windows temporary directory and may be removed by system cleanup. Keep it until after the presentation. If it is gone, use the checked-in PDF and prepare a new isolated index in advance; that requires real BGE indexing and should not be attempted for the first time during the presentation.
+Windows temporary storage may remove or change the prepared workspace. Do not assume its current source set or active selection still matches the historical identities above. Before presenting, refresh Documents and verify the selected report matches the complete current PDF collection. If a new index is required, prepare it in advance rather than during the presentation.
 
 ## Start the prepared demo
 
-Open PowerShell. These commands are specific to the verified local machine and the dedicated overnight worktree:
+**Current state check (2026-11-08):** a read-only inspection found that the former temporary workspace now contains both Orbit_Field_Notes.pdf and Voyager Grand Tour PDF.pdf. Its completed two-PDF report (build 5c5706c7f56549329389a641a10a0945, manifest 565dea2e315d6eaafcadcfb8e43771c0e28875c780c29b0eda21a50884f7e454, index 45717168ec845242162a03358e10ac5ca8e1a7f2a7514bb0f02256a34ed5c450) matches that source set, but the saved ordinary-runtime selection still points to the one-PDF build 96cf88843eb2480f8b5d52d81a8054cc. The two-PDF report is not selected. Starting from the historical selection will therefore leave Document Chat stale. The separate one-PDF backup remains intact with the original matching report and index. Neither workspace was changed by Sprint 5. If using the two-PDF source, select its compatible report through Documents and confirm the readback; use a separate ordinary-state directory if the saved selection must remain untouched. Do not rebuild either existing index.
+
+The commands below are the historical overnight-worktree launch configuration. Verify Source checkout and current selection before use. Open PowerShell:
 
     $repo = 'C:\RAKSHAK\MY CODE\AI\rag-pdf-overnight-wt'
     $python = 'C:\RAKSHAK\MY CODE\AI\rag-pdf\rag-env\Scripts\python.exe'
@@ -45,7 +49,7 @@ Open PowerShell. These commands are specific to the verified local machine and t
 
 Confirm the output says the app is running, then open http://127.0.0.1:5173. Do not open a second copy if the services are already running. The launcher creates fresh server-side ordinary and bootstrap credentials and sends them only to the local gateway. Do not copy them into the browser.
 
-Before the demo, check that the workspace folders and Ollama models still exist. Ollama must already be running at 127.0.0.1:11434, with nemotron-3-nano:4b and gemma4:e2b listed. The normal startup does not download models. Do not run ollama pull during the presentation. Stop the app with Ctrl+C; the launcher stops only its own service processes.
+Before the demo, check that the workspace folders and Ollama models still exist. Ollama must already be running at 127.0.0.1:11434, with nemotron-3-nano:4b and gemma4:e2b listed. The normal startup does not download models. Do not run ollama pull during the presentation. Stop the app with Ctrl+C in the same interactive PowerShell console; the launcher stops only its owned service processes. If the bootstrap ownership marker remains after shutdown, do not delete it manually; verify that owned services and ports are closed and preserve the state for diagnosis.
 
 ## Short presentation script
 

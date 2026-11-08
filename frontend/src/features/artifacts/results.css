@@ -53,6 +53,7 @@
 .results-research-tools > nav a:hover { background: var(--accent-soft); }
 
 .results-catalog { min-width: 0; }
+.results-out-of-range { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .results-catalog__heading {
   display: flex;
   align-items: end;

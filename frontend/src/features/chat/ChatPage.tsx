@@ -113,6 +113,15 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   const modelResolution = resolveChatModel(preferences, catalog);
   const generalModel = modelResolution.model;
   const modelIsVerified = catalog?.availability === "available" && generalModel !== null && catalog.available_models.includes(generalModel);
+  const generalChatDisabledReason = catalogError
+    ? "Model availability could not be checked. Check again before sending."
+    : catalogChecking || catalog === null
+      ? "Checking local model availability…"
+      : catalog.availability !== "available"
+        ? "Start the configured Ollama service, then check again before sending."
+        : !modelIsVerified
+          ? "Choose an installed local model in Settings before sending."
+          : null;
 
   const checkModelAvailability = useCallback(() => {
     catalogRequestController.current?.abort();
@@ -352,7 +361,7 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
     event?.preventDefault();
     const normalized = question.trim();
     if (!normalized || normalized.length > 4000 || !hasConversationExchangeCapacity(messages.length) || busy ||
-      (mode === "general" && (catalog === null || (catalog.availability === "available" && !modelIsVerified))) ||
+      (mode === "general" && generalChatDisabledReason !== null) ||
       (mode === "document" && !hasIndex)) return;
     const currentMode = mode;
     const currentConversationId = activeId;
@@ -446,9 +455,7 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
               : { title: `${pdfCountLabel(sourceInventory?.total ?? 0)} uploaded`, detail: "Select a compatible index before asking questions.", action: "Prepare documents", tone: "neutral" };
   const disabledReason = activePending ? null : busy ? "Another conversation is finishing a response. You can keep a draft here." :
     !hasConversationExchangeCapacity(messages.length) ? "This conversation has no room for another complete exchange. Start a new chat to continue." :
-    mode === "general" && catalog === null ? "Checking local model availability…" :
-    mode === "general" && catalog?.availability === "unavailable" ? "Start the configured Ollama service, then check again before sending." :
-    mode === "general" && catalog?.availability === "available" && !modelIsVerified ? "Choose an installed local model in Settings before sending." :
+    mode === "general" && generalChatDisabledReason !== null ? generalChatDisabledReason :
     mode === "document" && !hasIndex ? (documentsState === "empty" ? "Add a PDF to start Chat with PDFs." : "Select a compatible index in Documents before sending.") : null;
 
   const evidenceResponse = drawerMessage?.document;

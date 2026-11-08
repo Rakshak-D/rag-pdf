@@ -325,7 +325,7 @@ describe("chat-first local application", () => {
     expect(router.state.location.search).toContain(a);
   });
 
-  it("shows a truthful Ollama-unavailable error and does not fabricate an answer", async () => {
+  it("blocks both keyboard and button submission when Ollama is unavailable", async () => {
     const fetcher = defaultFetch();
     fetcher.mockImplementation(async (input) => {
       if (String(input) === "/health") return jsonResponse(health);
@@ -337,10 +337,31 @@ describe("chat-first local application", () => {
     vi.stubGlobal("fetch", fetcher);
     const user = userEvent.setup();
     mount();
-    await user.type(screen.getByRole("textbox", { name: "Message" }), "Hello");
+    const input = await screen.findByRole("textbox", { name: "Message" });
+    await user.type(input, "Hello");
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(send).toBeDisabled();
     await user.keyboard("{Enter}");
-    expect(await screen.findByText("Ollama is not responding. Start the configured local Ollama service and try again.")).toBeInTheDocument();
-    expect(screen.queryByText(/Here is an answer/)).not.toBeInTheDocument();
+    await user.click(send);
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(0);
+    expect(input).toHaveValue("Hello");
+    expect(screen.getByText("Start the configured Ollama service, then check again before sending.")).toBeInTheDocument();
+  });
+
+  it("keeps Enter composition-safe and Shift+Enter inserts a newline", async () => {
+    const fetcher = defaultFetch();
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    mount();
+    const input = await screen.findByRole("textbox", { name: "Message" });
+    await user.type(input, "First line");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(input).toHaveValue("First line\n");
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", isComposing: true });
+    fireEvent.compositionEnd(input);
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(0);
+    expect(input).toHaveValue("First line\n");
   });
 
   it("uses the final two message slots for a successful exchange and restores all 100 messages", async () => {
@@ -415,16 +436,19 @@ describe("chat-first local application", () => {
 
   it("rechecks known Ollama unavailability without retrying generation or losing the draft", async () => {
     let catalogCalls = 0;
+    let resolveRecheck!: (response: Response) => void;
+    const pendingRecheck = new Promise<Response>((resolve) => { resolveRecheck = resolve; });
     const fetcher = defaultFetch();
     const fallback = fetcher.getMockImplementation()!;
-    fetcher.mockImplementation(async (input, init) => {
+    fetcher.mockImplementation((input, init) => {
       if (String(input) === "/api/v1/chat/models") {
         catalogCalls += 1;
-        return jsonResponse(catalogCalls === 1 ? {
+        if (catalogCalls === 2) return pendingRecheck;
+        return Promise.resolve(jsonResponse({
           ...models, availability: "unavailable", configured_model_available: false, available_models: [], error_code: "ollama_unavailable",
-        } : models);
+        }));
       }
-      if (String(input) === "/api/v1/chat") return jsonResponse({ mode: "general", answer: "Available after explicit retry", model: "gemma4:e2b" });
+      if (String(input) === "/api/v1/chat") return Promise.resolve(jsonResponse({ mode: "general", answer: "Available after explicit retry", model: "gemma4:e2b" }));
       return fallback(input, init);
     });
     vi.stubGlobal("fetch", fetcher);
@@ -437,12 +461,31 @@ describe("chat-first local application", () => {
     expect(fetcher.mock.calls.some(([url]) => String(url) === "/api/v1/chat")).toBe(false);
     await user.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() => expect(catalogCalls).toBe(2));
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
+    await user.keyboard("{Enter}");
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(0);
+    await act(async () => resolveRecheck(jsonResponse(models)));
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Keep my question while Ollama starts");
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
     expect(fetcher.mock.calls.some(([url]) => String(url) === "/api/v1/chat")).toBe(false);
     await user.click(screen.getByRole("button", { name: "Send message" }));
     expect(await screen.findByText("Available after explicit retry")).toBeInTheDocument();
     expect(catalogCalls).toBe(2);
+    expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1);
+  });
+
+  it("does not automatically retry a failed General Chat generation", async () => {
+    const fetcher = defaultFetch();
+    const fallback = fetcher.getMockImplementation()!;
+    fetcher.mockImplementation((input, init) => String(input) === "/api/v1/chat"
+      ? Promise.resolve(jsonResponse({ error: { code: "chat_generation_failed" } }, 503))
+      : fallback(input, init));
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    mount();
+    await user.type(await screen.findByRole("textbox", { name: "Message" }), "One bounded attempt");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("The local model could not complete this response.")).toBeInTheDocument();
     expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1);
   });
 

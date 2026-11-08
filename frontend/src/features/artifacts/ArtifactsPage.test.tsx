@@ -74,6 +74,17 @@ describe("Results catalog", () => {
     expect(screen.getByText("No saved research results")).toBeInTheDocument();
   });
 
+  it("does not describe an empty later page as an empty catalog and returns to the first page", async () => {
+    const listArtifacts = vi.fn(async (filters: Parameters<WorkbenchApiClient["listArtifacts"]>[0] = {}) =>
+      filters.offset === 0 ? [artifact({ benchmark_id: "earlier-run" })] : []);
+    mount(clientWith(listArtifacts), "/artifacts?offset=80");
+    expect(await screen.findByText("No results on this page")).toBeInTheDocument();
+    expect(screen.queryByText("No saved research results")).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Back to first page" }));
+    expect(await screen.findByText("earlier-run")).toBeInTheDocument();
+    expect(listArtifacts).toHaveBeenLastCalledWith({ limit: 21, offset: 0 });
+  });
+
   it("applies advanced filters, requests a bounded extra row, and preserves filter context through detail navigation", async () => {
     const first = Array.from({ length: 21 }, (_, index) => artifact({ artifact_id: String(index + 1).padStart(64, "0"), benchmark_id: `benchmark-${index}`, status: "partial" }));
     const final = [artifact({ artifact_id: "f".repeat(64), benchmark_id: "last-page", artifact_type: "ablation_result", case_count: null })];

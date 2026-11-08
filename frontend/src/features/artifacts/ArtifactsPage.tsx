@@ -155,7 +155,14 @@ export function ArtifactsPage({ client, connected, refreshKey, onRefresh }: Arti
       {!connected ? <EmptyState title="Connect to view saved results" detail="The evaluation catalog is available through the authenticated local workspace." /> : null}
       {connected && loading ? <LoadingState label="saved results" /> : null}
       {connected && error ? <ErrorState title="Results could not be loaded" detail={error} onRetry={onRefresh} /> : null}
-      {connected && !loading && !error && records.length === 0 ? <EmptyState
+      {connected && !loading && !error && records.length === 0 && offset > 0 ? <div className="results-out-of-range" role="status">
+        <EmptyState
+          title="No results on this page"
+          detail="This page has no records. Return to the first page to continue browsing."
+        />
+        <button className="button button--quiet" type="button" onClick={() => changePage(0)}>Back to first page</button>
+      </div> : null}
+      {connected && !loading && !error && records.length === 0 && offset === 0 ? <EmptyState
         title={activeFilters ? "No results match these filters" : "No saved research results"}
         detail={activeFilters ? "Clear one or more filters to broaden the catalog search." : "Saved evaluation and ablation runs will appear here. Asking questions in Chat does not create evaluation results."}
       /> : null}
