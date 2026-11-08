@@ -1,17 +1,21 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { ApiError, WorkbenchApiClient } from "../../api/client";
-import type { AskResponse, ChatModelCatalog, IndexSelectionState } from "../../api/types";
+import { ApiError, BootstrapApiClient, WorkbenchApiClient } from "../../api/client";
+import type { AskResponse, BootstrapDocumentsResponse, ChatModelCatalog, IndexSelectionState } from "../../api/types";
 import type { GeneralChatPreferences, PreferenceLoadStatus } from "../settings/preferences";
 import { resolveChatModel } from "../settings/preferences";
 import { boundedChatHistory } from "./history";
-
-import type { Mode, Message, ConversationStore } from "./conversations";
+import { ChatComposer } from "./ChatComposer";
+import { ChatMessage } from "./ChatMessage";
+import { ConversationRail } from "./ConversationRail";
+import { EvidenceInspector, type SourceEvidence } from "./EvidenceInspector";
+import type { Mode, Message, Conversation, ConversationStore } from "./conversations";
 
 interface Props {
   conversations: ConversationStore;
   visible: boolean;
   token: string | null;
+  bootstrapToken: string | null;
   preferences: GeneralChatPreferences;
   preferenceLoadStatus: PreferenceLoadStatus;
   onResetUnavailableModel: () => void;
@@ -19,26 +23,26 @@ interface Props {
 
 const errorText: Record<string, string> = {
   ollama_unavailable: "Ollama is not responding. Start the configured local Ollama service and try again.",
-  chat_model_unavailable: "That model is not installed in the configured local Ollama service.",
-  chat_model_capabilities_unavailable: "Ollama could not verify this model's response capabilities. Check the local service and try again.",
-  ollama_capacity_unavailable: "Ollama cannot accept another generation right now. Try again shortly.",
+  chat_model_unavailable: "This model is not installed in the local Ollama service.",
+  chat_model_capabilities_unavailable: "The local service could not verify this model's response capabilities.",
+  ollama_capacity_unavailable: "The local model cannot accept another request right now. Try again shortly.",
   chat_capacity_exhausted: "A local chat request is already running. Wait for it to finish, then try again.",
-  chat_generation_timeout: "The local model request timed out. The service may still be finishing work; check before retrying.",
+  chat_generation_timeout: "The model request timed out. Check the conversation before retrying; the service may still be working.",
   chat_generation_failed: "The local model could not complete this response.",
   chat_response_invalid: "The local model returned an unusable response.",
-  gateway_upstream_timeout: "The local request timed out. The model service may still be processing; check before retrying.",
-  gateway_upstream_unavailable: "The local service could not be reached. Check that RAG-PDF is running and try again.",
-  index_not_selected: "Choose a compatible index before using Document Chat.",
-  index_selection_stale: "The selected index no longer matches the current documents. Review Index Builds.",
-  index_selection_invalid: "The saved index selection is invalid. Review Index Builds before asking.",
-  ask_requires_explicit_index_selection: "Choose a compatible report in Index Builds before using Document Chat.",
-  index_store_unavailable: "The selected index could not be opened.",
-  retrieval_failed: "Document retrieval failed. Review the selected index and try again.",
-  generation_failed: "The answer model could not complete this response.",
+  gateway_upstream_timeout: "The local request timed out. Check the conversation before retrying.",
+  gateway_upstream_unavailable: "The local service could not be reached. Check that RAG-PDF is running.",
+  index_not_selected: "Choose a compatible index before using Chat with PDFs.",
+  index_selection_stale: "The selected index no longer matches the current PDFs. Prepare the updated collection in Documents.",
+  index_selection_invalid: "The saved index selection could not be verified. Review Documents and select a compatible index.",
+  ask_requires_explicit_index_selection: "Select a compatible index in Documents before asking about PDFs.",
+  index_store_unavailable: "The selected index could not be opened. Review its status in Documents.",
+  retrieval_failed: "Document retrieval failed. Review the selected index in Documents.",
+  generation_failed: "The document answer model could not complete this response.",
 };
 
 function messageFor(error: unknown): string {
-  if (error instanceof ApiError) return errorText[error.code] ?? `The request failed (${error.code}).`;
+  if (error instanceof ApiError) return errorText[error.code] ?? "The local service could not complete this request.";
   return "The local service could not complete this request.";
 }
 
@@ -46,64 +50,72 @@ function newId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function citationSegments(text: string, response: AskResponse, messageId: string, onOpen: (label: string) => void) {
-  const allowed = new Set(response.referenced_citations);
-  const parts = text.split(/(\[[TI][0-9]{1,3}\])/g);
-  return parts.map((part, index) => {
-    const match = /^\[([TI][0-9]{1,3})\]$/.exec(part);
-    const label = match?.[1];
-    if (!label || !allowed.has(label)) return <span key={`${index}-${part}`}>{part}</span>;
-    return <button id={`citation-${messageId}-${label}`} className="chat-citation" type="button" key={`${index}-${part}`} onClick={() => onOpen(label)}>{part}</button>;
-  });
+function conversationUrl(mode: Mode, id: string): string {
+  return `/?mode=${mode}&conversation=${encodeURIComponent(id)}`;
 }
 
-function pageName(page: number | null): string {
-  return page === null ? "Page not identified" : `Page ${page}`;
+function isValidFocusId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9:_-]{0,127}$/.test(value);
 }
 
-export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnavailableModel, conversations, visible }: Props) {
+export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadStatus, onResetUnavailableModel, conversations, visible }: Props) {
   const client = useMemo(() => new WorkbenchApiClient({ token }), [token]);
+  const bootstrapClient = useMemo(() => new BootstrapApiClient({ token: bootstrapToken }), [bootstrapToken]);
   const location = useLocation();
   const navigate = useNavigate();
-  const { mode, messages, generalTurns, question } = conversations.active;
+  const { id: activeId, mode, messages, generalTurns, question } = conversations.active;
   const { setMode, setMessages, setGeneralTurns, setQuestion } = conversations;
-  const [busy, setBusy] = useState(false);
+  const [pendingConversationId, setPendingConversationId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<ChatModelCatalog | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [selection, setSelection] = useState<IndexSelectionState | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [sourceInventory, setSourceInventory] = useState<BootstrapDocumentsResponse | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const [drawerMessage, setDrawerMessage] = useState<Message | null>(null);
   const [activeEvidence, setActiveEvidence] = useState<string | null>(null);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({});
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const [unavailableModelNotice, setUnavailableModelNotice] = useState<string | null>(null);
+  const [conversationsOpen, setConversationsOpen] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const scrollRegion = useRef<HTMLDivElement>(null);
+  const evidenceClose = useRef<HTMLButtonElement>(null);
+  const evidenceTrigger = useRef<HTMLElement | null>(null);
   const requestSequence = useRef(0);
   const requestController = useRef<AbortController | null>(null);
   const imageControllers = useRef<Set<AbortController>>(new Set());
+  const requestedImages = useRef<Set<string>>(new Set());
   const objectUrls = useRef<Set<string>>(new Set());
+  const stickToBottom = useRef(true);
+
+  const releaseImages = useCallback(() => {
+    for (const controller of imageControllers.current) controller.abort();
+    imageControllers.current.clear();
+    requestedImages.current.clear();
+    for (const url of objectUrls.current) URL.revokeObjectURL(url);
+    objectUrls.current.clear();
+    setImageUrls({});
+    setImageErrors({});
+  }, []);
 
   useEffect(() => {
     requestSequence.current += 1;
     requestController.current?.abort();
     requestController.current = null;
-    setBusy(false);
+    setPendingConversationId(null);
   }, [token]);
 
   const modelResolution = resolveChatModel(preferences, catalog);
   const generalModel = modelResolution.model;
-  const modelIsVerified = catalog?.availability === "available" && generalModel !== null;
-  const hasIndex = selection?.selection_status === "selected" && selection.selection !== null;
-
-  const releaseImages = useCallback((clearState = true) => {
-    for (const controller of imageControllers.current) controller.abort();
-    imageControllers.current.clear();
-    for (const url of objectUrls.current) URL.revokeObjectURL(url);
-    objectUrls.current.clear();
-    if (clearState) setImageUrls({});
-  }, []);
+  const modelIsVerified = catalog?.availability === "available" && generalModel !== null && catalog.available_models.includes(generalModel);
+  const selectedFingerprint = selection?.selection_status === "selected" ? selection.selection?.index_fingerprint ?? null : null;
+  const currentManifest = sourceInventory?.manifest_hash ?? null;
+  const selectedManifestMatches = selection?.selection_status === "selected" && selection.selection !== null && currentManifest !== null && selection.selection.document_manifest_hash === currentManifest;
+  const hasIndex = Boolean(selectedManifestMatches);
+  const busy = pendingConversationId !== null;
+  const activePending = pendingConversationId === activeId;
 
   useEffect(() => {
     let active = true;
@@ -112,62 +124,90 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     void client.chatModels(controller.signal).then((value) => {
       if (active) { setCatalog(value); setCatalogError(null); }
     }).catch((error: unknown) => {
-      if (active) setCatalogError(messageFor(error));
+      if (active && !(error instanceof DOMException && error.name === "AbortError")) setCatalogError(messageFor(error));
     });
     return () => { active = false; controller.abort(); };
   }, [client, visible]);
 
   useEffect(() => {
-    if (!visible) return;
-    if (modelResolution.status !== "saved-model-unavailable" || !preferences.selectedModel) return;
+    if (!visible || modelResolution.status !== "saved-model-unavailable" || !preferences.selectedModel) return;
     const previous = preferences.selectedModel;
-    const fallback = catalog?.configured_model_available ? `Using configured default ${catalog.configured_model}.` :
-      `Configured default ${catalog?.configured_model ?? ""} is also not installed.`;
+    const fallback = catalog?.configured_model_available ? `Using configured default ${catalog.configured_model}.` : "No configured model is currently available.";
     setUnavailableModelNotice(`Saved model ${previous} is no longer installed. ${fallback}`);
     onResetUnavailableModel();
   }, [catalog, modelResolution.status, onResetUnavailableModel, preferences.selectedModel, visible]);
 
   useEffect(() => {
     let active = true;
-    if (mode !== "document") {
-      setSelection(null);
-      setSelectionError(null);
-      return () => { active = false; };
-    }
+    let serial = 0;
+    if (!visible || mode !== "document") return () => { active = false; };
     setSelection(null);
     setSelectionError(null);
-    let serial = 0;
+    setSourceInventory(null);
+    setSourceError(null);
     const refresh = () => {
       const request = ++serial;
+      const controller = new AbortController();
       void client.getIndexSelection().then((value) => {
         if (active && request === serial) { setSelection(value); setSelectionError(null); }
       }).catch((error: unknown) => {
-        if (active && request === serial) { setSelection(null); setSelectionError(messageFor(error)); }
+        if (active && request === serial && !(error instanceof DOMException && error.name === "AbortError")) { setSelection(null); setSelectionError(messageFor(error)); }
       });
+      void bootstrapClient.listDocuments({ limit: 1, offset: 0, signal: controller.signal }).then((value) => {
+        if (active && request === serial) { setSourceInventory(value); setSourceError(null); }
+      }).catch((error: unknown) => {
+        if (active && request === serial && !(error instanceof DOMException && error.name === "AbortError")) { setSourceInventory(null); setSourceError(messageFor(error)); }
+      });
+      return controller;
     };
-    refresh();
-    window.addEventListener("focus", refresh);
-    return () => { active = false; window.removeEventListener("focus", refresh); };
-  }, [client, mode, visible]);
+    let currentController = refresh();
+    const onFocus = () => { currentController.abort(); currentController = refresh(); };
+    window.addEventListener("focus", onFocus);
+    return () => { active = false; currentController.abort(); window.removeEventListener("focus", onFocus); };
+  }, [bootstrapClient, client, mode, visible]);
+
+  // Keep the evidence inspector across the source-viewer route only. Other
+  // destinations and conversation switches dismiss it; reloads never restore it.
+  useEffect(() => {
+    if (location.pathname === "/") return;
+    if (/^\/documents\/view\/doc_[0-9a-f]{64}$/.test(location.pathname)) {
+      releaseImages();
+      return;
+    }
+    setDrawerMessage(null);
+    setActiveEvidence(null);
+    releaseImages();
+  }, [location.pathname, releaseImages]);
+
+  useEffect(() => {
+    stickToBottom.current = true;
+    setDrawerMessage(null);
+    setActiveEvidence(null);
+    releaseImages();
+  }, [activeId, releaseImages]);
 
   useEffect(() => {
     const region = scrollRegion.current;
-    if (region) region.scrollTop = region.scrollHeight;
-  }, [messages, busy]);
+    if (region && stickToBottom.current) region.scrollTop = region.scrollHeight;
+  }, [activeId, messages.length, pendingConversationId]);
 
   useEffect(() => () => {
     requestSequence.current += 1;
     requestController.current?.abort();
-    releaseImages(false);
-  }, [releaseImages]);
+    for (const controller of imageControllers.current) controller.abort();
+    for (const url of objectUrls.current) URL.revokeObjectURL(url);
+    imageControllers.current.clear();
+    objectUrls.current.clear();
+  }, []);
 
   useEffect(() => {
-    if (!drawerMessage?.document || !drawerMessage.document.image_evidence.length) return;
+    if (!visible || !drawerMessage?.document || !drawerMessage.document.image_evidence.length) return;
     let active = true;
     for (const evidence of drawerMessage.document.image_evidence) {
       if (!evidence.image_reference) continue;
       const key = `${drawerMessage.id}:${evidence.label}`;
-      if (imageUrls[key] || imageErrors[key]) continue;
+      if (requestedImages.current.has(key)) continue;
+      requestedImages.current.add(key);
       const controller = new AbortController();
       imageControllers.current.add(controller);
       void client.getAskImage(evidence.image_reference, controller.signal).then((blob) => {
@@ -179,49 +219,101 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
         if (active && !controller.signal.aborted) setImageErrors((current) => ({ ...current, [key]: true }));
       }).finally(() => imageControllers.current.delete(controller));
     }
-    return () => { active = false; };
-  }, [client, drawerMessage, imageErrors, imageUrls]);
+    return () => { active = false; for (const controller of imageControllers.current) controller.abort(); };
+  }, [client, drawerMessage, visible]);
 
-  const conversationUrl = (mode: Mode, id: string) => `/?mode=${mode}&conversation=${encodeURIComponent(id)}`;
-  const selectMode = (next: Mode) => {
-    if (busy || requestController.current) return;
-    const id = setMode(next, false);
-    if (id) navigate(conversationUrl(next, id));
-    textarea.current?.focus();
+  useEffect(() => {
+    if (!drawerMessage || !visible) return;
+    evidenceClose.current?.focus();
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeEvidence();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const drawer = evidenceClose.current?.closest(".evidence-drawer");
+      const focusable = drawer?.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])");
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [activeEvidence, drawerMessage, visible]);
+
+  const focusComposer = useCallback(() => { textarea.current?.focus(); }, []);
+  const selectConversation = (conversation: Conversation) => {
+    conversations.select(conversation.id, false);
+    navigate(conversationUrl(conversation.mode, conversation.id));
   };
 
-  // Explicit conversation IDs win over mode hints. A plain sidebar / preserves
-  // the active conversation; history entries restore their specific conversation.
+  const selectMode = (next: Mode) => {
+    const id = setMode(next, false);
+    if (id) navigate(conversationUrl(next, id));
+  };
+
+  // A conversation ID in history is authoritative. Mode-only entry points select
+  // that mode's remembered conversation; a plain / preserves the current one.
   useLayoutEffect(() => {
-    if (location.pathname !== "/" || busy) return;
+    if (location.pathname !== "/") return;
     const params = new URLSearchParams(location.search);
-    const target = conversations.conversations.find(c => c.id === params.get("conversation"));
+    const target = conversations.conversations.find((conversation) => conversation.id === params.get("conversation"));
     if (target) {
       if (conversations.active.id !== target.id) conversations.select(target.id);
       const canonical = conversationUrl(target.mode, target.id);
-      if (`${location.pathname}${location.search}` !== canonical) navigate(canonical, { replace: true });
+      if (`${location.pathname}${location.search}` !== canonical) navigate(canonical, { replace: true, state: location.state });
       return;
     }
     if (params.has("conversation")) {
-      navigate(conversationUrl(mode, conversations.active.id), { replace: true });
+      navigate(conversationUrl(mode, conversations.active.id), { replace: true, state: null });
       return;
     }
     const requested = params.get("mode");
     if (requested === "document" || requested === "general") {
       const id = requested === mode ? conversations.active.id : setMode(requested);
-      navigate(conversationUrl(id ? requested : mode, id ?? conversations.active.id), { replace: true });
+      navigate(conversationUrl(id ? requested : mode, id ?? conversations.active.id), { replace: true, state: null });
     }
-  }, [location.pathname, location.search, location.key, conversations.active.id, mode, busy]);
+  }, [location.pathname, location.search, location.key, conversations.active.id, conversations.conversations, mode, navigate, setMode]);
 
-  useEffect(() => { setDrawerMessage(null); setActiveEvidence(null); releaseImages(); }, [conversations.active.id, visible, releaseImages]);
+  useEffect(() => {
+    if (!visible) return;
+    const state = location.state && typeof location.state === "object" ? location.state as { restoreFocusId?: unknown } : null;
+    if (isValidFocusId(state?.restoreFocusId)) {
+      const target = document.getElementById(state.restoreFocusId);
+      if (target instanceof HTMLElement) { target.focus(); return; }
+    }
+    if (location.pathname === "/" && location.key !== "default") focusComposer();
+  }, [focusComposer, location.key, location.pathname, location.state, visible]);
 
-  const openEvidence = (message: Message, label: string | null) => {
+  useEffect(() => {
+    if (!drawerMessage || !activeEvidence) return;
+    document.getElementById(`evidence-${drawerMessage.id}-${activeEvidence}`)?.scrollIntoView?.({ block: "nearest" });
+  }, [drawerMessage, activeEvidence]);
+
+  function openEvidence(message: Message, label: string | null, trigger: HTMLElement) {
+    evidenceTrigger.current = trigger;
+    if (drawerMessage?.id !== message.id) releaseImages();
     setDrawerMessage(message);
     setActiveEvidence(label);
-  };
+  }
 
-  const openDocument = (message: Message, evidence: AskResponse["text_evidence"][number] | AskResponse["image_evidence"][number]) => {
-    const response = message.document;
+  function closeEvidence() {
+    setDrawerMessage(null);
+    setActiveEvidence(null);
+    releaseImages();
+    const target = evidenceTrigger.current;
+    evidenceTrigger.current = null;
+    requestAnimationFrame(() => {
+      if (target?.isConnected) target.focus();
+      else focusComposer();
+    });
+  }
+
+  function openDocument(message: Message, evidence: SourceEvidence) {
+    const response = message.document as AskResponse | undefined;
     if (!response || message.evidenceExpired || !response.referenced_citations.includes(evidence.label) ||
       !/^doc_[0-9a-f]{64}$/.test(evidence.document_id) || !/^[0-9a-f]{64}$/.test(response.document_manifest_hash) ||
       (evidence.page_number !== null && (!Number.isSafeInteger(evidence.page_number) || evidence.page_number < 1))) return;
@@ -230,46 +322,36 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     navigate(`/documents/view/${evidence.document_id}?${query.toString()}`, {
       state: {
         returnTo: `${location.pathname}${location.search}`,
-        returnFocusId: "chat-question",
+        returnFocusId: `source-open-${message.id}-${evidence.label}`,
         citation: { label: evidence.label, page: evidence.page_number },
       },
     });
-  };
-
-  useEffect(() => {
-    if (!visible || !location.state || typeof location.state !== "object") return;
-    if ((location.state as { restoreFocusId?: unknown }).restoreFocusId === "chat-question") textarea.current?.focus();
-  }, [visible, location.key, location.state]);
-
-  useEffect(() => {
-    if (!drawerMessage || !activeEvidence) return;
-    document.getElementById(`evidence-${drawerMessage.id}-${activeEvidence}`)?.scrollIntoView?.({ block: "nearest" });
-  }, [drawerMessage, activeEvidence]);
+  }
 
   async function submit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const normalized = question.trim();
-    if (!normalized || normalized.length > 4000 || messages.length >= 100 || (mode === "general" && catalog === null) || busy || requestController.current !== null || (mode === "document" && !hasIndex)) return;
+    if (!normalized || normalized.length > 4000 || messages.length >= 100 || busy ||
+      (mode === "general" && (catalog === null || (catalog.availability === "available" && !modelIsVerified))) ||
+      (mode === "document" && !hasIndex)) return;
     const currentMode = mode;
+    const currentConversationId = activeId;
     const sequence = ++requestSequence.current;
     const controller = new AbortController();
     requestController.current = controller;
-    const id = newId();
-    const userMessage: Message = { id, role: "user", mode: currentMode, text: normalized };
+    setPendingConversationId(currentConversationId);
+    const userMessage: Message = { id: newId(), role: "user", mode: currentMode, text: normalized };
     setMessages((current) => [...current, userMessage]);
     setQuestion("");
-    setBusy(true);
     setCopyNotice(null);
+    stickToBottom.current = true;
     try {
       if (currentMode === "general") {
         const response = await client.generalChat({
           question: normalized,
           history: boundedChatHistory(generalTurns),
           ...(generalModel ? { model: generalModel } : {}),
-          generation: {
-            temperature: preferences.temperature,
-            max_output_tokens: preferences.maxOutputTokens,
-          },
+          generation: { temperature: preferences.temperature, max_output_tokens: preferences.maxOutputTokens },
         }, controller.signal);
         if (sequence !== requestSequence.current) return;
         setMessages((current) => [...current, { id: newId(), role: "assistant", mode: "general", text: response.answer }]);
@@ -278,36 +360,41 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
         const response = await client.ask({ question: normalized }, controller.signal);
         if (sequence !== requestSequence.current) return;
         const answer = response.outcome === "insufficient_evidence"
-          ? "No usable document evidence was selected for this question. The answer model was not called."
+          ? "No usable evidence was returned for this question. The answer model was not called."
           : response.answer ?? "The answer service returned no text.";
         setMessages((current) => [...current, { id: newId(), role: "assistant", mode: "document", text: answer, document: response }]);
       }
     } catch (error) {
       if (sequence !== requestSequence.current || (error instanceof DOMException && error.name === "AbortError")) return;
-      const assistant: Message = { id: newId(), role: "assistant", mode: currentMode, text: messageFor(error), error: true };
-      setMessages((current) => [...current, assistant]);
+      setMessages((current) => [...current, { id: newId(), role: "assistant", mode: currentMode, text: messageFor(error), error: true }]);
     } finally {
       if (sequence === requestSequence.current) {
         requestController.current = null;
-        setBusy(false);
+        setPendingConversationId(null);
       }
     }
   }
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void submit();
     }
   };
 
-  const clearConversation = () => {
-    if (busy || requestController.current) return;
+  function createConversation() {
     const id = conversations.create(mode, false);
     if (id) navigate(conversationUrl(mode, id));
-    setCopyNotice(null);
-    textarea.current?.focus();
-  };
+  }
+
+  function deleteConversation() {
+    const title = messages.find((message) => message.role === "user")?.text.slice(0, 60) || "this conversation";
+    if (!window.confirm(`Delete “${title}” and its draft from this tab? This cannot be undone.`)) return;
+    const id = conversations.remove();
+    const nextMode = conversations.conversations.find((conversation) => conversation.id === id)?.mode ?? mode;
+    closeEvidence();
+    navigate(conversationUrl(nextMode, id), { replace: true });
+  }
 
   async function copyAnswer(text: string) {
     try {
@@ -318,110 +405,122 @@ export function ChatPage({ token, preferences, preferenceLoadStatus, onResetUnav
     }
   }
 
-  const evidenceMessage = drawerMessage;
-  const evidenceResponse = evidenceMessage?.document;
+  const modelStatus = catalogError ? "Model status unavailable" : catalog?.availability === "unavailable" ? "Local model unavailable" :
+    !catalog || !modelIsVerified ? "Checking installed models" : `Local model · ${generalModel}`;
+  const pdfCountLabel = (count: number) => `${count} ${count === 1 ? "PDF" : "PDFs"}`;
+  const documentsState = selectionError || sourceError ? "unavailable" : sourceInventory?.total === 0 ? "empty" :
+    selection?.selection_status === "stale" || (selection?.selection_status === "selected" && !selectedManifestMatches && sourceInventory !== null) ? "stale" :
+    selection?.selection_status === "invalid" ? "invalid" : hasIndex ? "selected" : sourceInventory ? "unselected" : "checking";
+  const indexState = mode !== "document" ? null : documentsState === "empty"
+    ? { title: "No PDFs imported", detail: "Add PDFs before starting a document conversation.", action: "Add PDFs", tone: "neutral" }
+    : documentsState === "checking"
+      ? { title: "Checking your PDF collection", detail: "The local source and index status are being checked.", action: null, tone: "neutral" }
+      : documentsState === "unavailable"
+        ? { title: "Document status is unavailable", detail: sourceError ?? selectionError ?? "The local service could not verify the current PDF collection.", action: "Open Documents", tone: "warning" }
+        : documentsState === "stale"
+          ? { title: "Your PDFs changed", detail: "Prepare an updated index before asking about the current collection.", action: "Prepare documents", tone: "warning" }
+          : documentsState === "invalid"
+            ? { title: "Index selection needs attention", detail: "Review Documents and choose a compatible completed report.", action: "Review Documents", tone: "warning" }
+            : documentsState === "selected"
+              ? { title: `${pdfCountLabel(sourceInventory?.total ?? 0)} · index selected`, detail: "Retrieval is checked when you ask; report selection alone does not verify runtime readiness.", action: null, tone: "selected" }
+              : { title: `${pdfCountLabel(sourceInventory?.total ?? 0)} uploaded`, detail: "Select a compatible index before asking questions.", action: "Prepare documents", tone: "neutral" };
+  const disabledReason = activePending ? null : busy ? "Another conversation is finishing a response. You can keep a draft here." :
+    messages.length >= 100 ? "This conversation reached its message limit. Start a new chat to continue." :
+    mode === "general" && catalog === null ? "Checking local model availability…" :
+    mode === "general" && catalog?.availability === "available" && !modelIsVerified ? "Choose an installed local model in Settings before sending." :
+    mode === "document" && !hasIndex ? (documentsState === "empty" ? "Add a PDF to start Chat with PDFs." : "Select a compatible index in Documents before sending.") : null;
+
+  const evidenceResponse = drawerMessage?.document;
+  const showPendingElsewhere = busy && !activePending;
 
   return <div className={`chat-workspace${drawerMessage ? " chat-workspace--with-evidence" : ""}`}>
-    <section className="chat-main" aria-label="Conversation">
+    <ConversationRail
+      conversations={conversations.conversations}
+      activeId={activeId}
+      mode={mode}
+      notice={conversations.notice}
+      mobileOpen={conversationsOpen}
+      evidenceOpen={Boolean(drawerMessage)}
+      pendingConversationId={pendingConversationId}
+      onNew={createConversation}
+      onSelect={selectConversation}
+      onDelete={deleteConversation}
+      onDismiss={() => setConversationsOpen(false)}
+    />
+
+    <section className="chat-main" aria-label="Chat workspace" inert={Boolean(drawerMessage)}>
       <header className="chat-heading">
-        <div>
+        <div className="chat-heading__title">
           <h1>Chat</h1>
-          <p>{mode === "general" ? "Talk with your local model, without document retrieval." : "Ask about the documents behind your selected index."}</p>
+          <p>{mode === "general" ? "General Chat · A conversation with your local language model." : "Chat with PDFs · Ask about the selected collection."}</p>
         </div>
         <div className="chat-heading__actions">
-          {mode === "general" ? <Link className="chat-settings-link" to="/settings">Settings</Link> : null}
-          <button className="chat-new" type="button" onClick={clearConversation} disabled={busy} aria-label="New chat">
-            <span aria-hidden="true">＋</span> New chat
-          </button>
+          <button type="button" className="chat-mobile-conversations" aria-expanded={conversationsOpen} onClick={() => setConversationsOpen(true)}>Conversations</button>
+          <button type="button" className="chat-new" onClick={createConversation} aria-label="New chat"><span aria-hidden="true">＋</span> New chat</button>
         </div>
       </header>
 
-      <div className="conversation-picker">
-        <label htmlFor="conversation-picker">Conversation</label>
-        <select id="conversation-picker" value={conversations.active.id} disabled={busy} onChange={e => { const target = conversations.conversations.find(c => c.id === e.target.value); if (target) { conversations.select(target.id, false); navigate(conversationUrl(target.mode, target.id)); } }}>
-          {conversations.conversations.map((c, i) => <option key={c.id} value={c.id}>{c.mode === "general" ? "General Chat" : "PDF chat"}: {c.messages.find(m => m.role === "user")?.text.slice(0, 45) || c.question.slice(0, 45) || `New conversation ${i + 1}`}</option>)}
-        </select>
-        <button type="button" disabled={busy} onClick={() => { if (window.confirm("Delete this conversation and its draft from this tab?")) { const id = conversations.remove(); const target = conversations.conversations.find(c => c.id === id); navigate(conversationUrl(target?.mode ?? mode, id), { replace: true }); } }}>Delete conversation</button>
-      </div>
-      {conversations.notice ? <p role="status">{conversations.notice}</p> : null}
       <div className="chat-mode-row">
         <div className="chat-mode-control" role="group" aria-label="Chat mode">
-          <button type="button" disabled={busy} aria-pressed={mode === "general"} className={mode === "general" ? "is-active" : ""} onClick={() => selectMode("general")}>General Chat</button>
-          <button type="button" disabled={busy} aria-pressed={mode === "document"} className={mode === "document" ? "is-active" : ""} onClick={() => selectMode("document")}>Chat with PDFs</button>
+          <button type="button" aria-pressed={mode === "general"} className={mode === "general" ? "is-active" : ""} onClick={() => selectMode("general")}>General Chat</button>
+          <button type="button" aria-pressed={mode === "document"} className={mode === "document" ? "is-active" : ""} onClick={() => selectMode("document")}>Chat with PDFs</button>
         </div>
-        <div className="chat-context-label" aria-live="polite">
-          {mode === "general" ? <><span className={`chat-dot${modelIsVerified ? "" : " chat-dot--muted"}`} /> General Chat{modelIsVerified ? ` · ${generalModel}` : !catalog ? " · checking models" : ""}</> : hasIndex ? <><span className="chat-dot chat-dot--rust" /> PDF collection selected</> : <><span className="chat-dot chat-dot--muted" /> No usable index</>}
+        <div className={`chat-context-label${mode === "general" ? (modelIsVerified ? " is-available" : " is-unavailable") : hasIndex ? " is-selected" : ""}`} aria-live="polite">
+          {mode === "general" ? modelIsVerified ? `Local model · ${generalModel}` : catalog?.availability === "unavailable" ? "Local model unavailable" : "Checking model" : hasIndex ? "Index selected" : "Index needed"}
         </div>
       </div>
 
-      {visible && mode === "general" && unavailableModelNotice ? <p className="chat-settings-notice" role="status">{unavailableModelNotice}</p> : null}
-      {visible && mode === "general" && preferenceLoadStatus === "invalid" ? <p className="chat-settings-notice" role="status">Saved General Chat preferences were invalid. Safe defaults are active.</p> : null}
-
-      {mode === "document" && !hasIndex ? <div className="chat-no-index" role={selectionError ? "alert" : "status"}>
-        <div className="chat-no-index__mark" aria-hidden="true">▤</div>
-        <div><strong>{selectionError ? "Index status is unavailable" : selection?.selection_status === "stale" ? "Your selected index is out of date" : "Choose an index to chat with documents"}</strong>
-          <p>{selectionError ?? (selection?.selection_status === "stale" ? "Your PDFs changed after this index was built. Prepare an index for the updated documents." : "You can draft a question now. Prepare your documents before sending.")}</p>
-          <div className="chat-inline-links"><Link to="/documents">Prepare documents</Link></div>
-        </div>
+      {mode === "general" && unavailableModelNotice ? <p className="chat-inline-notice" role="status">{unavailableModelNotice}</p> : null}
+      {mode === "general" && preferenceLoadStatus === "invalid" ? <p className="chat-inline-notice" role="status">Invalid saved preferences were reset to safe defaults.</p> : null}
+      {mode === "document" && indexState ? <div className={`chat-index-state chat-index-state--${indexState.tone}`} role={indexState.tone === "warning" ? "alert" : "status"}>
+        <div><strong>{indexState.title}</strong><p>{indexState.detail}</p></div>
+        {indexState.action ? <Link to="/documents" className="chat-index-action">{indexState.action}</Link> : null}
       </div> : null}
+      {showPendingElsewhere ? <p className="chat-inline-notice" role="status">A response is still finishing in another conversation. It will stay with that conversation.</p> : null}
 
-      <div className={`chat-transcript${messages.length ? " chat-transcript--active" : ""}`} ref={scrollRegion} aria-live="polite" aria-relevant="additions text">
+      <div
+        className={`chat-transcript${messages.length ? " chat-transcript--active" : ""}`}
+        ref={scrollRegion}
+        role="log"
+        aria-label={`${mode === "general" ? "General Chat" : "Chat with PDFs"} messages`}
+        aria-live="polite"
+        aria-relevant="additions"
+        onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 96; }}
+      >
         {!messages.length ? <div className="chat-empty">
           <div className="chat-empty__glyph" aria-hidden="true"><span /><span /><span /></div>
           <h2>{mode === "general" ? "What would you like to explore?" : "Ask a question about your PDFs"}</h2>
-          <p>{mode === "general" ? "Chat with your local model." : hasIndex ? "Answers use only evidence selected from your compatible index." : "Select an index to begin, or switch to General Chat."}</p>
-          {mode === "general" ? <p className="chat-model-status">{catalogError ?? (catalog?.availability === "unavailable" ? "Ollama is currently unavailable. You can still open Settings to inspect model availability." : modelResolution.status === "configured-default-unavailable" ? `Configured default ${catalog?.configured_model} is not installed. Select an installed model in Settings.` : modelResolution.status === "checking" ? "Checking installed models…" : generalModel ? `Using ${generalModel}.` : "Select an installed model in Settings to begin.")}</p> : null}
-        </div> : messages.map((message) => <article className={`chat-message chat-message--${message.role}${message.error ? " chat-message--error" : ""}`} key={message.id}>
-          <div className="chat-message__meta"><span className={`chat-avatar chat-avatar--${message.mode}`} aria-hidden="true">{message.role === "user" ? "Y" : "R"}</span><strong>{message.role === "user" ? "You" : "RAG-PDF"}</strong><span>{message.mode === "general" ? "General Chat" : "Document Chat"}</span></div>
-          <div className="chat-message__body">
-            {message.document && message.document.outcome === "answered" ? <p>{citationSegments(message.text, message.document, message.id, (label) => openEvidence(message, label))}</p> : <p>{message.text}</p>}
-            {message.evidenceExpired ? <p className="chat-note">Evidence expired after reload. Ask again to retrieve current sources.</p> : null}
-            {message.document && message.document.index_fingerprint !== selection?.selection?.index_fingerprint ? <p className="chat-note">Sources belong to the index used for this answer.</p> : null}
-            {message.document?.model_reported_insufficient_evidence ? <p className="chat-note">The configured model reported that the supplied evidence was insufficient.</p> : null}
-            {message.document?.warnings.includes("unsupported_citation_label") ? <p className="chat-note">A citation label was not present in the supplied evidence, so it is shown without a link.</p> : null}
-            {message.document?.text_evidence.length || message.document?.image_evidence.length ? <button className="chat-evidence-link" type="button" onClick={() => openEvidence(message, null)}>View {message.document.text_evidence.length + message.document.image_evidence.length} source items</button> : null}
-            {message.role === "assistant" && !message.error ? <button className="chat-copy" type="button" onClick={() => void copyAnswer(message.text)}>Copy</button> : null}
-          </div>
-        </article>)}
-        {busy ? <div className="chat-thinking" role="status"><span className="chat-thinking__dots" aria-hidden="true"><i /><i /><i /></span><span>{mode === "general" ? "Waiting for the local model…" : "Searching the selected index…"}</span></div> : null}
+          <p>{mode === "general" ? "Your conversation uses the selected local model, without document retrieval." : hasIndex ? "Questions are sent to the selected index and document answer model." : "Prepare or select an index in Documents to begin."}</p>
+          {mode === "general" ? <p className={`chat-model-status${modelIsVerified ? " is-available" : " is-unavailable"}`} role="status">
+            {catalogError ?? (catalog?.availability === "unavailable" ? "Ollama is unavailable. Check the local service." : modelResolution.status === "configured-default-unavailable" ? `Configured model ${catalog?.configured_model ?? ""} is not installed. Choose an installed model in Settings.` : modelResolution.status === "checking" ? "Checking installed models…" : modelIsVerified ? `Using ${generalModel}.` : "Choose an installed model in Settings to begin.")}
+          </p> : null}
+        </div> : messages.map((message) => <ChatMessage key={message.id} message={message} selectedFingerprint={selectedFingerprint} onOpenEvidence={openEvidence} onCopy={(text) => void copyAnswer(text)} />)}
+        {activePending ? <div className="chat-thinking" role="status"><span className="chat-thinking__dots" aria-hidden="true"><i /><i /><i /></span><span>{mode === "general" ? "Waiting for the local model…" : "Retrieving evidence and preparing an answer…"}</span></div> : null}
       </div>
 
-      {messages.length >= 100 ? <p role="status">Conversation limit reached. Start a new chat to continue; these messages remain available.</p> : null}
       {copyNotice ? <p className="chat-copy-notice" role="status">{copyNotice}</p> : null}
-      <form className="chat-composer" onSubmit={(event) => void submit(event)}>
-        <label className="sr-only" htmlFor="chat-question">Message</label>
-        <textarea ref={textarea} id="chat-question" value={question} maxLength={4000} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleKeyDown}
-          placeholder={mode === "general" ? "Message your local model…" : "Ask about the selected documents…"} disabled={busy} rows={3} />
-        <div className="chat-composer__foot">
-          <span>{mode === "general" ? modelIsVerified ? `Local model · ${generalModel}` : catalog?.availability === "unavailable" ? "Ollama unavailable" : "Checking local model" : "Answers from your PDFs"}</span>
-          <div><small>{question.length}/4000</small><button type="submit" className="chat-send" disabled={!question.trim() || messages.length >= 100 || (mode === "general" && catalog === null) || busy || requestController.current !== null || (mode === "document" && !hasIndex)} aria-label="Send message"><span aria-hidden="true">↑</span></button></div>
-        </div>
-      </form>
-      <p className="chat-footnote">{mode === "general" ? "General Chat is not document-grounded." : "PDF questions use the selected index."} Conversations stay in this browser tab session. Evidence is not saved across reloads.</p>
+      <ChatComposer
+        question={question}
+        mode={mode}
+        modelStatus={mode === "general" ? modelStatus : hasIndex ? "PDF collection selected · retrieval checked on send" : "Document index required"}
+        pending={activePending}
+        disabledReason={disabledReason}
+        textareaRef={textarea}
+        onChange={setQuestion}
+        onSubmit={(event) => { void submit(event); }}
+        onKeyDown={handleKeyDown}
+      />
+      <p className="chat-footnote">{mode === "general" ? "General Chat is not document-grounded. " : ""}Chats are kept in this browser tab session. Reloaded document evidence expires; ask again to retrieve current sources.</p>
     </section>
 
-    {evidenceMessage && evidenceResponse ? <>
-      <button className="evidence-scrim" aria-label="Close evidence" onClick={() => { setDrawerMessage(null); releaseImages(); }} />
-      <aside className="evidence-drawer" aria-label="Document evidence">
-        <header><div><span className="chat-kicker">SOURCE MATERIAL</span><h2>Evidence</h2></div><button type="button" aria-label="Close evidence" onClick={() => { setDrawerMessage(null); releaseImages(); }}>×</button></header>
-        <p className="evidence-disclaimer">These are the passages and images returned for this question. A citation identifies supplied evidence, not a factuality guarantee.</p>
-        <div className="evidence-list">
-          {evidenceResponse.text_evidence.map((item) => <article key={item.label} className={`evidence-item${activeEvidence === item.label ? " is-selected" : ""}`} id={`evidence-${evidenceMessage.id}-${item.label}`}>
-            <div className="evidence-item__top"><strong>{item.label}</strong><span>{item.source_path} · {pageName(item.page_number)}</span></div><p>{item.passage}</p>
-            {item.truncated ? <small>Passage shortened for the answer context</small> : null}
-            {evidenceResponse.referenced_citations.includes(item.label) ? <button className="evidence-open-document" type="button" onClick={() => openDocument(evidenceMessage, item)}>Open in document</button> : null}
-          </article>)}
-          {evidenceResponse.image_evidence.map((item) => {
-            const key = `${evidenceMessage.id}:${item.label}`;
-            return <figure key={item.label} className={`evidence-item evidence-item--image${activeEvidence === item.label ? " is-selected" : ""}`} id={`evidence-${evidenceMessage.id}-${item.label}`}>
-              <div className="evidence-item__top"><strong>{item.label}</strong><span>{item.source_path} · {pageName(item.page_number)}</span></div>
-              {imageUrls[key] ? <img src={imageUrls[key]} alt={item.caption || `Retrieved image ${item.label}`} /> : <div className="evidence-image-state" role="status">{imageErrors[key] ? "Image evidence is unavailable or expired." : "Loading authenticated image evidence…"}</div>}
-              {item.caption ? <figcaption>{item.caption}</figcaption> : null}
-              {evidenceResponse.referenced_citations.includes(item.label) ? <button className="evidence-open-document" type="button" onClick={() => openDocument(evidenceMessage, item)}>Open in document</button> : null}
-            </figure>;
-          })}
-        </div>
-      </aside>
-    </> : null}
+    {drawerMessage && evidenceResponse ? <EvidenceInspector
+      message={drawerMessage}
+      activeLabel={activeEvidence}
+      imageUrls={imageUrls}
+      imageErrors={imageErrors}
+      closeRef={evidenceClose}
+      onClose={closeEvidence}
+      onOpenDocument={openDocument}
+    /> : null}
   </div>;
 }

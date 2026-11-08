@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ComponentType } from "react";
+import { SESSION_KEY } from "./features/chat/conversations";
 
 let App: ComponentType = (() => null) as ComponentType;
 beforeAll(async () => {
@@ -82,12 +83,22 @@ function defaultFetch() {
     if (path === "/bootstrap-api/v1/bootstrap/status") return jsonResponse({
       mode: "bootstrap", status: "running", accepting_jobs: true, worker_count: 1, queue_capacity: 2,
     });
-    if (path.startsWith("/bootstrap-api/v1/bootstrap/documents")) return jsonResponse({
+    if (path.startsWith("/bootstrap-api/v1/bootstrap/documents")) {
+      const url = new URL(path, "http://local.test");
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      return jsonResponse({
       inventory_status: "available", documents: [], manifest_hash: "a".repeat(64), total: 0,
-      limit: 50, offset: 0, complete: true, max_upload_bytes: 16 * 1024 * 1024, max_pages: 200,
-    });
+      limit, offset, complete: true, max_upload_bytes: 16 * 1024 * 1024, max_pages: 200,
+      });
+    }
     return jsonResponse({ error: { code: "not_found" } }, 404);
   });
+}
+
+function storedActiveConversationId(): string {
+  const raw = window.sessionStorage.getItem(SESSION_KEY);
+  return raw ? (JSON.parse(raw) as { activeId: string }).activeId : "";
 }
 
 describe("chat-first local application", () => {
@@ -154,24 +165,31 @@ describe("chat-first local application", () => {
     const user = userEvent.setup();
     mount();
     await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
-    expect(await screen.findByText("Choose an index to chat with documents")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Prepare documents" })).toHaveAttribute("href", "/documents");
+    expect(await screen.findByText("No PDFs imported")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add PDFs" })).toHaveAttribute("href", "/documents");
     expect(screen.getByRole("textbox", { name: "Message" })).toBeEnabled();
     await user.type(screen.getByRole("textbox", { name: "Message" }), "Draft before indexing");
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     await user.keyboard("{Enter}");
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Draft before indexing");
-    await user.click(screen.getByRole("link", { name: "Prepare documents" }));
+    await user.click(screen.getByRole("link", { name: "Add PDFs" }));
     expect(await screen.findByRole("heading", { name: "Documents" })).toBeInTheDocument();
   });
 
   it("refreshes selection on window focus without discarding a drafted document question", async () => {
     let current: typeof unselected | typeof selected = unselected;
     const fallback = defaultFetch();
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation((input, init) => String(input) === "/api/v1/index/selection" ? Promise.resolve(jsonResponse(current)) : fallback(input, init)));
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation((input, init) => {
+      if (String(input) === "/api/v1/index/selection") return Promise.resolve(jsonResponse(current));
+      if (String(input) === "/bootstrap-api/v1/bootstrap/documents?limit=1&offset=0") return Promise.resolve(jsonResponse({
+        inventory_status: "available", documents: [{ document_id: `doc_${"d".repeat(64)}`, relative_path: "demo.pdf", size_bytes: 512, sha256: "d".repeat(64) }],
+        manifest_hash: "b".repeat(64), total: 1, limit: 1, offset: 0, complete: true, max_upload_bytes: 16 * 1024 * 1024, max_pages: 200,
+      }));
+      return fallback(input, init);
+    }));
     const user = userEvent.setup(); mount();
     await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
-    await screen.findByText("Choose an index to chat with documents");
+    await screen.findByText("1 PDF uploaded");
     const composer = screen.getByRole("textbox", { name: "Message" });
     await user.type(composer, "Keep this draft");
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
@@ -202,10 +220,11 @@ describe("chat-first local application", () => {
     await user.click(screen.getByRole("button", { name: "Send message" }));
     await screen.findByText("Answer My unsent draft");
     expect(requests[1]?.history).toEqual([{ user: "Remember the observatory", assistant: "Answer Remember the observatory" }]);
-    const firstId = (screen.getByRole("combobox", { name: "Conversation" }) as HTMLSelectElement).value;
+    const firstId = storedActiveConversationId();
     await user.click(screen.getByRole("button", { name: "New chat" }));
     expect(screen.queryByText("Answer My unsent draft")).not.toBeInTheDocument();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Conversation" }), firstId);
+    expect(firstId).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "General Chat: Remember the observatory" }));
     expect(screen.getByText("Answer My unsent draft")).toBeVisible();
   });
 
@@ -222,46 +241,39 @@ describe("chat-first local application", () => {
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("PDF draft");
   });
 
-  it("remembers the last selected conversation per mode and keeps URL, picker, reload and history aligned", async () => {
+  it("remembers the last selected conversation per mode and keeps URL, rail, reload and history aligned", async () => {
     vi.stubGlobal("fetch", defaultFetch()); const user = userEvent.setup(); const router = mount("/?mode=general");
-    const picker = () => screen.getByRole("combobox", { name: "Conversation" }) as HTMLSelectElement;
+    const activeId = () => storedActiveConversationId();
     const input = () => screen.getByRole("textbox", { name: "Message" });
-    await user.type(input(), "General A draft"); const a = picker().value;
+    await user.type(input(), "General A draft"); const a = activeId();
     await user.click(screen.getByRole("button", { name: "New chat" }));
-    await user.type(input(), "General C draft"); const c = picker().value;
-    await user.selectOptions(picker(), a);
+    await user.type(input(), "General C draft"); const c = activeId();
+    await user.click(screen.getByRole("button", { name: "General Chat: General A draft" }));
     await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
-    await user.type(input(), "PDF B draft"); const b = picker().value;
+    await user.type(input(), "PDF B draft"); const b = activeId();
     await user.click(screen.getByRole("button", { name: "General Chat", pressed: false }));
-    expect(picker().value).toBe(a); expect(input()).toHaveValue("General A draft");
+    expect(activeId()).toBe(a); expect(input()).toHaveValue("General A draft");
     expect(router.state.location.search).toContain("mode=general");
     const generalUrl = `${router.state.location.pathname}${router.state.location.search}`;
     cleanup(); const restored = mount(generalUrl);
-    expect((screen.getByRole("combobox", { name: "Conversation" }) as HTMLSelectElement).value).toBe(a);
+    expect(activeId()).toBe(a);
     await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
-    expect(picker().value).toBe(b); expect(input()).toHaveValue("PDF B draft");
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "General Chat", pressed: false }));
-      fireEvent.click(screen.getByRole("button", { name: "Chat with PDFs" }));
-    });
-    expect(picker().value).toBe(b); expect(input()).toHaveValue("PDF B draft");
-    await user.selectOptions(picker(), c);
+    expect(activeId()).toBe(b); expect(input()).toHaveValue("PDF B draft");
+    await user.click(screen.getByRole("button", { name: "General Chat: General C draft" }));
     expect(screen.getByRole("button", { name: "General Chat", pressed: true })).toBeInTheDocument();
-    expect(input()).toHaveValue("General C draft");
+    expect(activeId()).toBe(c); expect(input()).toHaveValue("General C draft");
     await act(async () => { await restored.navigate(-1); });
-    expect(picker().value).toBe(b); expect(input()).toHaveValue("PDF B draft");
+    expect(activeId()).toBe(b); expect(input()).toHaveValue("PDF B draft");
     await act(async () => { await restored.navigate(1); });
-    expect(picker().value).toBe(c);
+    expect(activeId()).toBe(c);
     await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
-    await act(async () => {
-      fireEvent.change(picker(), { target: { value: c } });
-      await restored.navigate(-1);
-    });
-    expect(picker().value).toBe(b);
-    expect(input()).toHaveValue("PDF B draft");
-    await user.selectOptions(picker(), c);
+    await act(async () => { await restored.navigate(-1); });
+    expect(activeId()).toBe(c); expect(input()).toHaveValue("General C draft");
+    await user.click(screen.getByRole("button", { name: "Chat with PDFs: PDF B draft" }));
+    expect(activeId()).toBe(b); expect(input()).toHaveValue("PDF B draft");
+    await user.click(screen.getByRole("button", { name: "General Chat: General C draft" }));
     await act(async () => { await restored.navigate("/settings"); await restored.navigate("/"); });
-    expect(picker().value).toBe(c); expect(input()).toHaveValue("General C draft");
+    expect(activeId()).toBe(c); expect(input()).toHaveValue("General C draft");
   });
 
   it("waits for model discovery before sending a saved model preference", async () => {
@@ -286,13 +298,13 @@ describe("chat-first local application", () => {
     vi.stubGlobal("fetch", defaultFetch()); vi.spyOn(window, "confirm").mockReturnValue(true);
     const user = userEvent.setup(); const router = mount();
     await user.type(screen.getByRole("textbox", {name:"Message"}), "Preserve A");
-    const a = (screen.getByRole("combobox", {name:"Conversation"}) as HTMLSelectElement).value;
+    const a = storedActiveConversationId();
     await user.click(screen.getByRole("button", {name:"New chat"}));
     const deletedUrl = `${router.state.location.pathname}${router.state.location.search}`;
     await user.click(screen.getByRole("button", {name:"Delete conversation"}));
     await act(async () => { await router.navigate(deletedUrl); });
-    const picker = screen.getByRole("combobox", {name:"Conversation"}) as HTMLSelectElement;
-    expect(picker.value).toBe(a); expect(picker.options).toHaveLength(1);
+    expect(screen.getByRole("button", {name:"General Chat: Preserve A"})).toHaveAttribute("aria-current", "page");
+    expect(screen.getAllByRole("button", {name:/General Chat:/})).toHaveLength(1);
     expect(screen.getByRole("textbox", {name:"Message"})).toHaveValue("Preserve A");
     expect(router.state.location.search).toContain(a);
   });
@@ -332,18 +344,25 @@ describe("chat-first local application", () => {
     await user.type(screen.getByRole("textbox", { name: "Message" }), "Wait for this response");
     await user.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1));
-    expect(screen.getByRole("button", { name: "Chat with PDFs", pressed: false })).toBeDisabled();
+    const originalId = storedActiveConversationId();
+    const originalUrl = `/?mode=general&conversation=${encodeURIComponent(originalId)}`;
+    expect(screen.getByRole("button", { name: "Chat with PDFs", pressed: false })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "New chat" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "Draft in another conversation");
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "New chat" })).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Conversation" })).toBeDisabled();
     await act(async () => { await router.navigate("/settings"); });
     await act(async () => {
       resolveChat(jsonResponse({ mode: "general", answer: "Late response", model: "gemma4:e2b" }));
       await pending;
     });
-    await act(async () => { await router.navigate("/"); });
-    expect(screen.getByText("Wait for this response")).toBeInTheDocument();
-    expect(screen.getByText("Late response")).toBeInTheDocument();
+    await act(async () => { await router.navigate(originalUrl); });
+    expect(new URLSearchParams(router.state.location.search).get("conversation")).toBe(originalId);
+    const transcript = screen.getByRole("log", { name: "General Chat messages" });
+    expect(within(transcript).getByText("Wait for this response")).toBeInTheDocument();
+    expect(within(transcript).getByText("Late response")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "General Chat: Draft in another conversation" }));
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Draft in another conversation");
     expect(fetcher.mock.calls.filter(([url]) => String(url) === "/api/v1/chat")).toHaveLength(1);
   });
 
@@ -356,7 +375,7 @@ describe("chat-first local application", () => {
     await user.type(screen.getByRole("textbox", {name:"Message"}), "Request before reload");
     await user.click(screen.getByRole("button", {name:"Send message"}));
     cleanup(); mount();
-    expect(screen.getByText("Request before reload")).toBeVisible();
+    expect(within(screen.getByRole("log", { name: "General Chat messages" })).getByText("Request before reload")).toBeVisible();
     expect(screen.getByText(/previous request may still be processing/)).toBeVisible();
     await act(async () => { resolveChat(jsonResponse({mode:"general",model:"gemma4:e2b",answer:"Old browser response"})); await pending; });
     expect(screen.queryByText("Old browser response")).not.toBeInTheDocument();
@@ -376,6 +395,10 @@ describe("chat-first local application", () => {
       if (path === "/api/v1/index/selection") return jsonResponse(selected);
       if (path === "/api/v1/ask") return jsonResponse(askAnswer);
       if (path === "/api/v1/ask/images/" + "a".repeat(32)) return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "image/png" } });
+      if (path === "/bootstrap-api/v1/bootstrap/documents?limit=1&offset=0") return jsonResponse({
+        inventory_status: "available", documents: [{ document_id: `doc_${"d".repeat(64)}`, relative_path: "demo.pdf", size_bytes: 512, sha256: "d".repeat(64) }],
+        manifest_hash: "b".repeat(64), total: 1, limit: 1, offset: 0, complete: true, max_upload_bytes: 16 * 1024 * 1024, max_pages: 200,
+      });
       if (path.startsWith(`/bootstrap-api/v1/bootstrap/documents/doc_${"d".repeat(64)}/content?`)) {
         return jsonResponse({ error: { code: "document_unavailable" } }, 404);
       }
@@ -390,13 +413,13 @@ describe("chat-first local application", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     vi.stubGlobal("fetch", fetcher);
     const router = mount("/?mode=document");
-    expect(await screen.findByText("PDF collection selected")).toBeInTheDocument();
+    expect(await screen.findByText("Index selected")).toBeInTheDocument();
     const input = await screen.findByRole("textbox", { name: "Message" });
     await user.type(input, "What does the figure show?");
     await user.keyboard("{Enter}");
-    await user.click(await screen.findByRole("button", { name: "[T1]" }));
-    await user.click(await screen.findByRole("button", { name: "Copy" }));
+    await user.click(await screen.findByRole("button", { name: "Copy answer" }));
     expect(writeText).toHaveBeenCalledWith(askAnswer.answer);
+    await user.click(await screen.findByRole("button", { name: "[T1]" }));
     expect(await screen.findByText("The figure rises from left to right.")).toBeInTheDocument();
     expect(await screen.findByRole("img", { name: "Chart evidence" })).toHaveAttribute("src", "blob:document-evidence");
     const imageCall = fetcher.mock.calls.find(([url]) => String(url).includes("/api/v1/ask/images/"));
@@ -419,7 +442,20 @@ describe("chat-first local application", () => {
     await user.click(screen.getByRole("button", { name: "Return to previous page" }));
     expect(await screen.findByRole("button", { name: "[T1]" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Draft while I inspect the source");
+    const restoredEvidence = await screen.findByRole("dialog", { name: "Source evidence" });
+    const restoredPassage = within(restoredEvidence).getByText("The figure rises from left to right.");
+    expect(restoredPassage.closest("article")).toHaveClass("is-selected");
+    expect(document.activeElement).toBe(within(restoredPassage.closest("article") as HTMLElement).getByRole("button", { name: "Open in document" }));
+    expect(await screen.findByRole("img", { name: "Chart evidence" })).toHaveAttribute("src", "blob:document-evidence");
+    expect(fetcher.mock.calls.filter(([url]) => String(url).includes("/api/v1/ask/images/")).length).toBe(2);
     expect(revoke).toHaveBeenCalledWith("blob:document-evidence");
+
+    cleanup();
+    mount("/?mode=document");
+    expect(await screen.findByText("The figure shows a steady rise [T1] [I1].")).toBeInTheDocument();
+    expect(screen.getByText(/Source links expired when this tab was reloaded/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Source evidence" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "[T1]" })).not.toBeInTheDocument();
   });
 
   it("saves installed model and generation preferences for the next General Chat request", async () => {
@@ -492,7 +528,7 @@ describe("chat-first local application", () => {
     window.localStorage.setItem("rag-pdf.general-chat-preferences", "{broken");
     vi.stubGlobal("fetch", defaultFetch());
     mount("/settings");
-    expect(await screen.findByText(/Saved General Chat preferences were invalid/)).toBeInTheDocument();
+    expect(await screen.findByText(/Invalid saved preferences were reset/)).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Temperature" })).toHaveValue("0.7");
     expect(screen.getByRole("spinbutton", { name: "Maximum answer length" })).toHaveValue(512);
     expect(window.localStorage.getItem("rag-pdf.general-chat-preferences")).toBeNull();

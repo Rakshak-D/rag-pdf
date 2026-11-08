@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -16,17 +17,18 @@ const documentId = `doc_${"a".repeat(64)}`;
 const manifestHash = "b".repeat(64);
 const bytes = new TextEncoder().encode("%PDF-1.7\nfixture");
 
-function route(initial = `/documents/view/${documentId}?manifest_hash=${manifestHash}&page=2`, state: unknown = { returnTo: "/documents", returnFocusId: "origin-preview", citation: { label: "T1", page: 2 } }) {
+function route(initial = `/documents/view/${documentId}?manifest_hash=${manifestHash}&page=2`, state: unknown = { returnTo: "/documents", returnFocusId: "origin-preview", citation: { label: "T1", page: 2 } }, strict = false) {
   function RouteProbe() {
     const location = useLocation();
     return <output data-testid="route-location">{location.pathname}{location.search}</output>;
   }
-  return render(<MemoryRouter initialEntries={[{ pathname: initial.split("?")[0]!, search: initial.includes("?") ? `?${initial.split("?")[1]}` : "", state }]}>
+  const application = <MemoryRouter initialEntries={[{ pathname: initial.split("?")[0]!, search: initial.includes("?") ? `?${initial.split("?")[1]}` : "", state }]}>
     <Routes>
       <Route path="/documents/view/:documentId" element={<><DocumentViewerPage token="bootstrap" /><RouteProbe /></>} />
       <Route path="/documents" element={<><button id="origin-preview">Preview</button><p>Returned to Documents</p><RouteProbe /></>} />
     </Routes>
-  </MemoryRouter>);
+  </MemoryRouter>;
+  return render(strict ? <StrictMode>{application}</StrictMode> : application);
 }
 
 function pdfMocks(pageCount = 3) {
@@ -103,6 +105,18 @@ describe("DocumentViewerPage", () => {
     expect(await screen.findByText("Returned to Documents")).toBeInTheDocument();
     expect(mocks.loadingTask.destroy).toHaveBeenCalled();
     expect(mocks.pdf.cleanup).toHaveBeenCalled();
+  });
+
+  it("starts one authenticated source read when React Strict Mode replays mount effects", async () => {
+    const mocks = pdfMocks();
+    const contentRead = vi.mocked(BootstrapApiClient.prototype.getDocumentContent);
+    route(undefined, undefined, true);
+
+    expect(await screen.findByRole("heading", { name: "Voyager notes.pdf" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("PDF page 2 of 3")).toBeInTheDocument());
+    expect(contentRead).toHaveBeenCalledTimes(1);
+    expect(getDocument).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.page.render).toHaveBeenCalledTimes(1));
   });
 
   it("fails safely for stale sources and out-of-range citation pages", async () => {

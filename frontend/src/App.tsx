@@ -174,7 +174,7 @@ export default function App() {
   return <AppShell>
     {!localGateway && !location.pathname.startsWith("/index-builds") && !location.pathname.startsWith("/documents") ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
     <div hidden={location.pathname !== "/"}>
-      <ChatPage token={token} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onResetUnavailableModel={resetUnavailableChatModel} conversations={conversations} visible={location.pathname === "/"} />
+      <ChatPage token={token} bootstrapToken={bootstrapToken} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onResetUnavailableModel={resetUnavailableChatModel} conversations={conversations} visible={location.pathname === "/"} />
     </div>
     {(documentsVisited || location.pathname === "/documents") ? <div hidden={location.pathname !== "/documents"}>
       <DocumentsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} visible={location.pathname === "/documents"} />

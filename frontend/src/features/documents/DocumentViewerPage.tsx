@@ -115,42 +115,48 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
     setViewer({ kind: "loading" });
     setRenderStatus("idle");
     setPageError(null);
-    void client.getDocumentContent(documentId, identity, { signal: controller.signal }).then((content) => {
-      if (!active) return;
-      // The display API never creates a scripting manager; embedded actions are
-      // additionally disabled in the parser and annotation renderer. PDF.js
-      // 6.5.438 removed isEvalSupported; its shipped display build has no
-      // dynamic eval/Function compilation path, so no unsupported flag is sent.
-      const params = {
-        data: content.bytes,
-        enableScripting: false,
-        enableXfa: false,
-        useWasm: false,
-        useWorkerFetch: false,
-        disableRange: true,
-        disableStream: true,
-        disableAutoFetch: true,
-        stopAtErrors: true,
-        maxImageSize: 16_000_000,
-        canvasMaxAreaInBytes: 16 * 1024 * 1024,
-      } as Parameters<typeof getDocument>[0] & { enableScripting: false };
-      loadingTask = getDocument(params);
-      return loadingTask.promise.then((pdf) => {
-        if (!active) { void loadingTask?.destroy(); return; }
-        pdfRef.current = pdf;
-        setViewer({
-          kind: "ready",
-          content: {
-            document_id: content.document_id,
-            manifest_hash: content.manifest_hash,
-            document_name: content.document_name,
-            page_count: content.page_count,
-          },
-          pdf,
+    // Strict Mode replays mount effects in development. Defer the read until
+    // this commit turn finishes so the discarded setup is cancelled before it
+    // can contend with the active setup for the source-operation lease.
+    queueMicrotask(() => {
+      if (!active || controller.signal.aborted) return;
+      void client.getDocumentContent(documentId, identity, { signal: controller.signal }).then((content) => {
+        if (!active) return;
+        // The display API never creates a scripting manager; embedded actions are
+        // additionally disabled in the parser and annotation renderer. PDF.js
+        // 6.5.438 removed isEvalSupported; its shipped display build has no
+        // dynamic eval/Function compilation path, so no unsupported flag is sent.
+        const params = {
+          data: content.bytes,
+          enableScripting: false,
+          enableXfa: false,
+          useWasm: false,
+          useWorkerFetch: false,
+          disableRange: true,
+          disableStream: true,
+          disableAutoFetch: true,
+          stopAtErrors: true,
+          maxImageSize: 16_000_000,
+          canvasMaxAreaInBytes: 16 * 1024 * 1024,
+        } as Parameters<typeof getDocument>[0] & { enableScripting: false };
+        loadingTask = getDocument(params);
+        return loadingTask.promise.then((pdf) => {
+          if (!active) { void loadingTask?.destroy(); return; }
+          pdfRef.current = pdf;
+          setViewer({
+            kind: "ready",
+            content: {
+              document_id: content.document_id,
+              manifest_hash: content.manifest_hash,
+              document_name: content.document_name,
+              page_count: content.page_count,
+            },
+            pdf,
+          });
         });
+      }).catch((error: unknown) => {
+        if (active && !controller.signal.aborted) setViewer({ kind: "error", message: error instanceof Error && !(error instanceof ApiError) ? "PDF.js could not render this file. Return to Documents and try another supported PDF." : apiFailureMessage(error) });
       });
-    }).catch((error: unknown) => {
-      if (active && !controller.signal.aborted) setViewer({ kind: "error", message: error instanceof Error && !(error instanceof ApiError) ? "PDF.js could not render this file. Return to Documents and try another supported PDF." : apiFailureMessage(error) });
     });
     return () => {
       active = false;
