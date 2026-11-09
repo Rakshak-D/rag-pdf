@@ -37,10 +37,50 @@ export function ChatPdfAttachment({
   const [pendingDocument, setPendingDocument] = useState<{ document_id: string; sha256: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLElement>(null);
   const input = useRef<HTMLInputElement>(null);
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  const errorMessage = useRef<HTMLParagraphElement>(null);
+  const statusMessage = useRef<HTMLParagraphElement>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const sequence = useRef(0);
   const submitting = useRef(false);
+  const focusUploadOutcome = useRef(false);
+  const focusFileAfterRetry = useRef(false);
+
+  function closePanel() {
+    if (uploading) return;
+    trigger.current?.focus();
+    setOpen(false);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape" || uploading) return;
+      event.preventDefault();
+      const focusWasInside = panel.current?.contains(document.activeElement) ?? false;
+      setOpen(false);
+      if (focusWasInside) trigger.current?.focus();
+    }
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [open, uploading]);
+
+  useEffect(() => {
+    if (uploading || !focusUploadOutcome.current) return;
+    focusUploadOutcome.current = false;
+    if (needsRefresh) refreshButton.current?.focus();
+    else if (error) errorMessage.current?.focus();
+    else statusMessage.current?.focus();
+  }, [uploading, needsRefresh, error, notice]);
+
+  useEffect(() => {
+    if (needsRefresh || reviewRequired || requestPending || !focusFileAfterRetry.current) return;
+    focusFileAfterRetry.current = false;
+    input.current?.focus();
+  }, [needsRefresh, reviewRequired, requestPending]);
 
   useEffect(() => () => {
     sequence.current += 1;
@@ -64,6 +104,7 @@ export function ChatPdfAttachment({
         setNotice("The PDF is confirmed in your shared Library. Prepare the collection there before asking questions.");
       } else {
         setReviewRequired(true);
+        setPendingDocument(null);
         setNotice("The collection refreshed. Check Library for this PDF before deciding whether to upload again.");
       }
     } catch {
@@ -81,9 +122,14 @@ export function ChatPdfAttachment({
 
     submitting.current = true;
     const request = ++sequence.current;
+    // A retry is a new upload attempt. Never use an earlier response identity
+    // to confirm the outcome of this request.
+    setPendingDocument(null);
+    setReviewRequired(false);
     const controller = new AbortController();
     controllerRef.current = controller;
     setUploading(true);
+    focusUploadOutcome.current = true;
     setError(null);
     setNotice(null);
     try {
@@ -132,20 +178,21 @@ export function ChatPdfAttachment({
 
   return <div className="chat-attachment">
     <button
+      ref={trigger}
       className="chat-attachment__trigger"
       type="button"
       aria-label="Add a PDF to your shared Library"
       aria-expanded={open}
       aria-controls="chat-pdf-attachment-panel"
       onClick={() => setOpen((value) => !value)}
-      disabled={requestPending || uploading}
+      disabled={uploading}
       title="Add a PDF to your shared Library"
     >
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 12.5 6.7-6.7a3.2 3.2 0 0 1 4.5 4.5l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.1-8.1"/><path d="m7.8 14.2 7.1-7.1"/></svg>
       <span>Attach PDF</span>
     </button>
-    {open ? <section id="chat-pdf-attachment-panel" className="chat-attachment__panel" aria-label="Add a PDF to your Library">
-      <div className="chat-attachment__heading"><strong>Add a PDF</strong><button type="button" aria-label="Close PDF upload" onClick={() => setOpen(false)}>×</button></div>
+    {open ? <section ref={panel} id="chat-pdf-attachment-panel" className="chat-attachment__panel" aria-label="Add a PDF to your Library" aria-busy={uploading}>
+      <div className="chat-attachment__heading"><strong>Add a PDF</strong><button type="button" aria-label="Close PDF upload" onClick={closePanel} disabled={uploading}>×</button></div>
       <p className="chat-attachment__collection">
         {inventoryLoading ? "Checking your shared collection…" : inventoryError ? "Your PDF collection is unavailable." : inventory ? `Shared collection · ${inventory.total} ${inventory.total === 1 ? "PDF" : "PDFs"}` : "Connect to your PDF collection in Library."}
       </p>
@@ -166,16 +213,17 @@ export function ChatPdfAttachment({
       {file ? <p className="chat-attachment__filename">{file.name}<span>{Math.ceil(file.size / 1024)} KB</span></p> : null}
       {inventory ? <p className="chat-attachment__limits">Up to {formatMiB(inventory.max_upload_bytes)} per PDF · {inventory.max_pages} pages</p> : null}
       <p className="chat-attachment__shared">PDFs are shared across Library. Adding one here does not limit retrieval to this conversation or start preparation.</p>
-      {error ? <p className="chat-attachment__error" role="alert">{error}</p> : null}
-      {notice ? <p className="chat-attachment__notice" role="status">{notice}</p> : null}
+      {requestPending ? <p className="chat-attachment__notice" role="status">Wait for the current answer to finish before adding a PDF.</p> : null}
+      {error ? <p ref={errorMessage} className="chat-attachment__error" role="alert" tabIndex={-1}>{error}</p> : null}
+      {notice ? <p ref={statusMessage} className="chat-attachment__notice" role="status" tabIndex={-1}>{notice}</p> : null}
       {uploading ? <p className="chat-attachment__notice" role="status">Adding PDF and confirming the collection…</p> : null}
       <div className="chat-attachment__actions">
-        {needsRefresh ? <button className="button button--quiet" type="button" onClick={() => void refreshCollection()} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh collection"}</button> : null}
+        {needsRefresh ? <button ref={refreshButton} className="button button--quiet" type="button" onClick={() => void refreshCollection()} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh collection"}</button> : null}
         <button className="button button--primary" type="button" onClick={() => void addPdf()} disabled={!canUpload}>{uploading ? "Adding…" : "Add PDF"}</button>
       </div>
       {reviewRequired && needsRefresh ? <div className="chat-attachment__review">
         <Link to="/documents">Open Library and check the PDF</Link>
-        <button type="button" onClick={() => { setNeedsRefresh(false); setReviewRequired(false); setError(null); }} disabled={requestPending}>I checked; allow a retry</button>
+        <button type="button" onClick={() => { focusFileAfterRetry.current = true; setNeedsRefresh(false); setReviewRequired(false); setPendingDocument(null); setError(null); }} disabled={requestPending || refreshing}>I checked; allow a retry</button>
       </div> : null}
       {notice ? <Link className="chat-attachment__prepare" to="/documents">Prepare documents in Library</Link> : null}
       {!tokenAvailable ? <Link className="chat-attachment__prepare" to="/documents">Open Library to connect</Link> : null}

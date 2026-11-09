@@ -24,7 +24,7 @@ function response(value: unknown, status = 200): Response {
   return Response.json(value, { status });
 }
 
-function mount(fetcher: ReturnType<typeof vi.fn<typeof fetch>>, before = inventory()) {
+function mount(fetcher: ReturnType<typeof vi.fn<typeof fetch>>, before = inventory(), requestPending = false) {
   const onInventoryChange = vi.fn();
   render(<MemoryRouter><ChatPdfAttachment
     client={new BootstrapApiClient({ localGateway: true, fetcher })}
@@ -32,7 +32,7 @@ function mount(fetcher: ReturnType<typeof vi.fn<typeof fetch>>, before = invento
     inventoryLoading={false}
     inventoryError={null}
     tokenAvailable
-    requestPending={false}
+    requestPending={requestPending}
     onInventoryChange={onInventoryChange}
   /></MemoryRouter>);
   return onInventoryChange;
@@ -112,6 +112,121 @@ describe("Chat PDF attachment", () => {
     expect(close).toHaveFocus();
     await user.keyboard("{Enter}");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("dismisses with Escape and restores focus when focus was inside the panel", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    mount(fetcher);
+    const user = userEvent.setup();
+    const trigger = screen.getByRole("button", { name: "Add a PDF to your shared Library" });
+    await user.click(trigger);
+    await user.tab();
+    await user.tab();
+    expect(screen.getByLabelText("Choose a PDF")).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByLabelText("Choose a PDF")).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("keeps panel dismissal focusable while chat generation is pending", async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    mount(fetcher, inventory(), true);
+    const user = userEvent.setup();
+    const trigger = screen.getByRole("button", { name: "Add a PDF to your shared Library" });
+    expect(trigger).toBeEnabled();
+    await user.click(trigger);
+    expect(screen.getByLabelText("Choose a PDF")).toBeDisabled();
+    expect(screen.getByText("Wait for the current answer to finish before adding a PDF.")).toBeInTheDocument();
+    await user.tab();
+    const close = screen.getByRole("button", { name: "Close PDF upload" });
+    expect(close).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+    expect(close).not.toBeInTheDocument();
+  });
+
+  it("does not dismiss or expose the close action while an upload is running", async () => {
+    let uploaded = false;
+    let releaseUpload: ((value: Response) => void) | undefined;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.startsWith("/bootstrap-api/v1/bootstrap/documents?") && init?.method !== "POST") {
+        return response(uploaded ? inventory([documentRecord], "b".repeat(64)) : inventory());
+      }
+      if (path === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST") {
+        return await new Promise<Response>((resolve) => {
+          releaseUpload = (value) => { uploaded = true; resolve(value); };
+        });
+      }
+      return response({ error: { code: "not_found" } }, 404);
+    });
+    mount(fetcher);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Add a PDF to your shared Library" }));
+    await user.upload(screen.getByLabelText("Choose a PDF"), new File(["%PDF"], "Orbit Notes.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
+    expect(screen.getByRole("button", { name: "Close PDF upload" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByLabelText("Choose a PDF")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add a PDF to your shared Library" })).toHaveAttribute("aria-expanded", "true");
+    releaseUpload?.(response({ outcome: "imported", document: documentRecord, manifest_hash: "b".repeat(64), max_upload_bytes: 1024 * 1024, error_code: null }, 201));
+    expect(await screen.findByText(/was added to your shared Library/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
+  });
+
+  it("moves focus to the failure after a rejected upload", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      if (String(input) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST") {
+        return response({ error: { code: "document_name_conflict" } }, 409);
+      }
+      return response(inventory());
+    });
+    mount(fetcher);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Add a PDF to your shared Library" }));
+    await user.upload(screen.getByLabelText("Choose a PDF"), new File(["%PDF"], "Orbit Notes.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("already exists");
+    await waitFor(() => expect(alert).toHaveFocus());
+  });
+
+  it("keeps the file, upload, refresh and Library recovery controls keyboard reachable", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      if (String(input) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST") {
+        return response({ outcome: "imported", document: documentRecord, manifest_hash: "b".repeat(64), max_upload_bytes: 1024 * 1024, error_code: null }, 201);
+      }
+      if (String(input).startsWith("/bootstrap-api/v1/bootstrap/documents?") && init?.method !== "POST") {
+        return response(inventory());
+      }
+      return response({ error: { code: "not_found" } }, 404);
+    });
+    mount(fetcher);
+    const user = userEvent.setup();
+    const trigger = screen.getByRole("button", { name: "Add a PDF to your shared Library" });
+    await user.click(trigger);
+    await user.tab();
+    await user.tab();
+    const fileInput = screen.getByLabelText("Choose a PDF");
+    expect(fileInput).toHaveFocus();
+    await user.upload(fileInput, new File(["%PDF"], "Orbit Notes.pdf", { type: "application/pdf" }));
+    await user.tab();
+    const add = screen.getByRole("button", { name: "Add PDF" });
+    expect(add).toHaveFocus();
+    await user.keyboard("{Enter}");
+    const refresh = await screen.findByRole("button", { name: "Refresh collection" });
+    await waitFor(() => expect(refresh).toHaveFocus());
+    await user.click(refresh);
+    expect(await screen.findByText(/Check Library for this PDF/)).toBeInTheDocument();
+    await user.tab();
+    expect(screen.getByRole("link", { name: "Open Library and check the PDF" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "I checked; allow a retry" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("link", { name: "Prepare documents in Library" })).toHaveFocus();
   });
 
   it("keeps repeated Add clicks to one upload while the request is pending", async () => {
@@ -169,5 +284,50 @@ describe("Chat PDF attachment", () => {
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("PDF is confirmed in your shared Library"));
     expect(screen.getByRole("button", { name: "Add PDF" })).toBeDisabled();
     expect(fetcher.mock.calls.filter(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST")).toHaveLength(1);
+  });
+
+  it("does not let a manually authorized retry inherit the prior attempt's document identity", async () => {
+    const firstDocument = { ...documentRecord, document_id: `doc_${"1".repeat(64)}`, relative_path: "First.pdf", sha256: "1".repeat(64) };
+    const secondDocument = { ...documentRecord, document_id: `doc_${"2".repeat(64)}`, relative_path: "Second.pdf", sha256: "2".repeat(64) };
+    let uploadCount = 0;
+    let inventoryReadCount = 0;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.startsWith("/bootstrap-api/v1/bootstrap/documents?") && init?.method !== "POST") {
+        inventoryReadCount += 1;
+        if (inventoryReadCount <= 2) return response(inventory());
+        return response(inventory([firstDocument], "b".repeat(64)));
+      }
+      if (path === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST") {
+        uploadCount += 1;
+        const document = uploadCount === 1 ? firstDocument : secondDocument;
+        return response({
+          outcome: "imported", document,
+          manifest_hash: uploadCount === 1 ? "b".repeat(64) : "c".repeat(64),
+          max_upload_bytes: 1024 * 1024, error_code: null,
+        }, 201);
+      }
+      return response({ error: { code: "not_found" } }, 404);
+    });
+    mount(fetcher);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Add a PDF to your shared Library" }));
+    await user.upload(screen.getByLabelText("Choose a PDF"), new File(["%PDF first"], "First.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("may have completed");
+
+    await user.click(screen.getByRole("button", { name: "Refresh collection" }));
+    expect(await screen.findByText(/Check Library for this PDF/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "I checked; allow a retry" }));
+    expect(screen.getByLabelText("Choose a PDF")).toHaveFocus();
+    await user.upload(screen.getByLabelText("Choose a PDF"), new File(["%PDF second"], "Second.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("may have completed");
+
+    await user.click(screen.getByRole("button", { name: "Refresh collection" }));
+    expect(await screen.findByText(/Check Library for this PDF/)).toBeInTheDocument();
+    expect(screen.queryByText(/PDF is confirmed in your shared Library/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add PDF" })).toBeDisabled();
+    expect(uploadCount).toBe(2);
   });
 });
