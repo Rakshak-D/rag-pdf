@@ -240,12 +240,61 @@ describe("chat-first local application", () => {
     expect(screen.getByRole("link", { name: "Prepare documents in Library" })).toHaveAttribute("href", "/documents");
     const upload = fetcher.mock.calls.find(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST");
     expect(upload?.[1]?.body).toBe(file);
-    expect(fetcher.mock.calls.some(([url]) => String(url).includes("/preview") || String(url).includes("/jobs"))).toBe(false);
+    expect(fetcher.mock.calls.some(([url, init]) => String(url).includes("/bootstrap-api/v1/bootstrap/preview") ||
+      (String(url) === "/bootstrap-api/v1/bootstrap/jobs" && init?.method === "POST"))).toBe(false);
     await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
     expect(await screen.findByText("Your PDFs changed")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Prepare documents" })).toHaveAttribute("href", "/documents");
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     expect(fetcher.mock.calls.every(([, init]) => !new Headers(init?.headers).has("Authorization"))).toBe(true);
+  });
+
+  it("finishes a Chat upload after Library navigation and preserves the draft and inventory", async () => {
+    let uploaded = false;
+    let releaseUpload: ((value: Response) => void) | undefined;
+    const document = { document_id: `doc_${"d".repeat(64)}`, relative_path: "Navigation notes.pdf", size_bytes: 100, sha256: "e".repeat(64) };
+    const fallback = defaultFetch();
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.startsWith("/bootstrap-api/v1/bootstrap/documents?") && init?.method !== "POST") {
+        const query = new URL(path, "http://local.test").searchParams;
+        const limit = Number(query.get("limit") ?? 50); const offset = Number(query.get("offset") ?? 0);
+        return jsonResponse({ inventory_status: "available", documents: uploaded ? [document] : [], manifest_hash: uploaded ? "b".repeat(64) : "a".repeat(64), total: uploaded ? 1 : 0, limit, offset, complete: true, max_upload_bytes: 1024 * 1024, max_pages: 200 });
+      }
+      if (path === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST") {
+        return await new Promise<Response>((resolve) => { releaseUpload = resolve; });
+      }
+      return fallback(input, init);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    const router = mount();
+    const composer = await screen.findByRole("textbox", { name: "Message" });
+    await user.type(composer, "Keep this draft while the PDF uploads");
+    await user.click(screen.getByRole("button", { name: "Add a PDF to your shared Library" }));
+    await user.upload(screen.getByLabelText("Choose a PDF"), new File(["%PDF-test"], "Navigation notes.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
+    expect(await screen.findByText("Adding PDF and confirming the collection…")).toBeInTheDocument();
+    expect(releaseUpload).toBeTypeOf("function");
+
+    await user.click(screen.getByRole("link", { name: "Library" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/documents"));
+    expect(await screen.findByText("Your library starts here.")).toBeInTheDocument();
+    uploaded = true;
+    await act(async () => {
+      releaseUpload?.(jsonResponse({ outcome: "imported", document, manifest_hash: "b".repeat(64), max_upload_bytes: 1024 * 1024, error_code: null }, 201));
+    });
+
+    await user.click(screen.getByRole("link", { name: "Chat" }));
+    expect(await screen.findByText(/was added to your shared Library/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Keep this draft while the PDF uploads");
+    await user.click(screen.getByRole("link", { name: "Library" }));
+    expect(await screen.findByText("Navigation notes.pdf", { exact: true })).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Chat" }));
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Keep this draft while the PDF uploads");
+    expect(fetcher.mock.calls.filter(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST")).toHaveLength(1);
+    expect(fetcher.mock.calls.some(([url, init]) => String(url).includes("/bootstrap-api/v1/bootstrap/preview") ||
+      (String(url) === "/bootstrap-api/v1/bootstrap/jobs" && init?.method === "POST"))).toBe(false);
   });
 
   it("refreshes selection on window focus without discarding a drafted document question", async () => {

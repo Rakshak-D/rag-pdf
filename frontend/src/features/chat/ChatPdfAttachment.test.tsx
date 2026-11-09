@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -112,6 +112,34 @@ describe("Chat PDF attachment", () => {
     expect(close).toHaveFocus();
     await user.keyboard("{Enter}");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps repeated Add clicks to one upload while the request is pending", async () => {
+    let uploaded = false;
+    let releaseUpload: ((value: Response) => void) | undefined;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.startsWith("/bootstrap-api/v1/bootstrap/documents?") && init?.method !== "POST") {
+        return response(uploaded ? inventory([documentRecord], "b".repeat(64)) : inventory());
+      }
+      if (path === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST") {
+        return await new Promise<Response>((resolve) => { releaseUpload = resolve; });
+      }
+      return response({ error: { code: "not_found" } }, 404);
+    });
+    mount(fetcher);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Add a PDF to your shared Library" }));
+    await user.upload(screen.getByLabelText("Choose a PDF"), new File(["%PDF"], "Orbit Notes.pdf", { type: "application/pdf" }));
+    const addButton = screen.getByRole("button", { name: "Add PDF" });
+    await user.click(addButton);
+    expect(await screen.findByText("Adding PDF and confirming the collection…")).toBeInTheDocument();
+    expect(addButton).toBeDisabled();
+    fireEvent.click(addButton);
+    expect(fetcher.mock.calls.filter(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST")).toHaveLength(1);
+    uploaded = true;
+    releaseUpload?.(response({ outcome: "imported", document: documentRecord, manifest_hash: "b".repeat(64), max_upload_bytes: 1024 * 1024, error_code: null }, 201));
+    expect(await screen.findByText(/was added to your shared Library/)).toBeInTheDocument();
   });
 
   it("holds uncertain uploads until explicit inventory refresh without retrying", async () => {
