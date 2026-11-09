@@ -1,4 +1,4 @@
-import type { FormEvent, KeyboardEvent, Ref } from "react";
+import type { FormEvent, KeyboardEvent, ReactNode, Ref } from "react";
 import type { Mode } from "./conversations";
 
 interface Props {
@@ -11,9 +11,10 @@ interface Props {
   onChange: (value: string) => void;
   onSubmit: (event?: FormEvent<HTMLFormElement>) => void;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  attachmentControl?: ReactNode;
 }
 
-export function ChatComposer({ question, mode, modelStatus, pending, disabledReason, textareaRef, onChange, onSubmit, onKeyDown }: Props) {
+export function ChatComposer({ question, mode, modelStatus, pending, disabledReason, textareaRef, onChange, onSubmit, onKeyDown, attachmentControl }: Props) {
   const blocked = pending || disabledReason !== null;
   return <div className="chat-compose-area">
     {disabledReason ? <p className="chat-compose-hint" role="status">{disabledReason}</p> : null}
@@ -34,6 +35,7 @@ export function ChatComposer({ question, mode, modelStatus, pending, disabledRea
       <div className="chat-composer__foot">
         <span className="chat-composer__context">{modelStatus}</span>
         <div className="chat-composer__actions">
+          {attachmentControl}
           <small aria-live="off">{question.length}/4000</small>
           <button type="submit" className="chat-send" disabled={!question.trim() || blocked} aria-label="Send message" title={blocked ? disabledReason ?? "A response is in progress" : "Send message"}>
             <span aria-hidden="true">↑</span>

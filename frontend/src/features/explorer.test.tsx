@@ -82,7 +82,8 @@ describe("jobs and artifacts explorer", () => {
     expect(await screen.findByRole("heading", { name: "Workbench overview" })).toBeInTheDocument();
     await router.navigate(1);
     expect(await screen.findByRole("heading", { name: "Jobs", level: 1 })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Results" })).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("link", { name: "Library" })).not.toHaveAttribute("aria-current", "page");
+    expect(screen.getByText("Advanced Research", { exact: true })).toBeInTheDocument();
   });
 
   it("exposes evaluations, ablations, and results as working research navigation", async () => {
@@ -93,10 +94,11 @@ describe("jobs and artifacts explorer", () => {
     expect(await screen.findByRole("heading", { name: "Evaluation run" })).toBeInTheDocument();
     await router.navigate("/experiments/ablation");
     expect(await screen.findByRole("heading", { name: "Ablation run" })).toBeInTheDocument();
-    await user.click(screen.getAllByRole("link", { name: "Results" })[0]!);
+    await router.navigate("/research");
+    await user.click(screen.getByRole("link", { name: /Results/ }));
     expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
     expect(document.querySelector('[aria-disabled="true"]')).toBeNull();
-    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("link")).toHaveLength(4);
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("link")).toHaveLength(3);
     expect(screen.queryByRole("link", { name: "Evaluations" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Ablations" })).not.toBeInTheDocument();
   });

@@ -217,9 +217,9 @@ export function SettingsPage({ token, preferences, preferenceLoadStatus, onSave,
     <section className="settings-section settings-section--boundary" aria-labelledby="settings-boundary-title">
       <div className="settings-section__heading">
         <span className="settings-index" aria-hidden="true">03</span>
-        <div><h2 id="settings-boundary-title">Separate document settings</h2><p>Document Chat continues to use its selected index and pinned research configuration.</p></div>
+        <div><h2 id="settings-boundary-title">Advanced Research</h2><p>Saved evaluations, ablations, jobs and detailed index-build tools.</p></div>
       </div>
-      <div className="settings-links"><Link to="/documents">Manage PDFs</Link><Link to="/index-builds">Review index builds</Link><Link to="/artifacts">Open results</Link></div>
+      <div className="settings-links"><Link to="/research">Open Advanced Research</Link></div>
     </section>
   </section>;
 }

@@ -118,11 +118,11 @@ function seededConversation(messageCount: number, unfinished = false) {
 }
 
 describe("chat-first local application", () => {
-  it("shows exactly four primary navigation sections without token entry", async () => {
+  it("shows only Chat, Library and Settings in primary navigation without token entry", async () => {
     vi.stubGlobal("fetch", defaultFetch());
     mount();
     const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
-    expect(withinLinks(navigation)).toEqual(["Chat", "Documents", "Results", "Settings"]);
+    expect(withinLinks(navigation)).toEqual(["Chat", "Library", "Settings"]);
     expect(screen.getByRole("heading", { name: "Chat", level: 1 })).toBeInTheDocument();
     expect(screen.queryByLabelText("Bearer token")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Bootstrap bearer token")).not.toBeInTheDocument();
@@ -133,10 +133,25 @@ describe("chat-first local application", () => {
     const user = userEvent.setup();
     mount();
     await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
-    expect(screen.getByRole("link", { name: "Documents" })).toHaveAttribute("title", "Documents");
+    expect(screen.getByRole("link", { name: "Library" })).toHaveAttribute("title", "Library");
     expect(screen.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute("aria-expanded", "false");
     await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
     expect(screen.getByRole("button", { name: "Collapse sidebar" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps research tools discoverable while preserving their bookmarked routes", async () => {
+    vi.stubGlobal("fetch", defaultFetch());
+    const user = userEvent.setup();
+    const router = mount("/research");
+    expect(await screen.findByRole("heading", { name: "Advanced Research" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Advanced research tools" })).toHaveAccessibleName();
+    expect(screen.getByRole("link", { name: /Results/ })).toHaveAttribute("href", "/artifacts");
+    expect(screen.getByRole("link", { name: /Evaluations/ })).toHaveAttribute("href", "/experiments/evaluation");
+    expect(withinLinks(screen.getByRole("navigation", { name: "Primary navigation" }))).toEqual(["Chat", "Library", "Settings"]);
+    await user.click(screen.getByRole("link", { name: /Results/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/artifacts"));
+    expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
+    expect(screen.getByText("Advanced Research", { exact: true })).toBeInTheDocument();
   });
 
   it("serves general chat with bounded in-tab conversation history and no bearer header", async () => {
@@ -190,6 +205,47 @@ describe("chat-first local application", () => {
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Draft before indexing");
     await user.click(screen.getByRole("link", { name: "Add PDFs" }));
     expect(await screen.findByRole("heading", { name: "Documents" })).toBeInTheDocument();
+  });
+
+  it("adds a PDF from Chat to the shared collection and makes the prior selection stale", async () => {
+    let uploaded = false;
+    const document = { document_id: `doc_${"d".repeat(64)}`, relative_path: "New notes.pdf", size_bytes: 100, sha256: "e".repeat(64) };
+    const priorSelection = { ...selected, selection: { ...selected.selection, document_manifest_hash: "a".repeat(64) } };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path === "/health") return jsonResponse(health);
+      if (path === "/api/v1/runtime/models") return jsonResponse(runtime);
+      if (path === "/api/v1/chat/models") return jsonResponse(models);
+      if (path === "/api/v1/index/selection") return jsonResponse(priorSelection);
+      if (path.startsWith("/bootstrap-api/v1/bootstrap/documents?") && init?.method !== "POST") {
+        const query = new URL(path, "http://local.test").searchParams;
+        const limit = Number(query.get("limit")); const offset = Number(query.get("offset"));
+        return jsonResponse({ inventory_status: "available", documents: uploaded ? [document] : [], manifest_hash: uploaded ? "b".repeat(64) : "a".repeat(64), total: uploaded ? 1 : 0, limit, offset, complete: true, max_upload_bytes: 1024 * 1024, max_pages: 200 });
+      }
+      if (path === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST") {
+        uploaded = true;
+        return jsonResponse({ outcome: "imported", document, manifest_hash: "b".repeat(64), max_upload_bytes: 1024 * 1024, error_code: null }, 201);
+      }
+      if (path === "/api/v1/ask") return jsonResponse({ error: { code: "should_not_ask" } }, 500);
+      return jsonResponse({ error: { code: "not_found" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    mount();
+    const file = new File(["%PDF-test"], "New notes.pdf", { type: "application/pdf" });
+    await user.click(screen.getByRole("button", { name: "Add a PDF to your shared Library" }));
+    await user.upload(screen.getByLabelText("Choose a PDF"), file);
+    await user.click(screen.getByRole("button", { name: "Add PDF" }));
+    expect(await screen.findByText(/added to your shared Library/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Prepare documents in Library" })).toHaveAttribute("href", "/documents");
+    const upload = fetcher.mock.calls.find(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST");
+    expect(upload?.[1]?.body).toBe(file);
+    expect(fetcher.mock.calls.some(([url]) => String(url).includes("/preview") || String(url).includes("/jobs"))).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Chat with PDFs", pressed: false }));
+    expect(await screen.findByText("Your PDFs changed")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Prepare documents" })).toHaveAttribute("href", "/documents");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(fetcher.mock.calls.every(([, init]) => !new Headers(init?.headers).has("Authorization"))).toBe(true);
   });
 
   it("refreshes selection on window focus without discarding a drafted document question", async () => {

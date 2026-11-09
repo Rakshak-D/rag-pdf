@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { ApiError, BootstrapApiClient } from "../../api/client";
+import { BootstrapApiClient } from "../../api/client";
 import type { BootstrapDocumentRecord, BootstrapDocumentsResponse, BootstrapStatusResponse } from "../../api/types";
 import { apiErrorText } from "../../components/apiErrorText";
 import { BootstrapConnectionPanel } from "../index-builds/BootstrapConnectionPanel";
 import { DocumentsIndexWorkflow } from "./DocumentsIndexWorkflow";
+import { documentUploadFailure, uploadOutcomeUncertain, uploadPdfWithReadback, validatePdfUpload } from "./pdfUpload";
 import "./documents-workflow.css";
 
 interface Props {
@@ -19,34 +20,10 @@ interface Props {
 
 const LOCAL_GATEWAY = import.meta.env.VITE_RAG_LOCAL_GATEWAY === "true";
 const pageSize = 50;
-const filenamePattern = /^[A-Za-z0-9][A-Za-z0-9 _().-]{0,114}\.pdf$/;
-
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
-function documentFailure(error: unknown): string {
-  if (!(error instanceof ApiError)) return "The local document request failed.";
-  if (error.kind === "network" || error.kind === "non_json" || error.kind === "malformed_response") {
-    return "The upload response could not be confirmed. Refresh the source inventory before trying again.";
-  }
-  if (error.status === 409 && error.code === "document_name_conflict") return "A PDF with this name or document stem already exists in the trusted source.";
-  if (error.status === 409 && error.code === "document_source_busy") return "A source change or index build is in progress. Wait for it to finish, then refresh the inventory.";
-  if (error.status === 413 && error.code === "upload_too_large") return "The PDF exceeds the configured upload size limit.";
-  if (error.status === 413 && error.code === "pdf_page_limit_exceeded") return "This PDF exceeds the 200-page import limit.";
-  if (error.status === 400 && ["pdf_invalid", "pdf_signature_invalid", "pdf_structure_invalid"].includes(error.code)) return "The file is not a readable PDF.";
-  if (error.status === 400 && error.code === "pdf_encrypted_or_unsupported") return "Encrypted or unsupported PDFs cannot be imported.";
-  if (error.status === 415) return "The server rejected the file content type or encoding.";
-  if (error.status !== null && error.status >= 500) return "The server could not confirm the upload. Refresh the inventory before trying again.";
-  if (error.status === 400) return "The server rejected the filename or PDF request. Use a simple filename ending in lowercase .pdf.";
-  return apiErrorText(error);
-}
-
-function uploadOutcomeUncertain(error: unknown): boolean {
-  return !(error instanceof ApiError) || error.kind === "network" || error.kind === "non_json" ||
-    error.kind === "malformed_response" || error.status === null || error.status >= 500;
 }
 
 function DocumentRow({ document, manifestHash }: { document: BootstrapDocumentRecord; manifestHash: string }) {
@@ -140,18 +117,8 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!token || !selectedFile || !inventory || submitting.current || requiresUploadRefresh.current || uploadNeedsInventoryRefresh || inventoryError || loading) return;
-    if (!filenamePattern.test(selectedFile.name)) {
-      setUploadError("Use an ASCII filename with letters, numbers, spaces, parentheses, underscores or hyphens, ending in lowercase .pdf.");
-      return;
-    }
-    if (selectedFile.size < 1) {
-      setUploadError("The selected file is empty.");
-      return;
-    }
-    if (selectedFile.size > inventory.max_upload_bytes) {
-      setUploadError(`This file is ${formatBytes(selectedFile.size)}; the configured limit is ${formatBytes(inventory.max_upload_bytes)}.`);
-      return;
-    }
+    const validation = validatePdfUpload(selectedFile, inventory.max_upload_bytes);
+    if (validation) { setUploadError(validation); return; }
 
     submitting.current = true;
     const serial = ++uploadSerial.current;
@@ -159,36 +126,23 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
     uploadController.current = controller;
     setUploading(true); setUploadError(null); setFeedback(null); setWarning(null);
     try {
-      const result = await client.uploadDocument(selectedFile, { signal: controller.signal });
+      const result = await uploadPdfWithReadback(client, selectedFile, inventory, { limit: pageSize, offset, signal: controller.signal });
       if (serial !== uploadSerial.current) return;
       clearFile();
-      let refreshed: BootstrapDocumentsResponse | null = null;
-      try {
-        refreshed = await client.listDocuments({ limit: pageSize, offset, signal: controller.signal });
-        if (serial === uploadSerial.current) {
-          setInventory(refreshed); setInventoryError(null);
-        }
-      } catch (error) {
-        if (serial === uploadSerial.current && !controller.signal.aborted) setInventoryError(apiErrorText(error));
-      }
-      if (serial !== uploadSerial.current) return;
-      const visible = refreshed?.documents.some((entry) => entry.document_id === result.document.document_id && entry.sha256 === result.document.sha256) ?? false;
-      if (result.outcome === "imported") {
-        setFeedback(visible
-          ? `${result.document.relative_path} was imported and confirmed in the source inventory. It is available for indexing; no index was built.`
-          : `${result.document.relative_path} was imported and confirmed by the manifest. The refreshed page contains ${refreshed?.total ?? inventory.total} source documents.`);
-        if (!refreshed) setWarning("The import is confirmed, but the inventory refresh failed. Refresh before relying on the displayed list.");
-      } else if (visible) {
-        setFeedback(`${result.document.relative_path} is now visible in the source inventory.`);
-        setWarning("The import response could not confirm the manifest at publication time; the later inventory now confirms the file.");
+      if (result.inventory) { setInventory(result.inventory); setInventoryError(null); }
+      if (result.kind === "manifest-confirmed") {
+        setFeedback(`${result.upload.document.relative_path} was imported and confirmed in the source inventory. It is available for indexing; no index was built.`);
+      } else if (result.kind === "inventory-confirmed") {
+        setFeedback(`${result.upload.document.relative_path} is now visible in the source inventory.`);
+        setWarning("The import response could not confirm publication time; the later inventory confirms this PDF.");
       } else {
         requiresUploadRefresh.current = true;
         setUploadNeedsInventoryRefresh(true);
-        setWarning("The server reports that the PDF was published but could not confirm the updated inventory. Do not upload it again until the inventory is refreshed.");
+        setWarning("The upload could not be confirmed by the current inventory. Do not upload it again until the inventory is refreshed.");
       }
     } catch (error) {
       if (serial === uploadSerial.current && !controller.signal.aborted) {
-        setUploadError(documentFailure(error));
+        setUploadError(documentUploadFailure(error));
         if (uploadOutcomeUncertain(error)) {
           requiresUploadRefresh.current = true;
           setUploadNeedsInventoryRefresh(true);
@@ -262,6 +216,6 @@ export function DocumentsPage({ token, status, checking, connectionError, onConn
       </div>
       <DocumentsIndexWorkflow visible={visible} token={token} status={status} sourceManifestHash={inventoryError ? null : inventory?.manifest_hash ?? null} sourceCount={inventoryError ? null : inventory?.total ?? null} sourceError={Boolean(inventoryError)} sourceChecking={loading || uploading} onRefreshDocuments={() => setRefreshVersion(v => v + 1)} />
     </div>
-    <footer className="documents-footer"><Link to="/index-builds">Advanced build workspace</Link><span>Files and previous indexes are preserved.</span></footer>
+    <footer className="documents-footer"><Link to="/research">Advanced Research</Link><span>Files and previous indexes are preserved.</span></footer>
   </div>;
 }

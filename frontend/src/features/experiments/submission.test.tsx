@@ -87,7 +87,8 @@ describe("experiment submission workflows", () => {
     const router = mount("/");
     await router.navigate("/experiments/evaluation");
     expect(await screen.findByRole("heading", { name: "Evaluation run" })).toBeInTheDocument();
-    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("link", { name: "Results" })).toHaveAttribute("aria-current", "page");
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("link")).toHaveLength(3);
+    expect(screen.getByText("Advanced Research", { exact: true })).toBeInTheDocument();
     const user = userEvent.setup();
     await connect(user);
     await router.navigate("/experiments/ablation");

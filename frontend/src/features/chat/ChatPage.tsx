@@ -6,6 +6,7 @@ import type { GeneralChatPreferences, PreferenceLoadStatus } from "../settings/p
 import { resolveChatModel } from "../settings/preferences";
 import { boundedChatHistory } from "./history";
 import { ChatComposer } from "./ChatComposer";
+import { ChatPdfAttachment } from "./ChatPdfAttachment";
 import { ChatMessage } from "./ChatMessage";
 import { ConversationRail } from "./ConversationRail";
 import { EvidenceInspector, type SourceEvidence } from "./EvidenceInspector";
@@ -172,28 +173,41 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
     if (!visible || mode !== "document") return () => { active = false; };
     setSelection(null);
     setSelectionError(null);
-    setSourceInventory(null);
-    setSourceError(null);
     const refresh = () => {
       const request = ++serial;
-      const controller = new AbortController();
       void client.getIndexSelection().then((value) => {
         if (active && request === serial) { setSelection(value); setSelectionError(null); }
       }).catch((error: unknown) => {
         if (active && request === serial && !(error instanceof DOMException && error.name === "AbortError")) { setSelection(null); setSelectionError(messageFor(error)); }
       });
-      void bootstrapClient.listDocuments({ limit: 1, offset: 0, signal: controller.signal }).then((value) => {
-        if (active && request === serial) { setSourceInventory(value); setSourceError(null); }
-      }).catch((error: unknown) => {
-        if (active && request === serial && !(error instanceof DOMException && error.name === "AbortError")) { setSourceInventory(null); setSourceError(messageFor(error)); }
-      });
-      return controller;
     };
-    let currentController = refresh();
-    const onFocus = () => { currentController.abort(); currentController = refresh(); };
+    refresh();
+    const onFocus = () => refresh();
     window.addEventListener("focus", onFocus);
-    return () => { active = false; currentController.abort(); window.removeEventListener("focus", onFocus); };
-  }, [bootstrapClient, client, mode, visible]);
+    return () => { active = false; window.removeEventListener("focus", onFocus); };
+  }, [client, mode, visible]);
+
+  useEffect(() => {
+    let active = true;
+    let controller: AbortController | null = null;
+    if (!visible || !bootstrapToken) {
+      if (visible && !bootstrapToken) { setSourceInventory(null); setSourceError(null); }
+      return () => { active = false; };
+    }
+    const refresh = () => {
+      controller?.abort();
+      controller = new AbortController();
+      const current = controller;
+      void bootstrapClient.listDocuments({ limit: 1, offset: 0, signal: current.signal }).then((value) => {
+        if (active && controller === current) { setSourceInventory(value); setSourceError(null); }
+      }).catch((error: unknown) => {
+        if (active && controller === current && !current.signal.aborted) { setSourceInventory(null); setSourceError(messageFor(error)); }
+      });
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => { active = false; controller?.abort(); window.removeEventListener("focus", refresh); };
+  }, [bootstrapClient, bootstrapToken, visible]);
 
   // Keep the evidence inspector across the source-viewer route only. Other
   // destinations and conversation switches dismiss it; reloads never restore it.
@@ -541,6 +555,15 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
         onChange={setQuestion}
         onSubmit={(event) => { void submit(event); }}
         onKeyDown={handleKeyDown}
+        attachmentControl={<ChatPdfAttachment
+          client={bootstrapClient}
+          inventory={sourceInventory}
+          inventoryLoading={visible && sourceInventory === null && sourceError === null}
+          inventoryError={sourceError}
+          tokenAvailable={bootstrapToken !== null}
+          requestPending={busy}
+          onInventoryChange={(value) => { setSourceInventory(value); setSourceError(null); }}
+        />}
       />
       <p className="chat-footnote">{mode === "general" ? "General Chat is not document-grounded. " : ""}Chats are kept in this browser tab session. Reloaded document evidence expires; ask again to retrieve current sources.</p>
     </section>

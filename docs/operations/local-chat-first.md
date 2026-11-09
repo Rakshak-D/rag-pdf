@@ -119,11 +119,13 @@ checks and job history remain available in secondary disclosures.
 
 ## Existing workflows
 
-The primary navigation is Chat, Documents, Results, and Settings. Documents
-continues to the existing document workflow; Results opens persisted artifacts.
-Existing `/index-builds`, `/jobs`, `/experiments/*`, artifact-detail, and legacy
-`/ask` routes remain available for the workflows that have not yet been
-consolidated into the chat-first interface.
+The primary navigation is Chat, Library and Settings. PDFs can also be attached
+from the Chat composer, but they are added to the same shared collection and
+still require explicit preparation in Library. Settings links to **Advanced
+Research**, which provides access to persisted Results, evaluations, ablations,
+jobs and index-build details. Existing `/documents`, `/artifacts`,
+`/index-builds`, `/jobs`, `/experiments/*`, artifact-detail, `/overview`, and
+legacy `/ask` routes remain available for bookmarks and direct navigation.
 
 For the verified local text-RAG example and its resource limits, see
 [`docs/DEMO.md`](../DEMO.md).

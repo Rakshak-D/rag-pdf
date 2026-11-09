@@ -6,9 +6,11 @@ Sprint 1 starts from `2b08ed2e613ac794917ce07455f96e1d73cd6064` on
 
 ## Use the collection
 
-1. Open Documents. Choose or drop one PDF, then choose **Add PDF**.
+1. Open Library, or choose **Attach PDF** beside the Chat composer. Select a
+   file and explicitly choose **Add PDF**.
    The server validates the file and refreshes the library. Uploading never
-   starts indexing; all PDFs in the configured source form one collection.
+   starts indexing; all PDFs in the configured source form one shared collection.
+   Chat attachments are not scoped to a single conversation.
 2. The preparation area checks the trusted configuration and completed reports.
    Use **Use this index** when a compatible completed preparation exists.
    Otherwise review the confirmation and choose **Prepare documents**.
@@ -45,7 +47,9 @@ operations. The launcher does not load models merely to render the interface.
 `product-foundation.css` supplies ink, paper, ultramarine, success/warning,
 spacing, typography and keyboard-focus tokens after the legacy styles.
 `documents-workflow.css` owns the responsive library and preparation layout.
-The four primary routes and legacy build/research routes remain available.
+Chat, Library and Settings are the primary navigation. **Advanced Research**
+in Settings links to Results, evaluations, ablations, jobs and detailed index
+builds. Existing routes and bookmarks remain available.
 
 This slice reuses existing clients and authenticated gateway contracts. It
 changes no scientific configuration, backend API, retrieval implementation,

@@ -44,14 +44,14 @@ async function connect(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("Documents page", () => {
-  it("shows the disconnected source state and one working Documents navigation item", () => {
+  it("shows the disconnected source state and one working Library navigation item", () => {
     const fetcher = vi.fn<typeof fetch>();
     stubBootstrapFetch(fetcher);
     mount();
     expect(screen.getByRole("heading", { name: "Documents" })).toBeInTheDocument();
     expect(screen.getByText("Connect to view your PDFs.")).toBeInTheDocument();
     expect(screen.getByLabelText("PDF file")).toBeDisabled();
-    expect(screen.getAllByRole("link", { name: "Documents" })).toHaveLength(1);
+    expect(screen.getAllByRole("link", { name: "Library" })).toHaveLength(1);
     expect(fetcher).not.toHaveBeenCalled();
   });
 
@@ -61,7 +61,7 @@ describe("Documents page", () => {
       const path = String(input);
       if (path === "/bootstrap-api/v1/bootstrap/status") return json(status);
       if (path.startsWith("/bootstrap-api/v1/bootstrap/documents?") && init?.method !== "POST") {
-        return json(inventory(uploaded ? [record] : []));
+        return json(uploaded ? { ...inventory([record]), manifest_hash: "b".repeat(64) } : inventory());
       }
       if (path === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST") {
         uploaded = true;
@@ -100,17 +100,18 @@ describe("Documents page", () => {
     expect(localStorage.getItem("bootstrapToken")).toBeNull();
     expect(sessionStorage.getItem("bootstrapToken")).toBeNull();
 
-    await user.click(screen.getByRole("link", { name: "Advanced build workspace" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/index-builds"));
-    expect(screen.getByRole("heading", { name: "Index Builds" })).toBeInTheDocument();
+    await user.click(screen.getByRole("link", { name: "Advanced Research" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/research"));
+    expect(screen.getByRole("heading", { name: "Advanced Research" })).toBeInTheDocument();
   });
 
   it("prevents duplicate submissions while an upload is in flight", async () => {
     let releaseUpload: ((response: Response) => void) | undefined;
+    let uploaded = false;
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = String(input);
       if (path === "/bootstrap-api/v1/bootstrap/status") return json(status);
-      if (path.startsWith("/bootstrap-api/v1/bootstrap/documents?") && init?.method !== "POST") return json(inventory());
+      if (path.startsWith("/bootstrap-api/v1/bootstrap/documents?") && init?.method !== "POST") return json(uploaded ? { ...inventory([record]), manifest_hash: "b".repeat(64) } : inventory());
       if (path === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST") {
         return await new Promise<Response>((resolve) => { releaseUpload = resolve; });
       }
@@ -124,6 +125,7 @@ describe("Documents page", () => {
     expect(screen.getByRole("button", { name: "Adding PDF…" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Adding PDF…" }));
     expect(fetcher.mock.calls.filter(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST")).toHaveLength(1);
+    uploaded = true;
     releaseUpload?.(json({ outcome: "imported", document: record, manifest_hash: "b".repeat(64), max_upload_bytes: 1024 * 1024, error_code: null }, 201));
     await screen.findByRole("status", { name: "PDF import" });
   });
@@ -173,7 +175,7 @@ describe("Documents page", () => {
     await screen.findByText("Your library starts here.");
     await user.upload(screen.getByLabelText("PDF file"), new File(["%PDF-test payload"], "Research note.pdf", { type: "application/pdf" }));
     await user.click(screen.getByRole("button", { name: "Add PDF" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("published but could not confirm the updated inventory");
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not be confirmed by the current inventory");
     expect(screen.queryByText(/was imported and confirmed/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add PDF" })).toBeDisabled();
     expect(screen.getByLabelText("PDF file")).toBeDisabled();
@@ -196,7 +198,7 @@ describe("Documents page", () => {
     const unsafe = new File(["%PDF"], "bad:name.pdf", { type: "application/pdf" });
     fireEvent.change(screen.getByLabelText("PDF file"), { target: { files: [unsafe] } });
     await user.click(screen.getByRole("button", { name: "Add PDF" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Use an ASCII filename");
+    expect(await screen.findByRole("alert")).toHaveTextContent("simple filename");
     expect(fetcher.mock.calls.some(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/documents" && init?.method === "POST")).toBe(false);
   });
   it("accepts one dropped PDF only after explicit submission and rejects multiple-file drops", async () => {

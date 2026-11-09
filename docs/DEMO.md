@@ -56,11 +56,11 @@ Before the demo, check that the workspace folders and Ollama models still exist.
 1. **Chat:** Open the app. Point out that no API token is entered. Explain that General Chat uses the local Ollama service and does not need a PDF index.
 2. **Settings:** Select nemotron-3-nano:4b, set temperature to 0 and maximum output tokens to 64, and save. These values are browser-local preferences sent with General Chat requests.
 3. **General Chat:** Ask, "What is six times seven?" The verified browser run returned 42 from the real local model.
-4. **Documents:** Show the imported Orbit_Field_Notes.pdf, the completed build report, and the explicitly selected index. The index is already built; do not submit another build. The build used BAAI/bge-large-en-v1.5 and persisted three text vectors in Chroma.
+4. **Library:** Show the imported Orbit_Field_Notes.pdf, the completed build report, and the explicitly selected index. The index is already built; do not submit another build. The build used BAAI/bge-large-en-v1.5 and persisted three text vectors in Chroma.
 5. **Document Chat:** Select Document Chat and ask, "How much power did the ORBIT test solar panel produce, and when?" The verified answer was: "The ORBIT test solar panel produced 184 watts of electrical output on 12 May 2025 at 10:00 a.m. [T1]"
 6. Click [T1] and show the returned passage from Orbit_Field_Notes.pdf, page 1. Explain that the citation opens evidence returned by retrieval; it is not a formal proof of every model statement.
 7. Ask, "What was the tower's peak wind speed during the test?" The real gemma4:e2b response was "Insufficient evidence." The response marked model-reported abstention and had no citation links. Describe this as one observed case, not a general guarantee.
-8. **Results:** Open Results. It reads persisted evaluation/ablation artifacts. This demo has no benchmark artifact, so an empty result catalog is expected. Do not claim benchmark metrics.
+8. **Advanced Research → Results:** Results reads persisted evaluation/ablation artifacts. This demo has no benchmark artifact, so an empty result catalog is expected. Do not claim benchmark metrics.
 
 ## Architecture in one minute
 

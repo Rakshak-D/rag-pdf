@@ -30,3 +30,5 @@ a { color: var(--accent); }.button { min-height: 40px; border-radius: var(--radi
 @media(prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
 
 .sidebar :focus-visible { outline-color: #a8b9ff; }
+.skip-link { position: fixed; top: 8px; left: 8px; z-index: 100; transform: translateY(-160%); padding: 10px 14px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); box-shadow: 0 2px 12px #0003; }
+.skip-link:focus { transform: translateY(0); }

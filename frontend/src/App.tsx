@@ -16,6 +16,7 @@ import { DocumentsPage } from "./features/documents/DocumentsPage";
 import { useConversations } from "./features/chat/conversations";
 import { ChatPage } from "./features/chat/ChatPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
+import { AdvancedResearchPage } from "./features/research/AdvancedResearchPage";
 import {
   loadGeneralChatPreferences,
   saveGeneralChatPreferences,
@@ -182,6 +183,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={null} />
       <Route path="/settings" element={<SettingsPage token={token} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onSave={saveChatPreferences} onResetUnavailableModel={resetUnavailableChatModel} />} />
+      <Route path="/research" element={<AdvancedResearchPage />} />
       <Route path="/documents" element={null} />
       <Route path="/documents/view/:documentId" element={<Suspense fallback={<p className="pdf-viewer__state" role="status">Loading the PDF viewer…</p>}><DocumentViewerPage token={bootstrapToken} /></Suspense>} />
       <Route path="/artifacts" element={<ArtifactsPage client={client} connected={connected} refreshKey={refreshVersion} onRefresh={refresh} />} />
@@ -193,7 +195,7 @@ export default function App() {
       <Route path="/index-builds/:jobId" element={<IndexBuildsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} ordinaryToken={token} ordinaryChecking={connectionChecking} ordinaryModels={runtimeModels} ordinaryError={connectionError} onOrdinaryConnect={connect} onOrdinaryDisconnect={disconnect} />} />
       <Route path="/ask" element={<Navigate to="/?mode=document" replace />} />
       <Route path="/overview" element={<OverviewPage connected={connected} health={health} healthError={healthError} dataState={dataState} jobs={jobs} evaluationArtifacts={evaluationArtifacts} ablationArtifacts={ablationArtifacts} dataError={dataError} refreshing={refreshing} onRefresh={refresh} />} />
-      <Route path="*" element={<section className="not-found-page"><span className="chat-kicker">PAGE NOT FOUND</span><h1>This page isn’t here</h1><p>Choose Chat, Documents, Results or Settings to continue.</p><Link className="button button--primary" to="/">Return to Chat</Link></section>} />
+      <Route path="*" element={<section className="not-found-page"><span className="chat-kicker">PAGE NOT FOUND</span><h1>This page isn’t here</h1><p>Choose Chat, Library or Settings to continue.</p><Link className="button button--primary" to="/">Return to Chat</Link></section>} />
     </Routes>
   </AppShell>;
 }
