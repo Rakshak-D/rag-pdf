@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>RAG-PDF Reading Desk</title>
+  <link rel="preload" href="assets/fonts/IBM-Plex-Sans-Variable.ttf" as="font" type="font/ttf" crossorigin><link rel="preload" href="assets/fonts/IBM-Plex-Mono-Regular.ttf" as="font" type="font/ttf" crossorigin><link rel="stylesheet" href="assets/reading-desk.css">
+</head>
+<body data-state="drop">
+  <header class="topbar">
+    <div class="brand" aria-label="RAG-PDF">
+      <svg class="brand-mark" viewBox="0 0 28 32" aria-hidden="true"><path d="M4 2.5h13l7 7v20H4z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M17 2.5v7h7M8 15h12M8 19h12M8 23h8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <span>RAG-PDF</span>
+    </div>
+    <span class="top-rule" aria-hidden="true"></span>
+    <div class="document-switch">
+      <svg viewBox="0 0 18 22" aria-hidden="true"><path d="M3 1.5h8l4 4v15H3z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 1.5v4h4M5.5 11h7M5.5 14h7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+      <span id="document-name">No PDF open</span><span class="switch-mark" aria-hidden="true">⌄</span>
+    </div>
+    <div class="top-spacer"></div>
+    <div id="local-status" class="local-status" role="status" aria-live="polite">
+      <span class="status-dot" aria-hidden="true"></span><span id="status-text">Local files</span>
+    </div>
+    <div class="settings-mark" aria-label="Settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Zm0-5v2m0 13.6v2m9-8.8h-2m-14 0H3m15.36-6.36-1.42 1.42M7.06 16.94l-1.42 1.42m12.72 0-1.42-1.42m-9.88-9.88L5.64 5.66" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="8.7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
+    </div>
+  </header>
+  <main class="desk" id="desk">
+    <section class="conversation" aria-label="Conversation">
+      <div class="conversation-heading">
+        <h1 id="desk-title">Put a PDF here</h1>
+        <p id="desk-description">Open a document to read its pages and ask about what you find.</p>
+      </div>
+      <div id="conversation-content" class="conversation-content"></div>
+      <div id="figure-card" class="figure-card" hidden>
+        <figure>
+          <img src="assets/figures/link-outcrop.png" alt="The Link rock outcrop on Mars, with rounded pebbles and a one-centimeter scale marker." width="1563" height="1011">
+          <figcaption><span class="figure-caption">A rock outcrop called Link shows signs of being formed by the deposition of water.</span><span class="figure-credit">NASA/JPL-Caltech/MSSS</span></figcaption>
+        </figure>
+      </div>
+      <div id="source-card" class="source-card" hidden>
+        <div class="source-card-label">Source passage <span>p.02</span></div>
+        <p>The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.</p>
+      </div>
+      <div class="composer" aria-label="Question composer">
+        <div id="composer-hint" class="composer-hint">Open a PDF to begin</div>
+        <div class="composer-box">
+          <svg class="attach-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="m8.7 12.8 6.7-6.7a3.3 3.3 0 0 1 4.7 4.7l-8.8 8.8a5 5 0 0 1-7.1-7.1l8.2-8.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          <span id="composer-placeholder">Drop a PDF or choose one to begin</span><span class="send-mark" aria-hidden="true">↑</span>
+        </div>
+      </div>
+    </section>
+    <section class="reader" aria-label="PDF reading area">
+      <div class="reader-toolbar">
+        <div class="reader-identity"><strong id="reader-title">Mars Science Laboratory/Curiosity</strong><span id="reader-subtitle">NASA FACTS · 4 PAGES</span></div>
+        <div class="reader-controls" aria-label="Page controls"><span class="control-glyph" aria-hidden="true">−</span><span class="control-glyph" aria-hidden="true">＋</span><span class="control-glyph fit-mark" aria-hidden="true">FIT</span><span id="page-count" class="page-count">— / 4</span></div>
+      </div>
+      <div class="page-area">
+        <div id="empty-desk" class="empty-desk">
+          <svg viewBox="0 0 220 292" aria-hidden="true"><path d="M25 9h116l54 54v211H25zM141 9v55h54" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 6"/><path d="M77 128h66M77 145h66M77 162h48" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 5"/></svg>
+          <span>Put a PDF here</span>
+        </div>
+        <div id="page-frame" class="page-frame" hidden>
+          <img id="page-image" src="assets/pages/page-02.png" alt="Page 2 of the NASA Mars Science Laboratory/Curiosity factsheet" width="1105" height="1430">
+          <div id="evidence-highlight" class="evidence-highlight" aria-label="Highlighted source passage on page 2">
+            <i style="left:7.27%;top:73.82%;width:37.53%;height:1.50%"></i>
+            <i style="left:7.27%;top:75.78%;width:39.53%;height:1.50%"></i>
+            <i style="left:7.27%;top:77.74%;width:14.59%;height:1.50%"></i>
+          </div>
+          <div class="page-warmth" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div id="page-strip" class="page-strip" aria-label="Pages in the sample document" hidden>
+        <div class="page-thumb" data-page="1"><img src="assets/pages/contact-1.png" alt=""><span>01</span></div>
+        <div class="page-thumb" data-page="2"><img src="assets/pages/contact-2.png" alt=""><span>02</span></div>
+        <div class="page-thumb" data-page="3"><img src="assets/pages/contact-3.png" alt=""><span>03</span></div>
+        <div class="page-thumb" data-page="4"><img src="assets/pages/contact-4.png" alt=""><span>04</span></div>
+        <span class="strip-note">4 pages</span>
+      </div>
+    </section>
+    <svg id="leader-overlay" class="leader-overlay" aria-hidden="true"><line id="leader-line" x1="0" y1="0" x2="0" y2="0"></line></svg>
+  </main>
+  <script>
+(() => {
+  const allowed = new Set(["drop", "reading", "answered", "model-missing"]);
+  const requested = new URLSearchParams(window.location.search).get("state") || "drop";
+  const state = allowed.has(requested) ? requested : "drop";
+  document.body.dataset.state = state;
+  const title = document.getElementById("desk-title");
+  const description = document.getElementById("desk-description");
+  const docName = document.getElementById("document-name");
+  const status = document.getElementById("local-status");
+  const statusText = document.getElementById("status-text");
+  const content = document.getElementById("conversation-content");
+  const composerHint = document.getElementById("composer-hint");
+  const composerPlaceholder = document.getElementById("composer-placeholder");
+  const pageCount = document.getElementById("page-count");
+  const pageImage = document.getElementById("page-image");
+  const pageFrame = document.getElementById("page-frame");
+  const emptyDesk = document.getElementById("empty-desk");
+  const figureCard = document.getElementById("figure-card");
+  const sourceCard = document.getElementById("source-card");
+  const highlight = document.getElementById("evidence-highlight");
+  const thumbStrip = document.getElementById("page-strip");
+  const commonTitle = "Mars Science Laboratory/Curiosity";
+  const sentence = (text, label) =>
+    '<p class="evidence-sentence" tabindex="0" data-evidence="link">' + text +
+    ' <a class="source-chip" href="#evidence-highlight" aria-label="Open source passage on page 2">' +
+    label + '<span class="chip-thumb" aria-hidden="true"><img src="assets/pages/contact-2.png" alt=""></span></a></p>';
+  docName.textContent = state === "drop" ? "No PDF open" : commonTitle;
+  document.getElementById("reader-title").textContent = commonTitle;
+  document.getElementById("reader-subtitle").textContent = "NASA FACTS · 4 PAGES";
+  const setPage = (page, pageAlt) => {
+    emptyDesk.hidden = true;
+    pageFrame.hidden = false;
+    pageImage.src = "assets/pages/page-0" + page + ".png";
+    pageImage.alt = pageAlt;
+    pageFrame.classList.toggle("text-page", page === "3");
+    pageCount.textContent = page + " / 4";
+    thumbStrip.hidden = false;
+    thumbStrip.querySelectorAll(".page-thumb").forEach((item) => {
+      if (item.dataset.page === page) item.setAttribute("aria-current", "page");
+      else item.removeAttribute("aria-current");
+    });
+  };
+  if (state === "drop") {
+    title.textContent = "Put a PDF here";
+    description.textContent = "Open a document to read its pages and ask about what you find.";
+    content.innerHTML = '<p class="body-copy drop-note">Your conversation and the original page belong on the same desk.</p>';
+    composerHint.textContent = "Open a PDF to begin";
+    composerPlaceholder.textContent = "Drop a PDF or choose one to begin";
+    statusText.textContent = "Local files";
+    status.classList.remove("is-missing");
+    emptyDesk.hidden = false; pageFrame.hidden = true; figureCard.hidden = true; sourceCard.hidden = true; thumbStrip.hidden = true;
+    pageCount.textContent = "— / 4";
+  } else if (state === "reading") {
+    title.textContent = "Read, then ask.";
+    description.textContent = "Mars Science Laboratory/Curiosity · 4 pages";
+    content.innerHTML = '<p class="body-copy">Choose a question to follow a detail back to its page.</p>' +
+      '<div class="suggestions" aria-label="Suggested questions">' +
+      '<div class="suggestion">What does the Link outcrop show?</div>' +
+      '<div class="suggestion">How old was the John Klein rock?</div>' +
+      '<div class="suggestion">What water evidence appears on page 2, and how much power did the generator supply on page 3?</div></div>';
+    composerHint.textContent = "Questions use the open document";
+    composerPlaceholder.textContent = "Ask a question about this PDF";
+    statusText.textContent = "Local files";
+    status.classList.remove("is-missing");
+    setPage("3", "Page 3 of the NASA Mars Science Laboratory/Curiosity factsheet");
+    figureCard.hidden = false; sourceCard.hidden = true; highlight.hidden = true;
+  } else if (state === "answered") {
+    title.textContent = "A page-backed answer.";
+    description.textContent = "Question, figure and source on one reading desk.";
+    content.innerHTML = '<div class="question-bubble">What does Link tell us about water on ancient Mars?</div>' +
+      '<div class="answer-label">From the document</div><div class="answer">' +
+      sentence("The booklet describes Link as an outcrop formed by water deposition.", "p.02") +
+      sentence("Rounded pebbles mixed with hardened sand in nearby conglomerate rocks are evidence of stream flow.", "p.02") +
+      sentence("Curiosity’s first John Klein drill sample showed evidence of sustained liquid water and conditions favorable for life.", "p.02") +
+      '</div>';
+    composerHint.textContent = "Ask a follow-up";
+    composerPlaceholder.textContent = "Ask another question about this PDF";
+    statusText.textContent = "Local files";
+    status.classList.remove("is-missing");
+    setPage("2", "Page 2 of the NASA Mars Science Laboratory/Curiosity factsheet, with the source passage highlighted.");
+    figureCard.hidden = false; sourceCard.hidden = true; highlight.hidden = false;
+  } else {
+    title.textContent = "The document stays open.";
+    description.textContent = "You can still inspect the page and its source passage.";
+    content.innerHTML = '<p class="body-copy">The local answer model is unavailable. Connect Ollama to ask a question.</p>';
+    composerHint.textContent = "Answering is unavailable";
+    composerPlaceholder.textContent = "The PDF remains open";
+    statusText.textContent = "Ollama unavailable";
+    status.classList.add("is-missing");
+    setPage("2", "Page 2 of the NASA Mars Science Laboratory/Curiosity factsheet, with a source passage highlighted.");
+    figureCard.hidden = false; sourceCard.hidden = false; highlight.hidden = false;
+  }
+  const line = document.getElementById("leader-line");
+  let activeSentence = null;
+  const showLeader = (element) => {
+    const sentenceNode = element.closest(".evidence-sentence");
+    if (!sentenceNode || highlight.hidden) return;
+    activeSentence = sentenceNode;
+    highlight.querySelector("i")?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+    const sourceRect = sentenceNode.getBoundingClientRect();
+    const targetMark = highlight.querySelector("i"); if (!targetMark) return;
+    const targetRect = targetMark.getBoundingClientRect();
+    line.setAttribute("x1", String(Math.min(sourceRect.right + 8, window.innerWidth - 16)));
+    line.setAttribute("y1", String(sourceRect.top + sourceRect.height / 2));
+    line.setAttribute("x2", String(Math.max(targetRect.left + 6, 10)));
+    line.setAttribute("y2", String(targetRect.top + targetRect.height / 2));
+    line.classList.add("is-visible");
+  };
+  const hideLeaderIfInactive = (sentenceNode) => {
+    if (!sentenceNode.contains(document.activeElement) && !sentenceNode.matches(":hover")) {
+      line.classList.remove("is-visible"); activeSentence = null;
+    }
+  };
+  document.querySelectorAll(".evidence-sentence").forEach((node) => {
+    node.addEventListener("mouseenter", () => showLeader(node));
+    node.addEventListener("mouseleave", () => hideLeaderIfInactive(node));
+    node.addEventListener("focusin", () => showLeader(node));
+    node.addEventListener("focusout", () => {
+      requestAnimationFrame(() => hideLeaderIfInactive(node));
+    });
+    node.querySelector(".source-chip").addEventListener("click", (event) => {
+      event.preventDefault(); showLeader(node);
+      highlight.querySelector("i")?.scrollIntoView({ block: "nearest", behavior: "instant" });
+    });
+  });
+  window.addEventListener("resize", () => { if (activeSentence) showLeader(activeSentence); });
+})();
+</script>
+</body>
+</html>
