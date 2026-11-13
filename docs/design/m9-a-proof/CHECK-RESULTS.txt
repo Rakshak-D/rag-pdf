@@ -1,0 +1,223 @@
+M9-A static proof verification
+Classification: PASS_SYNTHETIC applies only to the rendered HTML composition and local interaction checks; no backend, retrieval, or generation was tested.
+
+PASS | drop 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | drop 1440x900: local asset responses | all requested files returned below 400
+PASS | drop 1440x900: no browser exceptions | no page errors
+PASS | drop 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | drop 1440x900: proof-render layout shift | CLS=0
+PASS | drop 1440x900: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | drop 1440x900: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
+PASS | drop 1440x900: body and evidence copy >=16px | checked 4 visible body/evidence text nodes
+PASS | drop 1440x900: interactive citation target >=44px | checked 0 visible links
+PASS | drop 1440x900: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | drop 1440x900: visible document assets loaded | 0 visible local images loaded
+PASS | drop 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | drop 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | drop 1440x900: empty desk shown | emptyDocumentOutline=true
+PASS | drop 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | drop 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | drop 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | drop 1024x768: local asset responses | all requested files returned below 400
+PASS | drop 1024x768: no browser exceptions | no page errors
+PASS | drop 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | drop 1024x768: proof-render layout shift | CLS=0
+PASS | drop 1024x768: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | drop 1024x768: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
+PASS | drop 1024x768: body and evidence copy >=16px | checked 4 visible body/evidence text nodes
+PASS | drop 1024x768: interactive citation target >=44px | checked 0 visible links
+PASS | drop 1024x768: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | drop 1024x768: visible document assets loaded | 0 visible local images loaded
+PASS | drop 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | drop 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | drop 1024x768: empty desk shown | emptyDocumentOutline=true
+PASS | drop 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | drop 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | drop 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | drop 390x844: local asset responses | all requested files returned below 400
+PASS | drop 390x844: no browser exceptions | no page errors
+PASS | drop 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | drop 390x844: proof-render layout shift | CLS=0
+PASS | drop 390x844: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | drop 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (891px page)
+PASS | drop 390x844: body and evidence copy >=16px | checked 4 visible body/evidence text nodes
+PASS | drop 390x844: interactive citation target >=44px | checked 0 visible links
+PASS | drop 390x844: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | drop 390x844: visible document assets loaded | 0 visible local images loaded
+PASS | drop 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | drop 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | drop 390x844: empty desk shown | emptyDocumentOutline=true
+PASS | drop 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | drop 390x844: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | reading 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | reading 1440x900: local asset responses | all requested files returned below 400
+PASS | reading 1440x900: no browser exceptions | no page errors
+PASS | reading 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | reading 1440x900: proof-render layout shift | CLS=0
+PASS | reading 1440x900: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | reading 1440x900: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
+PASS | reading 1440x900: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
+PASS | reading 1440x900: interactive citation target >=44px | checked 0 visible links
+PASS | reading 1440x900: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | reading 1440x900: visible document assets loaded | 6 visible local images loaded
+PASS | reading 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | reading 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | reading 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | reading 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | reading 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | reading 1024x768: local asset responses | all requested files returned below 400
+PASS | reading 1024x768: no browser exceptions | no page errors
+PASS | reading 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | reading 1024x768: proof-render layout shift | CLS=0
+PASS | reading 1024x768: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | reading 1024x768: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
+PASS | reading 1024x768: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
+PASS | reading 1024x768: interactive citation target >=44px | checked 0 visible links
+PASS | reading 1024x768: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | reading 1024x768: visible document assets loaded | 6 visible local images loaded
+PASS | reading 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | reading 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | reading 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | reading 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | reading 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | reading 390x844: local asset responses | all requested files returned below 400
+PASS | reading 390x844: no browser exceptions | no page errors
+PASS | reading 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | reading 390x844: proof-render layout shift | CLS=0
+PASS | reading 390x844: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | reading 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (1147px page)
+PASS | reading 390x844: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
+PASS | reading 390x844: interactive citation target >=44px | checked 0 visible links
+PASS | reading 390x844: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | reading 390x844: visible document assets loaded | 6 visible local images loaded
+PASS | reading 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | reading 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | reading 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | reading 390x844: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | answered 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | answered 1440x900: local asset responses | all requested files returned below 400
+PASS | answered 1440x900: no browser exceptions | no page errors
+PASS | answered 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | answered 1440x900: proof-render layout shift | CLS=0
+PASS | answered 1440x900: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | answered 1440x900: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
+PASS | answered 1440x900: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
+PASS | answered 1440x900: interactive citation target >=44px | checked 3 visible links
+PASS | answered 1440x900: visible control target boxes >=44px | checked 7 shell/citation targets
+PASS | answered 1440x900: visible document assets loaded | 9 visible local images loaded
+PASS | answered 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | answered 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | answered 1440x900: hover/focus leader and evidence highlight | mode=pointer hover; leader=true; highlighted lines=3
+PASS | answered 1440x900: leader removed after pointer leaves | lineVisible=false
+PASS | answered 1440x900: keyboard focus shows leader | focusedAnswerSentence=true; leader=true
+PASS | answered 1440x900: keyboard focus ring visible | outline=2px rgb(215, 255, 58)
+PASS | answered 1440x900: leader removed after keyboard leaves sentence | lineVisible=false
+PASS | answered 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | answered 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | answered 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | answered 1024x768: local asset responses | all requested files returned below 400
+PASS | answered 1024x768: no browser exceptions | no page errors
+PASS | answered 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | answered 1024x768: proof-render layout shift | CLS=0
+PASS | answered 1024x768: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | answered 1024x768: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
+PASS | answered 1024x768: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
+PASS | answered 1024x768: interactive citation target >=44px | checked 3 visible links
+PASS | answered 1024x768: visible control target boxes >=44px | checked 7 shell/citation targets
+PASS | answered 1024x768: visible document assets loaded | 9 visible local images loaded
+PASS | answered 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | answered 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | answered 1024x768: hover/focus leader and evidence highlight | mode=pointer hover; leader=true; highlighted lines=3
+PASS | answered 1024x768: leader removed after pointer leaves | lineVisible=false
+PASS | answered 1024x768: keyboard focus shows leader | focusedAnswerSentence=true; leader=true
+PASS | answered 1024x768: keyboard focus ring visible | outline=2px rgb(215, 255, 58)
+PASS | answered 1024x768: leader removed after keyboard leaves sentence | lineVisible=false
+PASS | answered 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | answered 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | answered 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | answered 390x844: local asset responses | all requested files returned below 400
+PASS | answered 390x844: no browser exceptions | no page errors
+PASS | answered 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | answered 390x844: proof-render layout shift | CLS=0
+PASS | answered 390x844: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | answered 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (1267px page)
+PASS | answered 390x844: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
+PASS | answered 390x844: interactive citation target >=44px | checked 3 visible links
+PASS | answered 390x844: visible control target boxes >=44px | checked 7 shell/citation targets
+PASS | answered 390x844: visible document assets loaded | 9 visible local images loaded
+PASS | answered 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | answered 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | answered 390x844: hover/focus leader and evidence highlight | mode=keyboard focus; leader=true; highlighted lines=3
+N/A | answered 390x844: pointer hover on touch viewport | touch viewport has no hover input; keyboard focus and dismissal are tested below
+PASS | answered 390x844: keyboard focus shows leader | focusedAnswerSentence=true; leader=true
+PASS | answered 390x844: keyboard focus ring visible | outline=2px rgb(215, 255, 58)
+PASS | answered 390x844: leader removed after keyboard leaves sentence | lineVisible=false
+PASS | answered 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | answered 390x844: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | model-missing 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | model-missing 1440x900: local asset responses | all requested files returned below 400
+PASS | model-missing 1440x900: no browser exceptions | no page errors
+PASS | model-missing 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | model-missing 1440x900: proof-render layout shift | CLS=0
+PASS | model-missing 1440x900: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | model-missing 1440x900: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
+PASS | model-missing 1440x900: body and evidence copy >=16px | checked 5 visible body/evidence text nodes
+PASS | model-missing 1440x900: interactive citation target >=44px | checked 0 visible links
+PASS | model-missing 1440x900: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | model-missing 1440x900: visible document assets loaded | 6 visible local images loaded
+PASS | model-missing 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | model-missing 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | model-missing 1440x900: missing model preserves source without fake answer | answers=0; page=true; figure=true; highlight=true
+PASS | model-missing 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | model-missing 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | model-missing 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | model-missing 1024x768: local asset responses | all requested files returned below 400
+PASS | model-missing 1024x768: no browser exceptions | no page errors
+PASS | model-missing 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | model-missing 1024x768: proof-render layout shift | CLS=0
+PASS | model-missing 1024x768: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | model-missing 1024x768: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
+PASS | model-missing 1024x768: body and evidence copy >=16px | checked 5 visible body/evidence text nodes
+PASS | model-missing 1024x768: interactive citation target >=44px | checked 0 visible links
+PASS | model-missing 1024x768: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | model-missing 1024x768: visible document assets loaded | 6 visible local images loaded
+PASS | model-missing 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | model-missing 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | model-missing 1024x768: missing model preserves source without fake answer | answers=0; page=true; figure=true; highlight=true
+PASS | model-missing 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | model-missing 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | model-missing 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
+PASS | model-missing 390x844: local asset responses | all requested files returned below 400
+PASS | model-missing 390x844: no browser exceptions | no page errors
+PASS | model-missing 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | model-missing 390x844: proof-render layout shift | CLS=0
+PASS | model-missing 390x844: major zones do not overlap | conversation and reader bounds are disjoint
+PASS | model-missing 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (1110px page)
+PASS | model-missing 390x844: body and evidence copy >=16px | checked 5 visible body/evidence text nodes
+PASS | model-missing 390x844: interactive citation target >=44px | checked 0 visible links
+PASS | model-missing 390x844: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | model-missing 390x844: visible document assets loaded | 6 visible local images loaded
+PASS | model-missing 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
+PASS | model-missing 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | model-missing 390x844: missing model preserves source without fake answer | answers=0; page=true; figure=true; highlight=true
+PASS | model-missing 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
+PASS | model-missing 390x844: reduced-motion keeps citation interaction | focused citation leader=true
+PASS | contrast body text on conversation | 13.83:1 (#F0EBDD on #211F19)
+PASS | contrast secondary instructions on conversation | 10.60:1 (#D5CFBF on #211F19)
+PASS | contrast figure caption on raised panel | 11.39:1 (#E7E0D2 on #29271F)
+PASS | contrast source passage on conversation | 12.76:1 (#E8E2D4 on #211F19)
+PASS | contrast quiet composer hint on conversation | 6.10:1 (#A39D8E on #211F19)
+PASS | contrast reader secondary label on room | 5.42:1 (#918B7C on #16140F)
+PASS | contrast figure credit on raised panel | 7.09:1 (#B9B2A2 on #29271F)
+PASS | contrast PDF ink on warm paper | 13.48:1 (#211F19 on #EEE8D9)
+PASS | contrast active chip text on highlight | 15.48:1 (#19180F on #D7FF3A)
+PASS | contrast chip text on conversation | 14.32:1 (#D7FF3A on #211F19)
+PASS | contrast status text on room | 8.52:1 (#B7B09F on #16140F)
+PASS | CSS and JS motion avoids left/top/width/height animation | transitions use transform/opacity; keyframes use opacity/transform; JavaScript does not animate geometry
+PASS | banned gradient absent | gradient declarations=none
+PASS | banned blue primary absent | blue primary pattern=false
+PASS | banned serif hero absent | serif font declaration=false
+PASS | banned numbered stepper absent | stepper markup=false
+
+TOTAL: 216/216 checks passed; failures=0.
+Scope: static HTML, local assets, and deterministic UI interactions only. No product API or AI path was exercised.
