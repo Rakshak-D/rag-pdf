@@ -1,258 +1,251 @@
-M9-A static proof verification
-Browser: Playwright-managed Chrome channel, headless
-Classification: PASS_SYNTHETIC applies only to the rendered HTML composition and local interaction checks; no backend, retrieval, or generation was tested.
+M9-A-R3 Reading Desk static proof checks
+Browser: Playwright-managed Chrome channel 157.0.8103.51 (headless).
+Classification: These checks establish proof rendering and scripted local interactions only. No product API, retrieval, generation, ingestion, or production PDF.js behavior was exercised.
+CLS values exclude shifts after recent user input, as defined for the browser CLS metric; raw observed values are also reported for PDF opening.
 
-PASS | drop 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | drop 1440x900: local asset responses | all requested files returned below 400
-PASS | drop 1440x900: no browser exceptions | no page errors
-PASS | drop 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
-PASS | drop 1440x900: proof-render layout shift | CLS=0
-PASS | drop 1440x900: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | drop 1440x900: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
-PASS | drop 1440x900: body and evidence copy >=16px | checked 4 visible body/evidence text nodes
-PASS | drop 1440x900: interactive citation target >=44px | checked 0 visible links
-PASS | drop 1440x900: visible control target boxes >=44px | checked 1 shell/citation targets
-PASS | drop 1440x900: visible document assets loaded | 0 visible local images loaded
-PASS | drop 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | drop 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | drop 1440x900: empty desk shown | emptyDocumentOutline=true
-PASS | drop 1440x900: empty reader has no stale document identity or page controls | {"title":"","subtitle":"","pageCount":"","identityHidden":true,"controlsHidden":true}
-PASS | drop 1440x900: status describes the answer model | visible status="Model ready"; expected="Model ready"
-PASS | drop 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | drop 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | drop 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | drop 1024x768: local asset responses | all requested files returned below 400
-PASS | drop 1024x768: no browser exceptions | no page errors
-PASS | drop 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
-PASS | drop 1024x768: proof-render layout shift | CLS=0
-PASS | drop 1024x768: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | drop 1024x768: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
-PASS | drop 1024x768: body and evidence copy >=16px | checked 4 visible body/evidence text nodes
-PASS | drop 1024x768: interactive citation target >=44px | checked 0 visible links
-PASS | drop 1024x768: visible control target boxes >=44px | checked 1 shell/citation targets
-PASS | drop 1024x768: visible document assets loaded | 0 visible local images loaded
-PASS | drop 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | drop 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | drop 1024x768: empty desk shown | emptyDocumentOutline=true
-PASS | drop 1024x768: empty reader has no stale document identity or page controls | {"title":"","subtitle":"","pageCount":"","identityHidden":true,"controlsHidden":true}
-PASS | drop 1024x768: status describes the answer model | visible status="Model ready"; expected="Model ready"
-PASS | drop 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | drop 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | drop 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | drop 390x844: local asset responses | all requested files returned below 400
-PASS | drop 390x844: no browser exceptions | no page errors
-PASS | drop 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
-PASS | drop 390x844: proof-render layout shift | CLS=0
-PASS | drop 390x844: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | drop 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (891px page)
-PASS | drop 390x844: body and evidence copy >=16px | checked 4 visible body/evidence text nodes
-PASS | drop 390x844: interactive citation target >=44px | checked 0 visible links
-PASS | drop 390x844: visible control target boxes >=44px | checked 1 shell/citation targets
-PASS | drop 390x844: visible document assets loaded | 0 visible local images loaded
-PASS | drop 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | drop 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | drop 390x844: empty desk shown | emptyDocumentOutline=true
-PASS | drop 390x844: empty reader has no stale document identity or page controls | {"title":"","subtitle":"","pageCount":"","identityHidden":true,"controlsHidden":true}
-PASS | drop 390x844: status describes the answer model | visible status="Model ready"; expected="Model ready"
-PASS | drop 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | drop 390x844: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | reading 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | reading 1440x900: local asset responses | all requested files returned below 400
-PASS | reading 1440x900: no browser exceptions | no page errors
-PASS | reading 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
-PASS | reading 1440x900: proof-render layout shift | CLS=0
-PASS | reading 1440x900: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | reading 1440x900: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
-PASS | reading 1440x900: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
-PASS | reading 1440x900: interactive citation target >=44px | checked 0 visible links
-PASS | reading 1440x900: visible control target boxes >=44px | checked 4 shell/citation targets
-PASS | reading 1440x900: visible document assets loaded | 6 visible local images loaded
-PASS | reading 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | reading 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | reading 1440x900: status describes the answer model | visible status="Model ready"; expected="Model ready"
-PASS | reading 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | reading 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | reading 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | reading 1024x768: local asset responses | all requested files returned below 400
-PASS | reading 1024x768: no browser exceptions | no page errors
-PASS | reading 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
-PASS | reading 1024x768: proof-render layout shift | CLS=0
-PASS | reading 1024x768: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | reading 1024x768: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
-PASS | reading 1024x768: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
-PASS | reading 1024x768: interactive citation target >=44px | checked 0 visible links
-PASS | reading 1024x768: visible control target boxes >=44px | checked 4 shell/citation targets
-PASS | reading 1024x768: visible document assets loaded | 6 visible local images loaded
-PASS | reading 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | reading 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | reading 1024x768: status describes the answer model | visible status="Model ready"; expected="Model ready"
-PASS | reading 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | reading 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | reading 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | reading 390x844: local asset responses | all requested files returned below 400
-PASS | reading 390x844: no browser exceptions | no page errors
-PASS | reading 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
-PASS | reading 390x844: proof-render layout shift | CLS=0
-PASS | reading 390x844: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | reading 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (1147px page)
-PASS | reading 390x844: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
-PASS | reading 390x844: interactive citation target >=44px | checked 0 visible links
-PASS | reading 390x844: visible control target boxes >=44px | checked 4 shell/citation targets
-PASS | reading 390x844: visible document assets loaded | 6 visible local images loaded
-PASS | reading 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | reading 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | reading 390x844: status describes the answer model | visible status="Model ready"; expected="Model ready"
-PASS | reading 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | reading 390x844: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | answered 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | answered 1440x900: local asset responses | all requested files returned below 400
-PASS | answered 1440x900: no browser exceptions | no page errors
-PASS | answered 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
-PASS | answered 1440x900: proof-render layout shift | CLS=0
-PASS | answered 1440x900: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | answered 1440x900: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
-PASS | answered 1440x900: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
-PASS | answered 1440x900: interactive citation target >=44px | checked 3 visible links
-PASS | answered 1440x900: visible control target boxes >=44px | checked 7 shell/citation targets
-PASS | answered 1440x900: visible document assets loaded | 9 visible local images loaded
-PASS | answered 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | answered 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | answered 1440x900: hover/focus leader and evidence highlight | mode=pointer hover; leader=true; active highlighted lines=2
-PASS | answered 1440x900: leader removed after pointer leaves | lineVisible=false
-PASS | answered 1440x900: keyboard focus shows leader | focusedAnswerSentence=true; leader=true
-PASS | answered 1440x900: keyboard focus ring visible | outline=2px rgb(215, 255, 58)
-PASS | answered 1440x900: leader removed after keyboard leaves sentence | lineVisible=false
-PASS | answered 1440x900: claims map to distinct source passages | [{"id":"link-caption","label":"1 · p.02","page":"2","marks":2,"passage":"A rock outcrop called Link shows signs of being formed by the deposition of water."},{"id":"stream-flow","label":"2 · p.02","page":"2","marks":3,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site."},{"id":"john-klein-water","label":"3 · p.02","page":"2","marks":4,"passage":"first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,"}]
-PASS | answered 1440x900: highlight bounds match verified PDF coordinates | page-2 highlight boxes match the independently extracted Poppler point bounds
-PASS | answered 1440x900: link-caption selects its own highlight and leader endpoint | {"activeTarget":"link-caption","lineTarget":"link-caption","sourceTarget":"link-caption","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[250.921875,393.84375,517.8515625,393.84375,517.8515625,327.1953125,784.78125,327.1953125],"anchorBounds":{"left":784.78125,"right":994.140625,"top":322.671875,"bottom":331.71875},"pageAreaBounds":{"left":615.390625,"right":1414.984375,"top":130,"bottom":832},"endpointError":0,"mobile":null}
-PASS | answered 1440x900: stream-flow selects its own highlight and leader endpoint | {"activeTarget":"stream-flow","lineTarget":"stream-flow","sourceTarget":"stream-flow","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[450.078125,468.84375,616.734375,468.84375,616.734375,653.453125,783.390625,653.453125],"anchorBounds":{"left":783.390625,"right":986.984375,"top":648.21875,"bottom":658.6875},"pageAreaBounds":{"left":615.390625,"right":1414.984375,"top":130,"bottom":832},"endpointError":0,"mobile":null}
-PASS | answered 1440x900: john-klein-water selects its own highlight and leader endpoint | {"activeTarget":"john-klein-water","lineTarget":"john-klein-water","sourceTarget":"john-klein-water","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[105.8125,567.84375,564.3203125,567.84375,564.3203125,258.78125,1022.828125,258.78125],"anchorBounds":{"left":1022.828125,"right":1240.1875,"top":253.546875,"bottom":264.015625},"pageAreaBounds":{"left":615.390625,"right":1414.984375,"top":130,"bottom":832},"endpointError":0,"mobile":null}
-PASS | answered 1440x900: status describes the answer model | visible status="Model ready"; expected="Model ready"
-PASS | answered 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | answered 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | answered 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | answered 1024x768: local asset responses | all requested files returned below 400
-PASS | answered 1024x768: no browser exceptions | no page errors
-PASS | answered 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
-PASS | answered 1024x768: proof-render layout shift | CLS=0
-PASS | answered 1024x768: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | answered 1024x768: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
-PASS | answered 1024x768: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
-PASS | answered 1024x768: interactive citation target >=44px | checked 3 visible links
-PASS | answered 1024x768: visible control target boxes >=44px | checked 7 shell/citation targets
-PASS | answered 1024x768: visible document assets loaded | 9 visible local images loaded
-PASS | answered 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | answered 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | answered 1024x768: hover/focus leader and evidence highlight | mode=pointer hover; leader=true; active highlighted lines=2
-PASS | answered 1024x768: leader removed after pointer leaves | lineVisible=false
-PASS | answered 1024x768: keyboard focus shows leader | focusedAnswerSentence=true; leader=true
-PASS | answered 1024x768: keyboard focus ring visible | outline=2px rgb(215, 255, 58)
-PASS | answered 1024x768: leader removed after keyboard leaves sentence | lineVisible=false
-PASS | answered 1024x768: claims map to distinct source passages | [{"id":"link-caption","label":"1 · p.02","page":"2","marks":2,"passage":"A rock outcrop called Link shows signs of being formed by the deposition of water."},{"id":"stream-flow","label":"2 · p.02","page":"2","marks":3,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site."},{"id":"john-klein-water","label":"3 · p.02","page":"2","marks":4,"passage":"first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,"}]
-PASS | answered 1024x768: highlight bounds match verified PDF coordinates | page-2 highlight boxes match the independently extracted Poppler point bounds
-PASS | answered 1024x768: link-caption selects its own highlight and leader endpoint | {"activeTarget":"link-caption","lineTarget":"link-caption","sourceTarget":"link-caption","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[346.90625,309.65625,437.4921875,309.65625,437.4921875,288.5234375,528.078125,288.5234375],"anchorBounds":{"left":528.078125,"right":699.5625,"top":284.8125,"bottom":292.234375},"pageAreaBounds":{"left":426.59375,"right":1006.984375,"top":127,"bottom":702},"endpointError":0,"mobile":null}
-PASS | answered 1024x768: stream-flow selects its own highlight and leader endpoint | {"activeTarget":"stream-flow","lineTarget":"stream-flow","sourceTarget":"stream-flow","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[208.15625,408.65625,367.5390625,408.65625,367.5390625,555.7578125,526.921875,555.7578125],"anchorBounds":{"left":526.921875,"right":693.671875,"top":551.46875,"bottom":560.046875},"pageAreaBounds":{"left":426.59375,"right":1006.984375,"top":127,"bottom":702},"endpointError":0,"mobile":null}
-PASS | answered 1024x768: john-klein-water selects its own highlight and leader endpoint | {"activeTarget":"john-klein-water","lineTarget":"john-klein-water","sourceTarget":"john-klein-water","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[97.8125,531.65625,410.4296875,531.65625,410.4296875,232.4921875,723.046875,232.4921875],"anchorBounds":{"left":723.046875,"right":901.078125,"top":228.203125,"bottom":236.78125},"pageAreaBounds":{"left":426.59375,"right":1006.984375,"top":127,"bottom":702},"endpointError":0,"mobile":null}
-PASS | answered 1024x768: status describes the answer model | visible status="Model ready"; expected="Model ready"
-PASS | answered 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | answered 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | answered 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | answered 390x844: local asset responses | all requested files returned below 400
-PASS | answered 390x844: no browser exceptions | no page errors
-PASS | answered 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
-PASS | answered 390x844: proof-render layout shift | CLS=0
-PASS | answered 390x844: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | answered 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (1289px page)
-PASS | answered 390x844: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
-PASS | answered 390x844: interactive citation target >=44px | checked 3 visible links
-PASS | answered 390x844: visible control target boxes >=44px | checked 7 shell/citation targets
-PASS | answered 390x844: visible document assets loaded | 9 visible local images loaded
-PASS | answered 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | answered 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | answered 390x844: hover/focus leader and evidence highlight | mode=keyboard focus; leader=true; active highlighted lines=2
-N/A | answered 390x844: pointer hover on touch viewport | touch viewport has no hover input; keyboard focus and dismissal are tested below
-PASS | answered 390x844: keyboard focus shows leader | focusedAnswerSentence=true; leader=true
-PASS | answered 390x844: keyboard focus ring visible | outline=2px rgb(215, 255, 58)
-PASS | answered 390x844: leader removed after keyboard leaves sentence | lineVisible=false
-PASS | answered 390x844: claims map to distinct source passages | [{"id":"link-caption","label":"1 · p.02","page":"2","marks":2,"passage":"A rock outcrop called Link shows signs of being formed by the deposition of water."},{"id":"stream-flow","label":"2 · p.02","page":"2","marks":3,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site."},{"id":"john-klein-water","label":"3 · p.02","page":"2","marks":4,"passage":"first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,"}]
-PASS | answered 390x844: highlight bounds match verified PDF coordinates | page-2 highlight boxes match the independently extracted Poppler point bounds
-PASS | answered 390x844: link-caption selects its own highlight and leader endpoint | {"activeTarget":"link-caption","lineTarget":"link-caption","sourceTarget":"link-caption","targetVisible":true,"lineVisible":true,"route":"mobile-gutter","routeNumbers":[336.90625,267.46875,384,801.53173828125,352],"anchorBounds":{"left":69.484375,"right":352,"top":795.42236328125,"bottom":807.64111328125},"pageAreaBounds":{"left":12,"right":378,"top":738.5,"bottom":968.5},"endpointError":0,"mobile":{"clip":{"left":12,"top":738.5,"right":378,"bottom":844},"marksBounds":{"left":69.484375,"top":795.42236328125,"right":352,"bottom":822.00048828125},"allMarksInsideEffectiveClip":true,"bottomClearance":21.99951171875,"contextBefore":56.92236328125,"sourceChipInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}}
-PASS | answered 390x844: link-caption full passage fits effective mobile clip with context and 20px trailing clearance | {"clip":{"left":12,"top":738.5,"right":378,"bottom":844},"marksBounds":{"left":69.484375,"top":795.42236328125,"right":352,"bottom":822.00048828125},"allMarksInsideEffectiveClip":true,"bottomClearance":21.99951171875,"contextBefore":56.92236328125,"sourceChipInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}
-PASS | answered 390x844: stream-flow selects its own highlight and leader endpoint | {"activeTarget":"stream-flow","lineTarget":"stream-flow","sourceTarget":"stream-flow","targetVisible":true,"lineVisible":true,"route":"mobile-gutter","routeNumbers":[198.15625,360.25,384,777.859375,352],"anchorBounds":{"left":77.265625,"right":352,"top":770.796875,"bottom":784.921875},"pageAreaBounds":{"left":12,"right":378,"top":738.5,"bottom":968.5},"endpointError":0,"mobile":{"clip":{"left":12,"top":738.5,"right":378,"bottom":844},"marksBounds":{"left":77.265625,"top":770.796875,"right":366.609375,"bottom":822},"allMarksInsideEffectiveClip":true,"bottomClearance":22,"contextBefore":32.296875,"sourceChipInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}}
-PASS | answered 390x844: stream-flow full passage fits effective mobile clip with context and 20px trailing clearance | {"clip":{"left":12,"top":738.5,"right":378,"bottom":844},"marksBounds":{"left":77.265625,"top":770.796875,"right":366.609375,"bottom":822},"allMarksInsideEffectiveClip":true,"bottomClearance":22,"contextBefore":32.296875,"sourceChipInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}
-PASS | answered 390x844: john-klein-water selects its own highlight and leader endpoint | {"activeTarget":"john-klein-water","lineTarget":"john-klein-water","sourceTarget":"john-klein-water","targetVisible":true,"lineVisible":true,"route":"mobile-gutter","routeNumbers":[87.8125,475.421875,384,759.3128662109375,352.0000305175781],"anchorBounds":{"left":58.671905517578125,"right":352.0000305175781,"top":752.2503662109375,"bottom":766.3753662109375},"pageAreaBounds":{"left":12,"right":378,"top":738.5,"bottom":968.5},"endpointError":0,"mobile":{"clip":{"left":12,"top":738.5,"right":378,"bottom":844},"marksBounds":{"left":58.671905517578125,"top":752.2503662109375,"right":353.1406555175781,"bottom":822.0003662109375},"allMarksInsideEffectiveClip":true,"bottomClearance":21.9996337890625,"contextBefore":13.7503662109375,"sourceChipInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}}
-PASS | answered 390x844: john-klein-water full passage fits effective mobile clip with context and 20px trailing clearance | {"clip":{"left":12,"top":738.5,"right":378,"bottom":844},"marksBounds":{"left":58.671905517578125,"top":752.2503662109375,"right":353.1406555175781,"bottom":822.0003662109375},"allMarksInsideEffectiveClip":true,"bottomClearance":21.9996337890625,"contextBefore":13.7503662109375,"sourceChipInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}
-PASS | answered 390x844: mobile leader stays attached after page scroll | {"scrollY":24,"activeTarget":"john-klein-water","lineTarget":"john-klein-water","route":"mobile-gutter","endpointError":0}
-PASS | answered 390x844: status describes the answer model | visible status="Model ready"; expected="Model ready"
-PASS | answered 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | answered 390x844: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | model-missing 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | model-missing 1440x900: local asset responses | all requested files returned below 400
-PASS | model-missing 1440x900: no browser exceptions | no page errors
-PASS | model-missing 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
-PASS | model-missing 1440x900: proof-render layout shift | CLS=0
-PASS | model-missing 1440x900: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | model-missing 1440x900: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
-PASS | model-missing 1440x900: body and evidence copy >=16px | checked 5 visible body/evidence text nodes
-PASS | model-missing 1440x900: interactive citation target >=44px | checked 0 visible links
-PASS | model-missing 1440x900: visible control target boxes >=44px | checked 4 shell/citation targets
-PASS | model-missing 1440x900: visible document assets loaded | 6 visible local images loaded
-PASS | model-missing 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | model-missing 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | model-missing 1440x900: missing model preserves the verified source without a fake answer | {"answers":0,"page":true,"figure":true,"targetVisible":true,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.","marks":3,"marksInMobileReader":true,"leaderHidden":true}
-PASS | model-missing 1440x900: status describes the answer model | visible status="Ollama unavailable"; expected="Ollama unavailable"
-PASS | model-missing 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | model-missing 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | model-missing 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | model-missing 1024x768: local asset responses | all requested files returned below 400
-PASS | model-missing 1024x768: no browser exceptions | no page errors
-PASS | model-missing 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
-PASS | model-missing 1024x768: proof-render layout shift | CLS=0
-PASS | model-missing 1024x768: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | model-missing 1024x768: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
-PASS | model-missing 1024x768: body and evidence copy >=16px | checked 5 visible body/evidence text nodes
-PASS | model-missing 1024x768: interactive citation target >=44px | checked 0 visible links
-PASS | model-missing 1024x768: visible control target boxes >=44px | checked 4 shell/citation targets
-PASS | model-missing 1024x768: visible document assets loaded | 6 visible local images loaded
-PASS | model-missing 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | model-missing 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | model-missing 1024x768: missing model preserves the verified source without a fake answer | {"answers":0,"page":true,"figure":true,"targetVisible":true,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.","marks":3,"marksInMobileReader":true,"leaderHidden":true}
-PASS | model-missing 1024x768: status describes the answer model | visible status="Ollama unavailable"; expected="Ollama unavailable"
-PASS | model-missing 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | model-missing 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | model-missing 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
-PASS | model-missing 390x844: local asset responses | all requested files returned below 400
-PASS | model-missing 390x844: no browser exceptions | no page errors
-PASS | model-missing 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
-PASS | model-missing 390x844: proof-render layout shift | CLS=0
-PASS | model-missing 390x844: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | model-missing 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (1110px page)
-PASS | model-missing 390x844: body and evidence copy >=16px | checked 5 visible body/evidence text nodes
-PASS | model-missing 390x844: interactive citation target >=44px | checked 0 visible links
-PASS | model-missing 390x844: visible control target boxes >=44px | checked 4 shell/citation targets
-PASS | model-missing 390x844: visible document assets loaded | 6 visible local images loaded
-PASS | model-missing 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
-PASS | model-missing 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | model-missing 390x844: missing model preserves the verified source without a fake answer | {"answers":0,"page":true,"figure":true,"targetVisible":true,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.","marks":3,"marksInMobileReader":true,"leaderHidden":true}
-PASS | model-missing 390x844: status describes the answer model | visible status="Ollama unavailable"; expected="Ollama unavailable"
-PASS | model-missing 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
-PASS | model-missing 390x844: reduced-motion keeps citation interaction | focused citation leader=true
-PASS | contrast body text on conversation | 13.83:1 (#F0EBDD on #211F19)
-PASS | contrast secondary instructions on conversation | 10.60:1 (#D5CFBF on #211F19)
-PASS | contrast figure caption on raised panel | 11.39:1 (#E7E0D2 on #29271F)
-PASS | contrast source passage on conversation | 12.76:1 (#E8E2D4 on #211F19)
-PASS | contrast quiet composer hint on conversation | 6.10:1 (#A39D8E on #211F19)
-PASS | contrast reader secondary label on room | 5.42:1 (#918B7C on #16140F)
-PASS | contrast figure credit on raised panel | 7.09:1 (#B9B2A2 on #29271F)
-PASS | contrast PDF ink on warm paper | 13.48:1 (#211F19 on #EEE8D9)
-PASS | contrast active chip text on highlight | 15.48:1 (#19180F on #D7FF3A)
-PASS | contrast chip text on conversation | 14.32:1 (#D7FF3A on #211F19)
-PASS | contrast status text on room | 8.52:1 (#B7B09F on #16140F)
-PASS | CSS and JS motion avoids left/top/width/height animation | transitions use transform/opacity; keyframes use opacity/transform; JavaScript does not animate geometry
-PASS | banned gradient absent | gradient declarations=none
-PASS | banned blue primary absent | blue primary pattern=false
-PASS | banned serif hero absent | serif font declaration=false
-PASS | banned numbered stepper absent | stepper markup=false
+PASS | C5/C7 | first-run 1440x900: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | first-run 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | C11 | first-run 1440x900: visible interface copy limit | 21 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | first-run 1440x900: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready curiosity what does link show how many watts at launch which crater and drill target ask a question"
+PASS | C7/C17 | first-run 1440x900: fonts used by visible content are bundled and loaded | {"reading":false,"interface":true,"mono":true,"readingFontRequired":false}
+PASS | C14 | first-run 1440x900: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | first-run 1440x900: visible buttons meet 44px target | 5 visible buttons; minimum measured target 44px
+PASS | C14 | first-run 1440x900: sample, three prompts and closed reader | sample=Curiosity; prompts=3; sheetHidden=true
+PASS | C13 | first-run 1440x900: fresh default conversation remains centered | sheetHidden=true; centerDelta=0.00px
+PASS | C5/C7 | first-run 1024x768: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | first-run 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | C11 | first-run 1024x768: visible interface copy limit | 21 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | first-run 1024x768: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready curiosity what does link show how many watts at launch which crater and drill target ask a question"
+PASS | C7/C17 | first-run 1024x768: fonts used by visible content are bundled and loaded | {"reading":false,"interface":true,"mono":true,"readingFontRequired":false}
+PASS | C14 | first-run 1024x768: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | first-run 1024x768: visible buttons meet 44px target | 5 visible buttons; minimum measured target 44px
+PASS | C14 | first-run 1024x768: sample, three prompts and closed reader | sample=Curiosity; prompts=3; sheetHidden=true
+PASS | C13 | first-run 1024x768: fresh default conversation remains centered | sheetHidden=true; centerDelta=0.00px
+PASS | C5/C7 | first-run 390x844: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | first-run 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | C11 | first-run 390x844: visible interface copy limit | 21 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | first-run 390x844: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready curiosity what does link show how many watts at launch which crater and drill target ask a question"
+PASS | C7/C17 | first-run 390x844: fonts used by visible content are bundled and loaded | {"reading":false,"interface":true,"mono":true,"readingFontRequired":false}
+PASS | C14 | first-run 390x844: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | first-run 390x844: visible buttons meet 44px target | 5 visible buttons; minimum measured target 44px
+PASS | C14 | first-run 390x844: sample, three prompts and closed reader | sample=Curiosity; prompts=3; sheetHidden=true
+PASS | C13 | first-run 390x844: fresh default conversation remains centered | sheetHidden=true; centerDelta=0.00px
+PASS | C5/C7 | answered-closed 1440x900: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | answered-closed 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | C11 | answered-closed 1440x900: visible interface copy limit | 6 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | answered-closed 1440x900: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready ask a question"
+PASS | C7/C17 | answered-closed 1440x900: fonts used by visible content are bundled and loaded | {"reading":true,"interface":true,"mono":true,"readingFontRequired":true}
+PASS | C14 | answered-closed 1440x900: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | answered-closed 1440x900: visible buttons meet 44px target | 5 visible buttons; minimum measured target 44px
+PASS | C1 | answered-closed 1440x900: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
+PASS | C13 | answered-closed 1440x900: viewer state matches URL state | sheetHidden=true; page=2 / 4
+PASS | C17 | answered-closed 1440x900: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"}]
+PASS | C5/C7 | answered-closed 1024x768: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | answered-closed 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | C11 | answered-closed 1024x768: visible interface copy limit | 6 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | answered-closed 1024x768: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready ask a question"
+PASS | C7/C17 | answered-closed 1024x768: fonts used by visible content are bundled and loaded | {"reading":true,"interface":true,"mono":true,"readingFontRequired":true}
+PASS | C14 | answered-closed 1024x768: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | answered-closed 1024x768: visible buttons meet 44px target | 5 visible buttons; minimum measured target 44px
+PASS | C1 | answered-closed 1024x768: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
+PASS | C13 | answered-closed 1024x768: viewer state matches URL state | sheetHidden=true; page=2 / 4
+PASS | C17 | answered-closed 1024x768: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"}]
+PASS | C5/C7 | answered-closed 390x844: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | answered-closed 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | C11 | answered-closed 390x844: visible interface copy limit | 6 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | answered-closed 390x844: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready ask a question"
+PASS | C7/C17 | answered-closed 390x844: fonts used by visible content are bundled and loaded | {"reading":true,"interface":true,"mono":true,"readingFontRequired":true}
+PASS | C14 | answered-closed 390x844: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | answered-closed 390x844: visible buttons meet 44px target | 5 visible buttons; minimum measured target 44px
+PASS | C1 | answered-closed 390x844: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
+PASS | C13 | answered-closed 390x844: viewer state matches URL state | sheetHidden=true; page=2 / 4
+PASS | C17 | answered-closed 390x844: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"}]
+PASS | C5/C7 | answered-open 1440x900: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | answered-open 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | C11 | answered-open 1440x900: visible interface copy limit | 17 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | answered-open 1440x900: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready ask a question curiosity factsheet 2 4 show matches fit 01 02 03 04"
+PASS | C7/C17 | answered-open 1440x900: fonts used by visible content are bundled and loaded | {"reading":true,"interface":true,"mono":true,"readingFontRequired":true}
+PASS | C14 | answered-open 1440x900: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | answered-open 1440x900: visible buttons meet 44px target | 10 visible buttons; minimum measured target 44px
+PASS | C1 | answered-open 1440x900: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
+PASS | C13 | answered-open 1440x900: viewer state matches URL state | sheetHidden=false; page=2 / 4
+PASS | C17 | answered-open 1440x900: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"}]
+PASS | C1/C13 | answered-open 1440x900: PDF page and sheet opened | sheetHidden=false; page=2 / 4; sheet={"x":648,"y":64,"right":1440,"bottom":900,"width":792,"height":836}
+PASS | C13 | answered-open 1440x900: desktop PDF sheet occupies approximately 55% | sheetWidth=792px (55.0% viewport)
+PASS | C5/C7 | answered-open 1024x768: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | answered-open 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | C11 | answered-open 1024x768: visible interface copy limit | 17 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | answered-open 1024x768: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready ask a question curiosity factsheet 2 4 show matches fit 01 02 03 04"
+PASS | C7/C17 | answered-open 1024x768: fonts used by visible content are bundled and loaded | {"reading":true,"interface":true,"mono":true,"readingFontRequired":true}
+PASS | C14 | answered-open 1024x768: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | answered-open 1024x768: visible buttons meet 44px target | 10 visible buttons; minimum measured target 44px
+PASS | C1 | answered-open 1024x768: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
+PASS | C13 | answered-open 1024x768: viewer state matches URL state | sheetHidden=false; page=2 / 4
+PASS | C17 | answered-open 1024x768: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"}]
+PASS | C1/C13 | answered-open 1024x768: PDF page and sheet opened | sheetHidden=false; page=2 / 4; sheet={"x":460.8125,"y":64,"right":1024,"bottom":768,"width":563.1875,"height":704}
+PASS | C13 | answered-open 1024x768: desktop PDF sheet occupies approximately 55% | sheetWidth=563.1875px (55.0% viewport)
+PASS | C5/C7 | answered-open 390x844: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | answered-open 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | C11 | answered-open 390x844: visible interface copy limit | 17 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | answered-open 390x844: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready ask a question curiosity factsheet 2 4 show matches fit 01 02 03 04"
+PASS | C7/C17 | answered-open 390x844: fonts used by visible content are bundled and loaded | {"reading":true,"interface":true,"mono":true,"readingFontRequired":true}
+PASS | C14 | answered-open 390x844: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | answered-open 390x844: visible buttons meet 44px target | 10 visible buttons; minimum measured target 44px
+PASS | C1 | answered-open 390x844: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
+PASS | C13 | answered-open 390x844: viewer state matches URL state | sheetHidden=false; page=2 / 4
+PASS | C17 | answered-open 390x844: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"}]
+PASS | C1/C13 | answered-open 390x844: PDF page and sheet opened | sheetHidden=false; page=2 / 4; sheet={"x":0,"y":422,"right":390,"bottom":844,"width":390,"height":422}
+PASS | C13 | answered-open 390x844: mobile PDF opens as a bottom sheet | sheetTop=422px; sheetBottom=844px; composerBottom=412px
+PASS | C5/C7 | answered-matches 1440x900: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | answered-matches 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | C11 | answered-matches 1440x900: visible interface copy limit | 21 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | answered-matches 1440x900: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready ask a question curiosity factsheet 2 4 hide matches fit figure words meaning meaning 01 02 03 04"
+PASS | C7/C17 | answered-matches 1440x900: fonts used by visible content are bundled and loaded | {"reading":true,"interface":true,"mono":true,"readingFontRequired":true}
+PASS | C14 | answered-matches 1440x900: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | answered-matches 1440x900: visible buttons meet 44px target | 10 visible buttons; minimum measured target 44px
+PASS | C1 | answered-matches 1440x900: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
+PASS | C13 | answered-matches 1440x900: viewer state matches URL state | sheetHidden=false; page=2 / 4
+PASS | C17 | answered-matches 1440x900: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"}]
+PASS | C1/C13 | answered-matches 1440x900: PDF page and sheet opened | sheetHidden=false; page=2 / 4; sheet={"x":648,"y":64,"right":1440,"bottom":900,"width":792,"height":836}
+PASS | C13 | answered-matches 1440x900: desktop PDF sheet occupies approximately 55% | sheetWidth=792px (55.0% viewport)
+PASS | C15 | answered-matches 1440x900: Show matches on exposes on-page sources | pressed=true; targets=link-caption,stream-flow,john-klein-water,touchdown-water; methods=figure,words,meaning,meaning
+PASS | C5/C7 | answered-matches 1024x768: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | answered-matches 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | C11 | answered-matches 1024x768: visible interface copy limit | 21 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | answered-matches 1024x768: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready ask a question curiosity factsheet 2 4 hide matches fit figure words meaning meaning 01 02 03 04"
+PASS | C7/C17 | answered-matches 1024x768: fonts used by visible content are bundled and loaded | {"reading":true,"interface":true,"mono":true,"readingFontRequired":true}
+PASS | C14 | answered-matches 1024x768: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | answered-matches 1024x768: visible buttons meet 44px target | 10 visible buttons; minimum measured target 44px
+PASS | C1 | answered-matches 1024x768: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
+PASS | C13 | answered-matches 1024x768: viewer state matches URL state | sheetHidden=false; page=2 / 4
+PASS | C17 | answered-matches 1024x768: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"}]
+PASS | C1/C13 | answered-matches 1024x768: PDF page and sheet opened | sheetHidden=false; page=2 / 4; sheet={"x":460.8125,"y":64,"right":1024,"bottom":768,"width":563.1875,"height":704}
+PASS | C13 | answered-matches 1024x768: desktop PDF sheet occupies approximately 55% | sheetWidth=563.1875px (55.0% viewport)
+PASS | C15 | answered-matches 1024x768: Show matches on exposes on-page sources | pressed=true; targets=link-caption,stream-flow,john-klein-water,touchdown-water; methods=figure,words,meaning,meaning
+PASS | C5/C7 | answered-matches 390x844: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | answered-matches 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | C11 | answered-matches 390x844: visible interface copy limit | 21 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | answered-matches 390x844: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready ask a question curiosity factsheet 2 4 hide matches fit figure words meaning meaning 01 02 03 04"
+PASS | C7/C17 | answered-matches 390x844: fonts used by visible content are bundled and loaded | {"reading":true,"interface":true,"mono":true,"readingFontRequired":true}
+PASS | C14 | answered-matches 390x844: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | answered-matches 390x844: visible buttons meet 44px target | 10 visible buttons; minimum measured target 44px
+PASS | C1 | answered-matches 390x844: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
+PASS | C13 | answered-matches 390x844: viewer state matches URL state | sheetHidden=false; page=2 / 4
+PASS | C17 | answered-matches 390x844: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"}]
+PASS | C1/C13 | answered-matches 390x844: PDF page and sheet opened | sheetHidden=false; page=2 / 4; sheet={"x":0,"y":422,"right":390,"bottom":844,"width":390,"height":422}
+PASS | C13 | answered-matches 390x844: mobile PDF opens as a bottom sheet | sheetTop=422px; sheetBottom=844px; composerBottom=412px
+PASS | C15 | answered-matches 390x844: Show matches on exposes on-page sources | pressed=true; targets=link-caption,stream-flow,john-klein-water,touchdown-water; methods=figure,words,meaning,meaning
+PASS | C5/C7 | model-missing 1440x900: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | model-missing 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | C11 | model-missing 1440x900: visible interface copy limit | 16 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | model-missing 1440x900: restricted visible wording absent | matches=[]; normalized visible text="rag pdf ollama unavailable open the pdf to read this sample curiosity open pdf ask a question"
+PASS | C7/C17 | model-missing 1440x900: fonts used by visible content are bundled and loaded | {"reading":false,"interface":true,"mono":true,"readingFontRequired":false}
+PASS | C14 | model-missing 1440x900: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | model-missing 1440x900: visible buttons meet 44px target | 3 visible buttons; minimum measured target 44px
+PASS | C1/C2 | model-missing 1440x900: unavailable model does not invent an answer | status=Ollama unavailable; answerParagraphs=0; message=true
+PASS | C5/C7 | model-missing 1024x768: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | model-missing 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | C11 | model-missing 1024x768: visible interface copy limit | 16 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | model-missing 1024x768: restricted visible wording absent | matches=[]; normalized visible text="rag pdf ollama unavailable open the pdf to read this sample curiosity open pdf ask a question"
+PASS | C7/C17 | model-missing 1024x768: fonts used by visible content are bundled and loaded | {"reading":false,"interface":true,"mono":true,"readingFontRequired":false}
+PASS | C14 | model-missing 1024x768: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | model-missing 1024x768: visible buttons meet 44px target | 3 visible buttons; minimum measured target 44px
+PASS | C1/C2 | model-missing 1024x768: unavailable model does not invent an answer | status=Ollama unavailable; answerParagraphs=0; message=true
+PASS | C5/C7 | model-missing 390x844: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | model-missing 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | C11 | model-missing 390x844: visible interface copy limit | 16 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | model-missing 390x844: restricted visible wording absent | matches=[]; normalized visible text="rag pdf ollama unavailable open the pdf to read this sample curiosity open pdf ask a question"
+PASS | C7/C17 | model-missing 390x844: fonts used by visible content are bundled and loaded | {"reading":false,"interface":true,"mono":true,"readingFontRequired":false}
+PASS | C14 | model-missing 390x844: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | model-missing 390x844: visible buttons meet 44px target | 3 visible buttons; minimum measured target 44px
+PASS | C1/C2 | model-missing 390x844: unavailable model does not invent an answer | status=Ollama unavailable; answerParagraphs=0; message=true
+PASS | C5/C7 | reading-progress 1440x900: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | reading-progress 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
+PASS | C11 | reading-progress 1440x900: visible interface copy limit | 16 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | reading-progress 1440x900: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready curiosity ask a question curiosity factsheet 3 4 fit 01 02 03 04"
+PASS | C7/C17 | reading-progress 1440x900: fonts used by visible content are bundled and loaded | {"reading":false,"interface":true,"mono":true,"readingFontRequired":false}
+PASS | C14 | reading-progress 1440x900: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | reading-progress 1440x900: visible buttons meet 44px target | 6 visible buttons; minimum measured target 44px
+PASS | C1/C13 | reading-progress 1440x900: PDF page and sheet opened | sheetHidden=false; page=3 / 4; sheet={"x":648,"y":64,"right":1440,"bottom":900,"width":792,"height":836}
+PASS | C13 | reading-progress 1440x900: desktop PDF sheet occupies approximately 55% | sheetWidth=792px (55.0% viewport)
+PASS | C4 | reading-progress 1440x900: reading page and progress strip visible | page image=assets/pages/page-03.png; page=3 / 4
+PASS | C5/C7 | reading-progress 1024x768: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | reading-progress 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
+PASS | C11 | reading-progress 1024x768: visible interface copy limit | 16 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | reading-progress 1024x768: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready curiosity ask a question curiosity factsheet 3 4 fit 01 02 03 04"
+PASS | C7/C17 | reading-progress 1024x768: fonts used by visible content are bundled and loaded | {"reading":false,"interface":true,"mono":true,"readingFontRequired":false}
+PASS | C14 | reading-progress 1024x768: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | reading-progress 1024x768: visible buttons meet 44px target | 6 visible buttons; minimum measured target 44px
+PASS | C1/C13 | reading-progress 1024x768: PDF page and sheet opened | sheetHidden=false; page=3 / 4; sheet={"x":460.8125,"y":64,"right":1024,"bottom":768,"width":563.1875,"height":704}
+PASS | C13 | reading-progress 1024x768: desktop PDF sheet occupies approximately 55% | sheetWidth=563.1875px (55.0% viewport)
+PASS | C4 | reading-progress 1024x768: reading page and progress strip visible | page image=assets/pages/page-03.png; page=3 / 4
+PASS | C5/C7 | reading-progress 390x844: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
+PASS | C5 | reading-progress 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
+PASS | C11 | reading-progress 390x844: visible interface copy limit | 16 visible interface words; answer, user query, document caption and credit excluded
+PASS | C9 | reading-progress 390x844: restricted visible wording absent | matches=[]; normalized visible text="rag pdf model ready curiosity ask a question curiosity factsheet 3 4 fit 01 02 03 04"
+PASS | C7/C17 | reading-progress 390x844: fonts used by visible content are bundled and loaded | {"reading":false,"interface":true,"mono":true,"readingFontRequired":false}
+PASS | C14 | reading-progress 390x844: optional attachment and composer available | composerEnabled=true; attachEnabled=true
+PASS | C2/C12 | reading-progress 390x844: visible buttons meet 44px target | 6 visible buttons; minimum measured target 44px
+PASS | C1/C13 | reading-progress 390x844: PDF page and sheet opened | sheetHidden=false; page=3 / 4; sheet={"x":0,"y":422,"right":390,"bottom":844,"width":390,"height":422}
+PASS | C13 | reading-progress 390x844: mobile PDF opens as a bottom sheet | sheetTop=422px; sheetBottom=844px; composerBottom=412px
+PASS | C4 | reading-progress 390x844: reading page and progress strip visible | page image=assets/pages/page-03.png; page=3 / 4
+PASS | C5 | 1440x900 initial-load CLS | CLS=0; raw=0; entries=0
+PASS | C5 | 1440x900 answer-state-change CLS | CLS=0; raw=0; entries=0
+PASS | C5 | 1440x900 citation-open CLS | CLS=0; raw=0.00023237311385459534; entries=1; click is a recent user input
+PASS | C2 | link-caption: hover opens short source quotation | popoverVisible=true; quoteWords=15
+PASS | C2 | link-caption: keyboard focus opens source quotation | popoverVisible=true; aria-expanded=true
+PASS | C1/C2/C13 | link-caption: chip opens its exact source highlight | {"active":"link-caption","visible":"visible","page":"2 / 4","markCount":2,"expected":2,"sourcePage":2}
+PASS | C13 | link-caption: Escape closes viewer and restores citation focus | sheetHidden=true; focusRestored=true
+PASS | C13 | link-caption: close button closes viewer and restores citation focus | sheetHidden=true; focusRestored=true
+PASS | C2 | stream-flow: hover opens short source quotation | popoverVisible=true; quoteWords=22
+PASS | C2 | stream-flow: keyboard focus opens source quotation | popoverVisible=true; aria-expanded=true
+PASS | C1/C2/C13 | stream-flow: chip opens its exact source highlight | {"active":"stream-flow","visible":"visible","page":"2 / 4","markCount":3,"expected":3,"sourcePage":2}
+PASS | C13 | stream-flow: Escape closes viewer and restores citation focus | sheetHidden=true; focusRestored=true
+PASS | C13 | stream-flow: close button closes viewer and restores citation focus | sheetHidden=true; focusRestored=true
+PASS | C2 | john-klein-water: hover opens short source quotation | popoverVisible=true; quoteWords=8
+PASS | C2 | john-klein-water: keyboard focus opens source quotation | popoverVisible=true; aria-expanded=true
+PASS | C1/C2/C13 | john-klein-water: chip opens its exact source highlight | {"active":"john-klein-water","visible":"visible","page":"2 / 4","markCount":4,"expected":4,"sourcePage":2}
+PASS | C13 | john-klein-water: Escape closes viewer and restores citation focus | sheetHidden=true; focusRestored=true
+PASS | C13 | john-klein-water: close button closes viewer and restores citation focus | sheetHidden=true; focusRestored=true
+PASS | C13/C14 | model unavailable retains a usable optional PDF action | visible=true; target={"x":16,"y":199.703125,"width":80.25,"height":44}
+PASS | C1/C13 | model-missing PDF opens without a fabricated answer or retrieval mark | {"page":"2 / 4","active":"","visibleMarks":0,"matchesHidden":true,"answerCount":0}
+PASS | C13 | model-missing PDF close returns keyboard focus to Open PDF | sheetHidden=true; focusRestored=true
+PASS | C13 | link-caption: mobile highlight lies in effective reader clip | marks=2; clip={"left":0,"top":519,"right":390,"bottom":782}; first-to-clip=120.98px; final-to-clip=128.72px; pageScrollTop=19px
+PASS | C13 | stream-flow: mobile highlight lies in effective reader clip | marks=3; clip={"left":0,"top":519,"right":390,"bottom":782}; first-to-clip=124.64px; final-to-clip=112.77px; pageScrollTop=235px
+PASS | C13 | john-klein-water: mobile highlight lies in effective reader clip | marks=4; clip={"left":0,"top":519,"right":390,"bottom":782}; first-to-clip=93.36px; final-to-clip=134.77px; pageScrollTop=0px
+PASS | C2 | mobile citation popover remains within viewport | {"x":32,"y":684.84375,"width":340,"height":88}
+PASS | C13 | explicit open preference is remembered per document | sheetHidden=false
+PASS | C13 | explicit closed preference is remembered per document | sheetHidden=true
+PASS | C15 | matches default off; toggle shows representative page overlays | initiallyOff=true; visibleTargetsOn=4; methods=figure,words,meaning,meaning
+PASS | C15 | turning matches off removes extra marks; answer is unchanged | visibleTargetsOff=1; answerByteEquivalent=true
+PASS | C4 | reduced motion removes scan, pulse and sheet transition | {"scan":"none","pulse":"none","sheetTransition":"0s"}
+PASS | C4 | reduced motion preserves citation opening | opened=true; selected=link-caption
+PASS | C14 | optional file picker shows selected filename without ingestion | filename=mars-science-laboratory.pdf; status=""; no upload handler is present
+PASS | C14 | static send action does not claim generation or send a request | status="Question not sent."; resourceEntriesBefore=9; after=9
+PASS | C3 | CSS and JavaScript animate only transform/opacity | geometry transitions=0; geometry keyframes=0; geometry JS animations=0
+PASS | C8/C12/C16 | assistant remains unboxed and no connector exists in DOM | connectorNodes=0; assistantStyles=[{"background":"rgba(0, 0, 0, 0)","borderWidth":[0,0,0,0],"borderStyle":["none","none","none","none"]},{"background":"rgba(0, 0, 0, 0)","borderWidth":[0,0,0,0],"borderStyle":["none","none","none","none"]},{"background":"rgba(0, 0, 0, 0)","borderWidth":[0,0,0,0],"borderStyle":["none","none","none","none"]},{"background":"rgba(0, 0, 0, 0)","borderWidth":[0,0,0,0],"borderStyle":["none","none","none","none"]}]
+PASS | C8 | banned visual treatments are absent from the proof structure | gradient=false; {"blueButton":false,"largeLightCard":[],"centeredSerifHero":false,"stepper":false}
+PASS | C6 | contrast warm text / dark room | 15.45:1 (#F0EBDD / #16140F)
+PASS | C6 | contrast muted text / conversation | 7.89:1 (#B9B3A6 / #211F19)
+PASS | C6 | contrast quiet composer hint / composer | 7.53:1 (#B9B3A6 / #25231D)
+PASS | C6 | contrast figure caption / raised panel | 10.63:1 (#DFD9CB / #29271F)
+PASS | C6 | contrast figure credit / raised panel | 7.16:1 (#B9B3A6 / #29271F)
+PASS | C6 | contrast PDF ink / warm paper | 13.48:1 (#211F19 / #EEE8D9)
+PASS | C6 | contrast citation numeral / lime | 15.62:1 (#18170F / #D7FF3A)
+PASS | C6 | contrast status text / dark room | 8.82:1 (#B9B3A6 / #16140F)
+PASS | C17/C7 | four candidate fonts are bundled and comparison specimens render locally | {"candidates":[{"name":"Newsreader","loaded":true},{"name":"SourceSerif4","loaded":true},{"name":"Instrument","loaded":true},{"name":"Geist","loaded":true}],"measures":[{"family":"newsreader","summary":"Rendered family: Newsreader, serif · 18px · 29.7px line height · 4 lines · 253 characters · 63 average characters per line"},{"family":"source-serif","summary":"Rendered family: SourceSerif4, serif · 18px · 29.7px line height · 4 lines · 253 characters · 63 average characters per line"}],"external":[],"failedResponses":[]}
+PASS | C18/C7 | three original logo marks render locally in mono/color on both surfaces at 16/32/64px | {"candidates":["A · Page window","B · Source brackets","C · Margin note"],"renderedUses":42,"sampleSizes":[16,32,64],"lockupMarks":6,"surfaceCount":6,"lockupCount":6,"externalImages":0,"markFiles":["mark-a-page-window.svg","mark-b-source-brackets.svg","mark-c-margin-r.svg"],"markValid":true,"external":[],"failedResponses":[]}
+PASS | C1/C2 | three inline citations map to distinct quoted verified page passages | {"citations":["link-caption","stream-flow","john-klein-water"],"targets":[{"id":"link-caption","page":2,"quoteWords":15,"boxes":2,"method":"figure"},{"id":"stream-flow","page":2,"quoteWords":22,"boxes":3,"method":"words"},{"id":"john-klein-water","page":2,"quoteWords":8,"boxes":4,"method":"meaning"}],"figureAlt":"Curiosity's Mastcam view of the Link rock outcrop on Mars, with rounded pebbles and a one-centimeter scale marker.","figureCredit":"NASA/JPL-Caltech/MSSS"}
+PASS | C1 | figure includes original image description and adjacent NASA credit | alt="Curiosity's Mastcam view of the Link rock outcrop on Mars, with rounded pebbles and a one-centimeter scale marker."; credit=NASA/JPL-Caltech/MSSS
+PASS | C1/C2/C7/C18 | all required screenshots exist at exact viewport dimensions | 24/24; [{"name":"first-run-1440.png","bytes":25841,"width":1440,"height":900},{"name":"first-run-1024.png","bytes":23810,"width":1024,"height":768},{"name":"first-run-390.png","bytes":24302,"width":390,"height":844},{"name":"answered-closed-1440.png","bytes":219742,"width":1440,"height":900},{"name":"answered-closed-1024.png","bytes":213228,"width":1024,"height":768},{"name":"answered-closed-390.png","bytes":172213,"width":390,"height":844},{"name":"answered-open-1440.png","bytes":576632,"width":1440,"height":900},{"name":"answered-open-1024.png","bytes":511625,"width":1024,"height":768},{"name":"answered-open-390.png","bytes":203495,"width":390,"height":844},{"name":"answered-matches-1440.png","bytes":568248,"width":1440,"height":900},{"name":"answered-matches-1024.png","bytes":507364,"width":1024,"height":768},{"name":"answered-matches-390.png","bytes":203210,"width":390,"height":844},{"name":"model-missing-1440.png","bytes":22485,"width":1440,"height":900},{"name":"model-missing-1024.png","bytes":20486,"width":1024,"height":768},{"name":"model-missing-390.png","bytes":17736,"width":390,"height":844},{"name":"reading-progress-1440.png","bytes":324340,"width":1440,"height":900},{"name":"reading-progress-1024.png","bytes":276870,"width":1024,"height":768},{"name":"reading-progress-390.png","bytes":112813,"width":390,"height":844},{"name":"citation-popover-desktop.png","bytes":233516,"width":1440,"height":900},{"name":"citation-popover-mobile.png","bytes":177496,"width":390,"height":844},{"name":"model-missing-pdf-open.png","bytes":365074,"width":1440,"height":900},{"name":"font-comparison.png","bytes":97115,"width":1440,"height":900},{"name":"logo-comparison.png","bytes":108323,"width":1440,"height":900},{"name":"attachment-selected-1440.png","bytes":29859,"width":1440,"height":900}]
 
-TOTAL: 250/250 checks passed; failures=0.
-Scope: static HTML, local assets, and deterministic UI interactions only. No product API or AI path was exercised.
+VISIBLE COPY WORD COUNTS AT 1440PX (document body, user-authored question, answer, source quotation/caption/credit excluded):
+COPY | first-run | 21 words | "RAG-PDF Model ready Curiosity What does Link show? How many watts at launch? Which crater and drill target? Ask a question"
+COPY | answered-closed | 6 words | "RAG-PDF Model ready Ask a question"
+COPY | answered-open | 17 words | "RAG-PDF Model ready Ask a question Curiosity factsheet 2 / 4 Show matches − + Fit × 01 02 03 04"
+COPY | answered-matches | 21 words | "RAG-PDF Model ready Ask a question Curiosity factsheet 2 / 4 Hide matches − + Fit × figure words meaning meaning 01 02 03 04"
+COPY | model-missing | 16 words | "RAG-PDF Ollama unavailable Open the PDF to read this sample. Curiosity Open PDF Ask a question"
+COPY | reading-progress | 16 words | "RAG-PDF Model ready Curiosity Ask a question Curiosity factsheet 3 / 4 − + Fit × 01 02 03 04"
+
+TOTAL: 235/235 automated checks passed; failures=0.
+Manual screenshot review remains separate from these measurements. Production application behavior is unverified by this static proof.

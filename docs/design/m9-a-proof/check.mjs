@@ -5,365 +5,448 @@ import fs from 'node:fs/promises';
 const require = createRequire(path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@playwright', 'cli', 'package.json'));
 const { chromium } = require('playwright');
 const root = path.resolve('docs/design/m9-a-proof');
-const base = 'http://127.0.0.1:8765/proof-static-not-functional.html';
+const origin = 'http://127.0.0.1:8765';
+const entry = `${origin}/proof-static-not-functional.html`;
 const viewports = [{ w: 1440, h: 900 }, { w: 1024, h: 768 }, { w: 390, h: 844 }];
-const states = ['drop', 'reading', 'answered', 'model-missing'];
-const lines = ['M9-A static proof verification', 'Browser: Playwright-managed Chrome channel, headless', 'Classification: PASS_SYNTHETIC applies only to the rendered HTML composition and local interaction checks; no backend, retrieval, or generation was tested.', ''];
+const states = ['first-run', 'answered-closed', 'answered-open', 'answered-matches', 'model-missing', 'reading-progress'];
+const lines = [
+  'M9-A-R3 Reading Desk static proof checks',
+  'Browser: Playwright-managed Chrome channel; exact version recorded below.',
+  'Classification: These checks establish proof rendering and scripted local interactions only. No product API, retrieval, generation, ingestion, or production PDF.js behavior was exercised.',
+  'CLS values exclude shifts after recent user input, as defined for the browser CLS metric; raw observed values are also reported for PDF opening.',
+  '',
+];
 let failures = 0;
-const record = (name, pass, detail) => {
-  lines.push(`${pass ? 'PASS' : 'FAIL'} | ${name} | ${detail}`);
-  if (!pass) failures += 1;
+let passed = 0;
+const record = (criterion, name, ok, detail, status = ok ? 'PASS' : 'FAIL') => {
+  lines.push(`${status} | ${criterion} | ${name} | ${detail}`);
+  if (status === 'PASS') passed += 1;
+  if (status === 'FAIL') failures += 1;
 };
-const ratio = (fg, bg) => {
-  const channel = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
-  const lum = (hex) => {
-    const raw = hex.replace('#', '');
-    return 0.2126 * channel(parseInt(raw.slice(0, 2), 16)) + 0.7152 * channel(parseInt(raw.slice(2, 4), 16)) + 0.0722 * channel(parseInt(raw.slice(4, 6), 16));
+const wordCount = (value) => (value.trim().match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*(?:-[\p{L}\p{N}]+)*/gu) || []).length;
+const ratios = (foreground, background) => {
+  const channel = (value) => { const v = value / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const luminance = (hex) => {
+    const value = hex.replace('#', '');
+    return 0.2126 * channel(parseInt(value.slice(0, 2), 16)) + 0.7152 * channel(parseInt(value.slice(2, 4), 16)) + 0.0722 * channel(parseInt(value.slice(4, 6), 16));
   };
-  const a = lum(fg), b = lum(bg);
+  const a = luminance(foreground), b = luminance(background);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 };
-const expectedEvidence = [
-  {
-    id: 'link-caption',
-    label: '1 · p.02',
-    passage: 'A rock outcrop called Link shows signs of being formed by the deposition of water.',
-    boxes: [[46.08,217.376,282.285,227.6],[46.08,229.376,74.6919,239.6]],
-  },
-  {
-    id: 'stream-flow',
-    label: '2 · p.02',
-    passage: 'The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.',
-    boxes: [[44.5,584.66,274.202,596.48],[44.5,600.16,286.421,611.98],[44.5,615.66,133.78,627.48]],
-  },
-  {
-    id: 'john-klein-water',
-    label: '3 · p.02',
-    passage: 'first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,',
-    boxes: [[314.64,139.4,559.882,151.22],[314.64,154.9,547.671,166.72],[314.64,170.4,560.84,182.22],[314.64,185.9,423.73,197.72]],
-  },
-];
+const waitForAssets = (page) => page.evaluate(async () => {
+  await document.fonts.ready;
+  await Promise.all([...document.images].map((image) => image.decode().catch(() => undefined)));
+});
+const makePage = async (browser, url, viewport, { reducedMotion = 'no-preference' } = {}) => {
+  const context = await browser.newContext({ viewport: { width: viewport.w, height: viewport.h }, deviceScaleFactor: 1, reducedMotion });
+  const page = await context.newPage();
+  const external = [], failedResponses = [], errors = [];
+  page.on('request', request => { try { if (new URL(request.url()).origin !== origin) external.push(request.url()); } catch { external.push(request.url()); } });
+  page.on('response', response => { if (response.status() >= 400) failedResponses.push(`${response.status()} ${response.url()}`); });
+  page.on('pageerror', error => errors.push(error.message));
+  await page.addInitScript(() => {
+    window.__m9Cls = 0;
+    window.__m9RawShift = 0;
+    window.__m9ShiftCount = 0;
+    if (PerformanceObserver.supportedEntryTypes.includes('layout-shift')) {
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          window.__m9RawShift += entry.value;
+          if (!entry.hadRecentInput) window.__m9Cls += entry.value;
+          window.__m9ShiftCount += 1;
+        }
+      }).observe({ type: 'layout-shift', buffered: true });
+    }
+  });
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await waitForAssets(page);
+  return { context, page, external, failedResponses, errors };
+};
+const visibleClipAndMarks = async (page, sourceId) => page.evaluate((id) => {
+  const intersect = (a, b) => ({ left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+  const viewport = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+  const sheet = document.querySelector('#pdf-sheet');
+  const pageViewport = document.querySelector('#page-viewport');
+  if (!sheet || sheet.hidden || !pageViewport) return null;
+  let clip = intersect(viewport, sheet.getBoundingClientRect());
+  clip = intersect(clip, pageViewport.getBoundingClientRect());
+  for (let node = pageViewport.parentElement; node; node = node.parentElement) {
+    const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+    if (['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowX)) { clip.left = Math.max(clip.left, rect.left); clip.right = Math.min(clip.right, rect.right); }
+    if (['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowY)) { clip.top = Math.max(clip.top, rect.top); clip.bottom = Math.min(clip.bottom, rect.bottom); }
+  }
+  const target = document.querySelector(`.evidence-target[data-evidence-target="${id}"]`);
+  const marks = [...(target?.querySelectorAll('.evidence-mark') || [])].map(mark => { const r = mark.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; });
+  const union = marks.length ? { top: Math.min(...marks.map(r => r.top)), bottom: Math.max(...marks.map(r => r.bottom)) } : null;
+  return { clip, marks, union, scrollTop: pageViewport.scrollTop, scrollHeight: pageViewport.scrollHeight, clientHeight: pageViewport.clientHeight };
+}, sourceId);
+
 const browser = await chromium.launch({ headless: true, channel: 'chrome' });
 try {
+  lines[1] = `Browser: Playwright-managed Chrome channel ${browser.version()} (headless).`;
+  const stateResults = new Map();
   for (const state of states) {
-    for (const { w, h } of viewports) {
-      const page = await browser.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: 1, reducedMotion: 'no-preference' });
-      const external = [], badResponses = [], pageErrors = [];
-      page.on('request', request => { if (new URL(request.url()).origin !== 'http://127.0.0.1:8765') external.push(request.url()); });
-      page.on('response', response => { if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`); });
-      page.on('pageerror', error => pageErrors.push(error.message));
-      await page.addInitScript(() => {
-        window.__m9aLayoutShift = 0;
-        if (PerformanceObserver.supportedEntryTypes.includes('layout-shift')) {
-          const observer = new PerformanceObserver(list => {
-            for (const entry of list.getEntries()) if (!entry.hadRecentInput) window.__m9aLayoutShift += entry.value;
-          });
-          observer.observe({ type: 'layout-shift', buffered: true });
-        }
-      });
-      await page.goto(`${base}?state=${state}`, { waitUntil: 'networkidle' });
-      await page.evaluate(async () => { await document.fonts.ready; await Promise.all([...document.images].map(img => img.decode().catch(() => undefined))); });
-      const label = `${state} ${w}x${h}`;
-      const metrics = await page.evaluate(() => {
-        const rect = (selector) => { const el = document.querySelector(selector); if (!el || el.hidden) return null; const r = el.getBoundingClientRect(); return { x:r.x, y:r.y, right:r.right, bottom:r.bottom, width:r.width, height:r.height }; };
-        const intersect = (a,b) => !!a && !!b && a.x < b.right && a.right > b.x && a.y < b.bottom && a.bottom > b.y;
-        const bodySelectors = ['.body-copy','.conversation-heading p','.suggestion','.question-bubble','.evidence-sentence','.figure-caption','.source-card p','.empty-desk span','#composer-placeholder'];
-        const bodyText = bodySelectors.flatMap(s => [...document.querySelectorAll(s)]).filter(el => !el.closest('[hidden]')).map(el => ({ selector:el.className || el.tagName, px:parseFloat(getComputedStyle(el).fontSize) }));
-        const anchors = [...document.querySelectorAll('a')].filter(el => !el.closest('[hidden]')).map(el => { const r=el.getBoundingClientRect(); return { label:el.getAttribute('aria-label') || el.textContent.trim(), width:r.width, height:r.height }; });
-        const targets = [...document.querySelectorAll('.settings-mark,.control-glyph,a.source-chip')].filter(el => !el.closest('[hidden]')).map(el => { const r=el.getBoundingClientRect(); return { label:el.getAttribute('aria-label') || el.className || el.textContent.trim(), width:r.width, height:r.height }; });
-        const images = [...document.images].filter(el => !el.closest('[hidden]')).map(el => ({ src:el.getAttribute('src'), loaded:el.complete && el.naturalWidth > 0 }));
-        const conversation = rect('.conversation'), reader = rect('.reader');
-        const structural = ['.topbar','.desk','.conversation','.reader','.reader-toolbar','.page-area','.page-strip','.composer'].map(s => [s,rect(s)]);
-        return {
-          scrollWidth:document.documentElement.scrollWidth, innerWidth:window.innerWidth, innerHeight:window.innerHeight, documentHeight:document.documentElement.scrollHeight, layoutShift:window.__m9aLayoutShift,
-          bodyText, anchors, targets, images,
-          fontSans:document.fonts.check('16px "Plex Sans"'), fontMono:document.fonts.check('12px "Plex Mono"'),
-          overlapConversationReader:intersect(conversation,reader), structural,
-          visibleText:document.body.innerText.toLowerCase(),
-          pageImage:rect('#page-image'), figure:rect('.figure-card'), highlight:rect('#evidence-highlight'),
-          answerCount:document.querySelectorAll('.evidence-sentence').length,
-          readerTitle:document.querySelector('#reader-title')?.textContent.trim(),
-          readerSubtitle:document.querySelector('#reader-subtitle')?.textContent.trim(),
-          readerIdentityHidden:document.querySelector('.reader-identity')?.hidden,
-          readerControlsHidden:document.querySelector('.reader-controls')?.hidden,
-          pageCount:document.querySelector('#page-count')?.textContent.trim(),
-          statusText:document.querySelector('#status-text')?.textContent.trim(),
-        };
-      });
-      record(`${label}: same-origin requests`, external.length === 0, external.length ? external.join(', ') : 'all browser requests used http://127.0.0.1:8765');
-      record(`${label}: local asset responses`, badResponses.length === 0, badResponses.length ? badResponses.join('; ') : 'all requested files returned below 400');
-      record(`${label}: no browser exceptions`, pageErrors.length === 0, pageErrors.length ? pageErrors.join('; ') : 'no page errors');
-      record(`${label}: no horizontal overflow`, metrics.scrollWidth <= metrics.innerWidth + 1, `scrollWidth=${metrics.scrollWidth}px, viewport=${metrics.innerWidth}px`);
-      record(`${label}: proof-render layout shift`, metrics.layoutShift !== null && metrics.layoutShift < 0.01, `CLS=${metrics.layoutShift}`);
-      record(`${label}: major zones do not overlap`, !metrics.overlapConversationReader, 'conversation and reader bounds are disjoint');
-      const out = metrics.structural.filter(([name,r]) => r && (r.x < -1 || r.right > w+1 || r.y < -1 || (w !== 390 && name !== '.desk' && r.bottom > h+1) || (w === 390 && r.bottom > metrics.documentHeight+1)));
-      record(`${label}: major layout bounds and mobile scroll access`, out.length === 0 && (w !== 390 || metrics.documentHeight >= metrics.innerHeight), out.length ? JSON.stringify(out) : (w === 390 ? `no horizontal escape; reader remains in vertical document flow (${metrics.documentHeight}px page)` : 'top bar, split panes, reader controls and composer remain in viewport'));
-      const undersized = metrics.bodyText.filter(t => t.px < 16);
-      record(`${label}: body and evidence copy >=16px`, undersized.length === 0, undersized.length ? JSON.stringify(undersized) : `checked ${metrics.bodyText.length} visible body/evidence text nodes`);
-      const smallTargets = metrics.anchors.filter(t => t.width < 44 || t.height < 44);
-      record(`${label}: interactive citation target >=44px`, smallTargets.length === 0, smallTargets.length ? JSON.stringify(smallTargets) : `checked ${metrics.anchors.length} visible links`);
-      const undersizedTargets = metrics.targets.filter(target => target.width < 44 || target.height < 44);
-      record(`${label}: visible control target boxes >=44px`, undersizedTargets.length === 0, undersizedTargets.length ? JSON.stringify(undersizedTargets) : `checked ${metrics.targets.length} shell/citation targets`);
-      const unloaded = metrics.images.filter(i => !i.loaded);
-      const assetsOk = unloaded.length === 0 && (state === 'drop' ? metrics.images.length === 0 : metrics.images.length > 0);
-      record(`${label}: visible document assets loaded`, assetsOk, unloaded.length ? JSON.stringify(unloaded) : `${metrics.images.length} visible local images loaded`);
-      record(`${label}: bundled fonts loaded`, metrics.fontSans && metrics.fontMono, `IBM Plex Sans=${metrics.fontSans}; IBM Plex Mono=${metrics.fontMono}`);
-      const forbiddenStrings = ['preview','illustrative','not functional'].filter(term => metrics.visibleText.includes(term));
-      record(`${label}: no proof disclaimer in visible UI`, forbiddenStrings.length === 0, forbiddenStrings.length ? forbiddenStrings.join(', ') : 'none of the restricted terms appear in rendered UI text');
-      if (state === 'answered') {
-        const sentence = page.locator('.evidence-sentence').first();
-        const line = page.locator('#leader-line');
-        if (w === 390) await sentence.focus(); else await sentence.hover();
-        await page.waitForFunction(() => Number.parseFloat(getComputedStyle(document.querySelector('#leader-line')).opacity) > 0.8);
-        const activeLeader = await line.evaluate(el => el.classList.contains('is-visible') && Number.parseFloat(getComputedStyle(el).opacity) > 0.8);
-        const activeMarkCount = await page.locator('#evidence-highlight .evidence-target:not([hidden]) i').count();
-        const highlightVisible = await page.locator('#evidence-highlight').evaluate(el => !el.hidden && el.querySelectorAll('.evidence-target:not([hidden])').length === 1);
-        record(`${label}: hover/focus leader and evidence highlight`, activeLeader && highlightVisible, `mode=${w === 390 ? 'keyboard focus' : 'pointer hover'}; leader=${activeLeader}; active highlighted lines=${activeMarkCount}`);
-        if (w !== 390) {
-          await page.mouse.move(5, h - 5);
-          await page.waitForTimeout(280);
-          const removed = await line.evaluate(el => !el.classList.contains('is-visible') || getComputedStyle(el).opacity === '0');
-          record(`${label}: leader removed after pointer leaves`, removed, `lineVisible=${!removed}`);
-        } else {
-          lines.push(`N/A | ${label}: pointer hover on touch viewport | touch viewport has no hover input; keyboard focus and dismissal are tested below`);
-        }
-        await page.keyboard.press('Tab');
-        let focused = await page.evaluate(() => document.activeElement?.classList.contains('evidence-sentence'));
-        if (!focused) await sentence.focus();
-        await page.waitForTimeout(260);
-        const keyboardVisible = await line.evaluate(el => el.classList.contains('is-visible') && Number.parseFloat(getComputedStyle(el).opacity) > 0.8);
-        record(`${label}: keyboard focus shows leader`, keyboardVisible, `focusedAnswerSentence=${focused || await page.evaluate(() => document.activeElement?.classList.contains('evidence-sentence'))}; leader=${keyboardVisible}`);
-        const visibleFocus = await sentence.evaluate(el => getComputedStyle(el).outlineStyle !== 'none' && parseFloat(getComputedStyle(el).outlineWidth) >= 2);
-        record(`${label}: keyboard focus ring visible`, visibleFocus, `outline=${await sentence.evaluate(el => getComputedStyle(el).outlineWidth)} ${await sentence.evaluate(el => getComputedStyle(el).outlineColor)}`);
-        await page.evaluate(() => { const composer = document.querySelector('.composer-box'); composer.setAttribute('tabindex','-1'); composer.focus(); });
-        await page.waitForTimeout(280);
-        const keyboardRemoved = await line.evaluate(el => !el.classList.contains('is-visible') || getComputedStyle(el).opacity === '0');
-        record(`${label}: leader removed after keyboard leaves sentence`, keyboardRemoved, `lineVisible=${!keyboardRemoved}`);
-
-        const mappings = await page.locator('.evidence-sentence').evaluateAll((nodes, expected) => {
-          const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
-          return nodes.map(node => {
-            const id = node.dataset.evidenceTarget;
-            const target = [...document.querySelectorAll('.evidence-target')].find(item => item.dataset.evidenceTarget === id);
-            const chip = node.querySelector('.source-chip');
-            const text = chip ? [...chip.childNodes].find(item => item.nodeType === Node.TEXT_NODE)?.textContent.trim() : '';
-            const marks = [...(target?.querySelectorAll('i') || [])];
-            const boxes = marks.map(mark => (mark.dataset.pdfBox || '').split(',').map(Number));
-            const geometry = marks.map(mark => {
-              const [x0,y0,x1,y1] = (mark.dataset.pdfBox || '').split(',').map(Number);
-              return [parseFloat(mark.style.left) * 6.12, parseFloat(mark.style.top) * 7.92, (parseFloat(mark.style.left) + parseFloat(mark.style.width)) * 6.12, (parseFloat(mark.style.top) + parseFloat(mark.style.height)) * 7.92, x0,y0,x1,y1];
-            });
-            return { id, label:text, href:chip?.getAttribute('href'), page:target?.dataset.page, passage:normalize(target?.dataset.sourcePassage), marks:marks.length, boxes, geometry, expected:expected.find(item => item.id === id) || null };
-          });
-        }, expectedEvidence);
-        const mappedClaims = mappings.length === expectedEvidence.length && mappings.every((item, index) => item.expected && item.id === item.expected.id && item.label === item.expected.label && item.href === `#evidence-target-${item.id}` && item.page === '2' && item.passage === item.expected.passage && item.marks === item.expected.boxes.length);
-        record(`${label}: claims map to distinct source passages`, mappedClaims, JSON.stringify(mappings.map(({id,label,page,marks,passage}) => ({id,label,page,marks,passage}))));
-        const coordinateErrors = mappings.flatMap(item => item.geometry.flatMap((box, markIndex) => {
-          const expected = item.expected?.boxes[markIndex];
-          return !expected || box.some((value, index) => Math.abs(value - expected[index]) > 0.12) ? [{id:item.id, mark:markIndex, actual:box, expected}] : [];
-        }));
-        record(`${label}: highlight bounds match verified PDF coordinates`, mappings.length === expectedEvidence.length && coordinateErrors.length === 0, coordinateErrors.length ? JSON.stringify(coordinateErrors) : 'page-2 highlight boxes match the independently extracted Poppler point bounds');
-
-        for (const expected of expectedEvidence) {
-          const claim = page.locator(`.evidence-sentence[data-evidence-target="${expected.id}"]`);
-          if (await claim.count() !== 1) {
-            record(`${label}: ${expected.id} selects its own highlight and leader endpoint`, false, 'expected one claim with this evidence identity; none was mapped');
-            if (w === 390) record(`${label}: ${expected.id} mobile connector clears content and passage is readable`, false, 'claim-specific source target is missing');
-            continue;
-          }
-          if (w === 390) await claim.focus(); else await claim.hover();
-          await page.waitForFunction(id => {
-            const path = document.querySelector('#leader-line');
-            const target = [...document.querySelectorAll('.evidence-target')].find(item => item.dataset.evidenceTarget === id);
-            const anchor = target?.querySelector('[data-leader-anchor]');
-            const rect = anchor?.getBoundingClientRect();
-            const numbers = (path?.getAttribute('d') || '').match(/-?(?:\d+\.?\d*|\.\d+)/g)?.map(Number) || [];
-            if (document.querySelector('#evidence-highlight')?.dataset.activeTarget !== id || path?.dataset.targetId !== id || !path?.classList.contains('is-visible') || !rect || numbers.length < 2) return false;
-            const end = path.dataset.route === 'mobile-gutter' ? [numbers[4],numbers[3]] : numbers.slice(-2);
-            return Math.hypot(end[0] - (path.dataset.route === 'mobile-gutter' ? rect.right : rect.left), end[1] - (rect.top + rect.height / 2)) < 2;
-          }, expected.id);
-          const linkState = await page.evaluate(id => {
-            const sentence = document.querySelector(`.evidence-sentence[data-evidence-target="${id}"]`);
-            const chip = sentence?.querySelector('.source-chip');
-            const target = [...document.querySelectorAll('.evidence-target')].find(item => item.dataset.evidenceTarget === id);
-            const anchor = target?.querySelector('[data-leader-anchor]');
-            const path = document.querySelector('#leader-line');
-            const nums = (path?.getAttribute('d') || '').match(/-?(?:\d+\.?\d*|\.\d+)/g)?.map(Number) || [];
-            const end = path?.dataset.route === 'mobile-gutter' ? [nums[4],nums[3]] : nums.slice(-2);
-            const chipRect = chip?.getBoundingClientRect();
-            const anchorRect = anchor?.getBoundingClientRect();
-            const pageArea = document.querySelector('.page-area')?.getBoundingClientRect();
-            const figure = document.querySelector('.figure-card')?.getBoundingClientRect();
-            const sentenceRect = sentence?.getBoundingClientRect();
-            const visibleTargets = [...document.querySelectorAll('.evidence-target')].filter(item => !item.hidden).length;
-            const marks = [...(target?.querySelectorAll('i') || [])].map(item => item.getBoundingClientRect());
-            return {
-              activeTarget:document.querySelector('#evidence-highlight')?.dataset.activeTarget,
-              lineTarget:path?.dataset.targetId,
-              sourceTarget:chip?.dataset.sourceId,
-              targetVisible:!!target && !target.hidden && visibleTargets === 1,
-              lineVisible:path?.classList.contains('is-visible'),
-              route:path?.dataset.route,
-              routeNumbers:nums,
-              anchorBounds:anchorRect && {left:anchorRect.left,right:anchorRect.right,top:anchorRect.top,bottom:anchorRect.bottom},
-              pageAreaBounds:pageArea && {left:pageArea.left,right:pageArea.right,top:pageArea.top,bottom:pageArea.bottom},
-              endpointError:anchorRect && end.length === 2 ? Math.hypot(end[0] - (innerWidth <= 640 ? anchorRect.right : anchorRect.left), end[1] - (anchorRect.top + anchorRect.height / 2)) : Infinity,
-              mobile:innerWidth <= 640 ? (() => {
-                const intersect = (a,b) => ({left:Math.max(a.left,b.left),top:Math.max(a.top,b.top),right:Math.min(a.right,b.right),bottom:Math.min(a.bottom,b.bottom)});
-                const viewport = {left:0,top:0,right:innerWidth,bottom:innerHeight};
-                const reader = document.querySelector('.reader');
-                let clip = intersect(intersect(viewport,reader.getBoundingClientRect()),pageArea);
-                for (let node=document.querySelector('.page-area'); node; node=node.parentElement) {
-                  const style = getComputedStyle(node);
-                  const rect = node.getBoundingClientRect();
-                  if (['hidden','clip','auto','scroll'].includes(style.overflowX)) { clip.left=Math.max(clip.left,rect.left); clip.right=Math.min(clip.right,rect.right); }
-                  if (['hidden','clip','auto','scroll'].includes(style.overflowY)) { clip.top=Math.max(clip.top,rect.top); clip.bottom=Math.min(clip.bottom,rect.bottom); }
-                }
-                const marksBounds = marks.length ? {left:Math.min(...marks.map(rect=>rect.left)),top:Math.min(...marks.map(rect=>rect.top)),right:Math.max(...marks.map(rect=>rect.right)),bottom:Math.max(...marks.map(rect=>rect.bottom))} : null;
-                const sourceChipInViewport=!!chipRect && chipRect.left>=0 && chipRect.right<=innerWidth && chipRect.top>=0 && chipRect.bottom<=innerHeight;
-                return {
-                  clip,
-                  marksBounds,
-                  allMarksInsideEffectiveClip:!!marksBounds && marks.every(rect=>rect.left>=clip.left-1 && rect.right<=clip.right+1 && rect.top>=clip.top-1 && rect.bottom<=clip.bottom+1),
-                  bottomClearance:marksBounds ? clip.bottom-marksBounds.bottom : -Infinity,
-                  contextBefore:marksBounds ? marksBounds.top-clip.top : -Infinity,
-                  sourceChipInViewport,
-                  answerAndFigureVisible:!!sentenceRect && sentenceRect.top>=0 && sentenceRect.bottom<=innerHeight && !!figure && figure.top>=0 && figure.bottom<=innerHeight,
-                  sourceStartMatchesChip:!!chipRect && nums.length===5 && Math.abs(nums[0]-chipRect.right)<2 && Math.abs(nums[1]-(chipRect.top+chipRect.height/2))<2,
-                  gutterOutsideAnswerAndFigure:nums.length===5 && nums[2]>Math.max(sentence?.closest('.answer')?.getBoundingClientRect().right||0,figure?.right||0),
-                  shortFinalGutter:nums.length===5 && nums[2]-nums[4]<=42,
-                };
-              })() : null,
-            };
-          }, expected.id);
-          const linkMatches = linkState.activeTarget === expected.id && linkState.lineTarget === expected.id && linkState.sourceTarget === expected.id && linkState.targetVisible && linkState.lineVisible && linkState.endpointError < 2;
-          record(`${label}: ${expected.id} selects its own highlight and leader endpoint`, linkMatches, JSON.stringify(linkState));
-          if (w === 390) {
-            const mobile = linkState.mobile || {};
-            const mobileOk = linkState.route === 'mobile-gutter' && mobile.allMarksInsideEffectiveClip && mobile.bottomClearance >= 20 && mobile.contextBefore >= 12 && mobile.sourceChipInViewport && mobile.answerAndFigureVisible && mobile.sourceStartMatchesChip && mobile.gutterOutsideAnswerAndFigure && mobile.shortFinalGutter;
-            record(`${label}: ${expected.id} full passage fits effective mobile clip with context and 20px trailing clearance`, mobileOk, JSON.stringify(mobile));
-          }
-        }
-        if (w === 390) {
-          await page.evaluate(() => window.scrollBy(0, 24));
-          await page.waitForFunction(() => {
-            const path=document.querySelector('#leader-line');
-            const id=document.querySelector('#evidence-highlight')?.dataset.activeTarget;
-            const target=document.querySelector(`.evidence-target[data-evidence-target="${id}"]`);
-            const anchor=target?.querySelector('[data-leader-anchor]')?.getBoundingClientRect();
-            const numbers=(path?.getAttribute('d')||'').match(/-?(?:\d+\.?\d*|\.\d+)/g)?.map(Number)||[];
-            return !!anchor && path?.classList.contains('is-visible') && path.dataset.route==='mobile-gutter' && Math.hypot(numbers[4]-anchor.right,numbers[3]-(anchor.top+anchor.height/2))<2;
-          });
-          const followsScroll=await page.evaluate(()=>{
-            const path=document.querySelector('#leader-line');
-            const id=document.querySelector('#evidence-highlight')?.dataset.activeTarget;
-            const target=document.querySelector(`.evidence-target[data-evidence-target="${id}"]`);
-            const anchor=target?.querySelector('[data-leader-anchor]')?.getBoundingClientRect();
-            const numbers=(path?.getAttribute('d')||'').match(/-?(?:\d+\.?\d*|\.\d+)/g)?.map(Number)||[];
-            return {scrollY:window.scrollY,activeTarget:id,lineTarget:path?.dataset.targetId,route:path?.dataset.route,endpointError:anchor?Math.hypot(numbers[4]-anchor.right,numbers[3]-(anchor.top+anchor.height/2)):Infinity};
-          });
-          record(`${label}: mobile leader stays attached after page scroll`, followsScroll.scrollY>0 && followsScroll.activeTarget==='john-klein-water' && followsScroll.lineTarget==='john-klein-water' && followsScroll.route==='mobile-gutter' && followsScroll.endpointError<2, JSON.stringify(followsScroll));
-          await page.evaluate(() => window.scrollTo(0, 0));
-        }
-      }
-      if (state === 'model-missing') {
-        const sourceState = await page.evaluate(() => {
-          const target = document.querySelector('.evidence-target[data-evidence-target="stream-flow"]');
-          const area = document.querySelector('.page-area').getBoundingClientRect();
-          const marks = [...(target?.querySelectorAll('i') || [])].map(mark => mark.getBoundingClientRect());
+    for (const viewport of viewports) {
+      const label = `${state} ${viewport.w}x${viewport.h}`;
+      let session;
+      try {
+        session = await makePage(browser, `${entry}?state=${state}`, viewport);
+        const { page, external, failedResponses, errors } = session;
+        const metrics = await page.evaluate(() => {
+          const rect = (selector) => { const node = document.querySelector(selector); if (!node || node.hidden) return null; const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+          const visibleText = () => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            const pieces = [];
+            while (walker.nextNode()) {
+              const node = walker.currentNode, parent = node.parentElement;
+              if (!parent || parent.closest('.skip-link,.assistant-message,.user-message,.figure-caption,.popover-quote,[hidden]')) continue;
+              const style = getComputedStyle(parent);
+              if (style.display === 'none' || style.visibility === 'hidden' || !parent.getClientRects().length) continue;
+              const value = node.nodeValue.trim(); if (value) pieces.push(value);
+            }
+            return pieces.join(' ');
+          };
+          const thread = rect('#thread'), sheet = rect('#pdf-sheet'), composer = rect('#composer');
+          const paragraphStyles = [...document.querySelectorAll('.assistant-message,.answer-paragraph')].map(el => { const s = getComputedStyle(el); return { selector: el.className, color: s.color, background: s.backgroundColor, border: [s.borderTopWidth,s.borderRightWidth,s.borderBottomWidth,s.borderLeftWidth].join('/'), fontSize: s.fontSize, lineHeight: s.lineHeight }; });
+          const buttonTargets = [...document.querySelectorAll('button')].filter(el => el.getClientRects().length && !el.closest('[hidden]')).map(el => { const r=el.getBoundingClientRect(); return {label:el.getAttribute('aria-label')||el.title||el.innerText.trim(),width:r.width,height:r.height}; });
+          const fonts = { reading: document.fonts.check('18px "Newsreader"'), interface: document.fonts.check('16px "Instrument Sans"'), mono: document.fonts.check('12px "IBM Plex Mono"') };
+          const text = visibleText();
           return {
-            targetVisible:!!target && !target.hidden && document.querySelector('#evidence-highlight')?.dataset.activeTarget === 'stream-flow',
-            passage:target?.dataset.sourcePassage || '',
-            marks:marks.length,
-            marksInMobileReader:innerWidth !== 390 || marks.length === 3 && marks.every(mark => mark.top >= Math.max(0,area.top) - 1 && mark.bottom <= innerHeight + 1),
-            leaderHidden:!document.querySelector('#leader-line')?.classList.contains('is-visible'),
+            state: document.body.dataset.state, text, wordCount: (text.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*(?:-[\p{L}\p{N}]+)*/gu)||[]).length,
+            width: innerWidth, height: innerHeight, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight,
+            cls: window.__m9Cls, rawShift: window.__m9RawShift, shiftCount: window.__m9ShiftCount,
+            thread, sheet, composer, threadCentered: thread ? Math.abs((thread.x+thread.right)/2-innerWidth/2) : null,
+            sheetHidden: document.querySelector('#pdf-sheet').hidden, page: document.querySelector('#page-count')?.textContent.trim(),
+            status: document.querySelector('#status-label')?.textContent.trim(), answerCount: document.querySelectorAll('.answer-paragraph').length,
+            citations: document.querySelectorAll('.citation-chip').length, figureLoaded: [...document.images].some(img=>img.classList.contains('figure-image')&&img.complete&&img.naturalWidth>0) || (document.querySelector('.inline-figure img')?.complete&&document.querySelector('.inline-figure img')?.naturalWidth>0),
+            sampleTitle: document.querySelector('.sample-context')?.textContent.trim(), paragraphStyles, buttonTargets, fonts,
+            pageImage: document.querySelector('#page-image')?.getAttribute('src'), matchState: document.querySelector('#matches-toggle')?.getAttribute('aria-pressed'),
+            visibleTargets: [...document.querySelectorAll('.evidence-target')].filter(el=>getComputedStyle(el).visibility!=='hidden'&&Number(getComputedStyle(el).opacity)>0).map(el=>el.dataset.evidenceTarget),
+            methodLabels: [...document.querySelectorAll('.method-tag')].filter(el=>getComputedStyle(el).display!=='none').map(el=>el.textContent.trim()),
+            proseFonts: [...document.querySelectorAll('.assistant-message')].map(el=>getComputedStyle(el).fontFamily),
           };
         });
-        const present = metrics.answerCount === 0 && !!metrics.pageImage && !!metrics.figure && !!metrics.highlight && sourceState.targetVisible && sourceState.passage.includes('evidence for stream flow') && sourceState.marks === 3 && sourceState.marksInMobileReader && sourceState.leaderHidden;
-        record(`${label}: missing model preserves the verified source without a fake answer`, present, JSON.stringify({answers:metrics.answerCount,page:!!metrics.pageImage,figure:!!metrics.figure,...sourceState}));
+        stateResults.set(`${state}:${viewport.w}`, { ...metrics, external, failedResponses, errors });
+        record('C5/C7', `${label}: local assets and no page errors`, external.length === 0 && failedResponses.length === 0 && errors.length === 0, `external=${external.length}; failedResponses=${failedResponses.length}; pageErrors=${errors.length}`);
+        record('C5', `${label}: no horizontal overflow`, metrics.scrollWidth <= viewport.w + 1, `scrollWidth=${metrics.scrollWidth}px, viewport=${viewport.w}px`);
+        record('C11', `${label}: visible interface copy limit`, metrics.wordCount <= 25, `${metrics.wordCount} visible interface words; answer, user query, document caption and credit excluded`);
+        const normalizedText=metrics.text.toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu,' ').trim().replace(/\s+/gu,' ');
+        const bannedExpressions=['preview','illustrative','not functional','desk','belong','page backed','read then ask','seamless','effortless','unlock','supercharge','magic','intelligent','powered by ai','your documents','journey','insights'];
+        const paddedText=` ${normalizedText} `;
+        const matchedBanned=bannedExpressions.filter(term=>paddedText.includes(` ${term} `));
+        record('C9', `${label}: restricted visible wording absent`, matchedBanned.length===0, `matches=${JSON.stringify(matchedBanned)}; normalized visible text=${JSON.stringify(normalizedText)}`);
+        record('C7/C17', `${label}: fonts used by visible content are bundled and loaded`, metrics.fonts.interface && metrics.fonts.mono && (metrics.answerCount===0 || metrics.fonts.reading), JSON.stringify({...metrics.fonts,readingFontRequired:metrics.answerCount>0}));
+        const composerEnabled = !(await page.locator('#question-input').isDisabled());
+        const attachEnabled = !(await page.locator('#attach-button').isDisabled());
+        record('C14', `${label}: optional attachment and composer available`, composerEnabled && attachEnabled, `composerEnabled=${composerEnabled}; attachEnabled=${attachEnabled}`);
+        const targetFailures = metrics.buttonTargets.filter(target => target.width < 44 || target.height < 44);
+        record('C2/C12', `${label}: visible buttons meet 44px target`, targetFailures.length === 0, targetFailures.length ? JSON.stringify(targetFailures) : `${metrics.buttonTargets.length} visible buttons; minimum measured target 44px`);
+        if (state === 'first-run') {
+          record('C14', `${label}: sample, three prompts and closed reader`, metrics.sampleTitle === 'Curiosity' && await page.locator('.suggestion').count() === 3 && metrics.sheetHidden, `sample=${metrics.sampleTitle}; prompts=${await page.locator('.suggestion').count()}; sheetHidden=${metrics.sheetHidden}`);
+          record('C13', `${label}: fresh default conversation remains centered`, metrics.sheetHidden && Math.abs(metrics.threadCentered) < 1, `sheetHidden=${metrics.sheetHidden}; centerDelta=${metrics.threadCentered?.toFixed(2)}px`);
+        }
+        if (state === 'answered-closed' || state === 'answered-open' || state === 'answered-matches') {
+          record('C1', `${label}: answer, inline citations and genuine figure`, metrics.answerCount === 3 && metrics.citations === 3 && metrics.figureLoaded, `answerParagraphs=${metrics.answerCount}; citations=${metrics.citations}; Link figure loaded=${metrics.figureLoaded}`);
+          record('C13', `${label}: viewer state matches URL state`, (state === 'answered-closed') === metrics.sheetHidden, `sheetHidden=${metrics.sheetHidden}; page=${metrics.page}`);
+          record('C17', `${label}: answer reading type and size`, metrics.proseFonts.every(font => font.includes('Newsreader')) && metrics.paragraphStyles.every(item=>parseFloat(item.fontSize)>=17 && parseFloat(item.lineHeight)/parseFloat(item.fontSize)>=1.6), JSON.stringify(metrics.paragraphStyles));
+        }
+        if (state === 'answered-open' || state === 'answered-matches' || state === 'reading-progress') {
+          const expectedPage = state === 'reading-progress' ? '3 / 4' : '2 / 4';
+          record('C1/C13', `${label}: PDF page and sheet opened`, !metrics.sheetHidden && metrics.page === expectedPage, `sheetHidden=${metrics.sheetHidden}; page=${metrics.page}; sheet=${JSON.stringify(metrics.sheet)}`);
+          if (viewport.w > 760) record('C13', `${label}: desktop PDF sheet occupies approximately 55%`, metrics.sheet && Math.abs(metrics.sheet.width / viewport.w - .55) < .035, `sheetWidth=${metrics.sheet?.width}px (${(metrics.sheet?.width/viewport.w*100).toFixed(1)}% viewport)`);
+          if (viewport.w <= 760) record('C13', `${label}: mobile PDF opens as a bottom sheet`, metrics.sheet && metrics.sheet.y > 0 && metrics.sheet.bottom <= viewport.h + 1 && metrics.composer && metrics.composer.bottom <= metrics.sheet.y + 1, `sheetTop=${metrics.sheet?.y}px; sheetBottom=${metrics.sheet?.bottom}px; composerBottom=${metrics.composer?.bottom}px`);
+        }
+        if (state === 'answered-matches') {
+          record('C15', `${label}: Show matches on exposes on-page sources`, metrics.matchState === 'true' && metrics.visibleTargets.length === 4 && ['words','meaning','figure'].every(method=>metrics.methodLabels.includes(method)), `pressed=${metrics.matchState}; targets=${metrics.visibleTargets.join(',')}; methods=${metrics.methodLabels.join(',')}`);
+        }
+        if (state === 'model-missing') {
+          record('C1/C2', `${label}: unavailable model does not invent an answer`, metrics.status === 'Ollama unavailable' && metrics.answerCount === 0 && metrics.text.includes('Ollama unavailable'), `status=${metrics.status}; answerParagraphs=${metrics.answerCount}; message=${metrics.text.includes('Ollama unavailable')}`);
+        }
+        if (state === 'reading-progress') record('C4', `${label}: reading page and progress strip visible`, metrics.pageImage === 'assets/pages/page-03.png' && !metrics.sheetHidden, `page image=${metrics.pageImage}; page=${metrics.page}`);
+        await session.context.close();
+      } catch (error) {
+        record('C1-C19', `${label}: state renders and checks execute`, false, error.stack || error.message);
+        if (session) await session.context.close().catch(() => undefined);
       }
-      if (state === 'drop') {
-        const empty = await page.locator('#empty-desk').isVisible();
-        record(`${label}: empty desk shown`, empty, `emptyDocumentOutline=${empty}`);
-        const staleSource = !!metrics.readerTitle || !!metrics.readerSubtitle || !!metrics.pageCount || !metrics.readerIdentityHidden || !metrics.readerControlsHidden;
-        record(`${label}: empty reader has no stale document identity or page controls`, !staleSource, JSON.stringify({title:metrics.readerTitle,subtitle:metrics.readerSubtitle,pageCount:metrics.pageCount,identityHidden:metrics.readerIdentityHidden,controlsHidden:metrics.readerControlsHidden}));
-      }
-      const expectedStatus = state === 'model-missing' ? 'Ollama unavailable' : 'Model ready';
-      record(`${label}: status describes the answer model`, metrics.statusText === expectedStatus, `visible status=${JSON.stringify(metrics.statusText)}; expected=${JSON.stringify(expectedStatus)}`);
-      const reducePage = await browser.newPage({ viewport:{width:w,height:h}, reducedMotion:'reduce' });
-      await reducePage.goto(`${base}?state=answered`, { waitUntil:'networkidle' });
-      const reduced = await reducePage.evaluate(() => {
-        const anim = getComputedStyle(document.querySelector('.page-warmth')).animationName;
-        const thumbAnim = getComputedStyle(document.querySelector('.page-thumb[aria-current="page"]'),'::after').animationName;
-        const transition = getComputedStyle(document.querySelector('#leader-line')).transitionDuration;
-        return { anim, thumbAnim, transition, pageVisible:!document.querySelector('#page-frame').hidden };
-      });
-      record(`${label}: reduced-motion keeps controls/content and removes motion`, reduced.anim === 'none' && reduced.thumbAnim === 'none' && reduced.transition.split(',').every(x=>parseFloat(x)===0) && reduced.pageVisible, JSON.stringify(reduced));
-      await reducePage.locator('.evidence-sentence').first().focus();
-      const reducedFocusWorks = await reducePage.locator('#leader-line').evaluate(el => el.classList.contains('is-visible') && Number.parseFloat(getComputedStyle(el).opacity) > 0.8);
-      record(`${label}: reduced-motion keeps citation interaction`, reducedFocusWorks, `focused citation leader=${reducedFocusWorks}`);
-      await reducePage.close();
-      await page.close();
     }
   }
-  const contrastPairs = [
-    ['body text on conversation','#F0EBDD','#211F19'],
-    ['secondary instructions on conversation','#D5CFBF','#211F19'],
-    ['figure caption on raised panel','#E7E0D2','#29271F'],
-    ['source passage on conversation','#E8E2D4','#211F19'],
-    ['quiet composer hint on conversation','#A39D8E','#211F19'],
-    ['reader secondary label on room','#918B7C','#16140F'],
-    ['figure credit on raised panel','#B9B2A2','#29271F'],
-    ['PDF ink on warm paper','#211F19','#EEE8D9'],
-    ['active chip text on highlight','#19180F','#D7FF3A'],
-    ['chip text on conversation','#D7FF3A','#211F19'],
-    ['status text on room','#B7B09F','#16140F'],
+
+  // Three-phase CLS measurement from a fresh first-run context.
+  {
+    const session = await makePage(browser, `${entry}?state=first-run`, { w: 1440, h: 900 });
+    const page = session.page;
+    await page.waitForTimeout(100);
+    const initial = await page.evaluate(() => ({ cls: window.__m9Cls, raw: window.__m9RawShift, entries: window.__m9ShiftCount }));
+    await page.evaluate(() => { window.__m9Cls=0; window.__m9RawShift=0; window.__m9ShiftCount=0; window.__setProofState('answered-closed'); });
+    await page.waitForTimeout(300);
+    const answer = await page.evaluate(() => ({ cls: window.__m9Cls, raw: window.__m9RawShift, entries: window.__m9ShiftCount }));
+    await page.locator('.citation-chip').first().click();
+    await page.waitForFunction(() => !document.querySelector('#pdf-sheet').hidden && document.querySelector('#pdf-sheet').classList.contains('is-open'));
+    await page.waitForTimeout(280);
+    const opening = await page.evaluate(() => ({ cls: window.__m9Cls, raw: window.__m9RawShift, entries: window.__m9ShiftCount }));
+    record('C5', '1440x900 initial-load CLS', initial.cls === 0, `CLS=${initial.cls}; raw=${initial.raw}; entries=${initial.entries}`);
+    record('C5', '1440x900 answer-state-change CLS', answer.cls === 0, `CLS=${answer.cls}; raw=${answer.raw}; entries=${answer.entries}`);
+    record('C5', '1440x900 citation-open CLS', opening.cls === 0, `CLS=${opening.cls}; raw=${opening.raw}; entries=${opening.entries}; click is a recent user input`);
+    await session.context.close();
+  }
+
+  // Citation hover/focus/click, correct target, Escape and close-button focus restoration.
+  for (const sourceId of ['link-caption', 'stream-flow', 'john-klein-water']) {
+    const session = await makePage(browser, `${entry}?state=answered-closed`, { w: 1440, h: 900 });
+    const { page } = session;
+    const chip = page.locator(`.citation-chip[data-source-id="${sourceId}"]`);
+    await chip.hover();
+    const hoverShown = await page.locator(`#citation-popover-${sourceId}`).isVisible();
+    const quoteWords = await page.locator(`#citation-popover-${sourceId} .popover-quote`).innerText().then(wordCount);
+    record('C2', `${sourceId}: hover opens short source quotation`, hoverShown && quoteWords <= 25, `popoverVisible=${hoverShown}; quoteWords=${quoteWords}`);
+    await chip.focus();
+    const focusShown = await page.locator(`#citation-popover-${sourceId}`).isVisible();
+    record('C2', `${sourceId}: keyboard focus opens source quotation`, focusShown, `popoverVisible=${focusShown}; aria-expanded=${await chip.getAttribute('aria-expanded')}`);
+    await chip.click();
+    await page.waitForFunction((id) => document.querySelector('#evidence-layer').dataset.activeTarget === id && !document.querySelector('#pdf-sheet').hidden, sourceId);
+    const target = await page.evaluate((id) => {
+      const node=document.querySelector(`.evidence-target[data-evidence-target="${id}"]`);
+      const source=window.__sources.find(item=>item.id===id);
+      return { active:document.querySelector('#evidence-layer').dataset.activeTarget, visible:getComputedStyle(node).visibility, page:document.querySelector('#page-count').textContent.trim(), markCount:node.querySelectorAll('.evidence-mark').length, expected:source.boxes.length, sourcePage:source.page };
+    }, sourceId);
+    record('C1/C2/C13', `${sourceId}: chip opens its exact source highlight`, target.active === sourceId && target.visible === 'visible' && target.page === '2 / 4' && target.markCount === target.expected, JSON.stringify(target));
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    record('C13', `${sourceId}: Escape closes viewer and restores citation focus`, await page.locator('#pdf-sheet').isHidden() && await chip.evaluate(el=>el===document.activeElement), `sheetHidden=${await page.locator('#pdf-sheet').isHidden()}; focusRestored=${await chip.evaluate(el=>el===document.activeElement)}`);
+    await chip.click();
+    await page.waitForFunction(() => !document.querySelector('#pdf-sheet').hidden);
+    await page.locator('#close-sheet').click();
+    await page.waitForTimeout(250);
+    record('C13', `${sourceId}: close button closes viewer and restores citation focus`, await page.locator('#pdf-sheet').isHidden() && await chip.evaluate(el=>el===document.activeElement), `sheetHidden=${await page.locator('#pdf-sheet').isHidden()}; focusRestored=${await chip.evaluate(el=>el===document.activeElement)}`);
+    await session.context.close();
+  }
+
+  // The unavailable-model screen still exposes an explicit reading action without inventing a retrieved match.
+  {
+    const session = await makePage(browser, `${entry}?state=model-missing`, { w: 390, h: 844 });
+    const { page } = session;
+    const action = page.locator('.open-sample');
+    const targetBox = await action.boundingBox();
+    record('C13/C14', 'model unavailable retains a usable optional PDF action', await action.isVisible() && targetBox.width>=44 && targetBox.height>=44, `visible=${await action.isVisible()}; target=${JSON.stringify(targetBox)}`);
+    await action.click();
+    await page.waitForFunction(() => !document.querySelector('#pdf-sheet').hidden);
+    const evidence = await page.evaluate(() => ({page:document.querySelector('#page-count').textContent.trim(),active:document.querySelector('#evidence-layer').dataset.activeTarget,visibleMarks:[...document.querySelectorAll('.evidence-target')].filter(node=>getComputedStyle(node).visibility!=='hidden').length,matchesHidden:document.querySelector('#matches-toggle').hidden,answerCount:document.querySelectorAll('.answer-paragraph').length}));
+    record('C1/C13', 'model-missing PDF opens without a fabricated answer or retrieval mark', evidence.page==='2 / 4' && evidence.active==='' && evidence.visibleMarks===0 && evidence.matchesHidden && evidence.answerCount===0, JSON.stringify(evidence));
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(240);
+    record('C13', 'model-missing PDF close returns keyboard focus to Open PDF', await page.locator('#pdf-sheet').isHidden() && await action.evaluate(el=>el===document.activeElement), `sheetHidden=${await page.locator('#pdf-sheet').isHidden()}; focusRestored=${await action.evaluate(el=>el===document.activeElement)}`);
+    await session.context.close();
+  }
+
+  // All three mobile citation targets must fit in the effective clipping intersection.
+  for (const sourceId of ['link-caption', 'stream-flow', 'john-klein-water']) {
+    const session = await makePage(browser, `${entry}?state=answered-closed`, { w: 390, h: 844 });
+    const { page } = session;
+    await page.locator(`.citation-chip[data-source-id="${sourceId}"]`).click();
+    await page.waitForFunction((id) => document.querySelector('#evidence-layer').dataset.activeTarget === id && !document.querySelector('#pdf-sheet').hidden, sourceId);
+    await page.waitForTimeout(220);
+    const value = await visibleClipAndMarks(page, sourceId);
+    const contained = !!value && value.marks.length > 0 && value.marks.every(mark => mark.left >= value.clip.left - 1 && mark.right <= value.clip.right + 1 && mark.top >= value.clip.top - 1 && mark.bottom <= value.clip.bottom + 1);
+    const topClearance = value ? value.union.top - value.clip.top : -1;
+    const bottomClearance = value ? value.clip.bottom - value.union.bottom : -1;
+    record('C13', `${sourceId}: mobile highlight lies in effective reader clip`, contained && topClearance >= 12 && bottomClearance >= 20, `marks=${value?.marks.length}; clip=${JSON.stringify(value?.clip)}; first-to-clip=${topClearance.toFixed(2)}px; final-to-clip=${bottomClearance.toFixed(2)}px; pageScrollTop=${value?.scrollTop}px`);
+    await session.context.close();
+  }
+
+  // Mobile popover viewport clamping and page-open preference behavior.
+  {
+    const session = await makePage(browser, `${entry}?state=answered-closed`, { w: 390, h: 844 });
+    const { page } = session;
+    const chip = page.locator('.citation-chip').last();
+    await chip.focus();
+    const popRect = await page.locator('.citation-popover').last().boundingBox();
+    record('C2', 'mobile citation popover remains within viewport', !!popRect && popRect.x >= 12 && popRect.x + popRect.width <= 390 && popRect.y >= 12 && popRect.y + popRect.height <= 844, JSON.stringify(popRect));
+    await chip.click();
+    await page.waitForFunction(() => !document.querySelector('#pdf-sheet').hidden);
+    await page.reload({ waitUntil: 'networkidle' });
+    await waitForAssets(page);
+    record('C13', 'explicit open preference is remembered per document', !(await page.locator('#pdf-sheet').isHidden()), `sheetHidden=${await page.locator('#pdf-sheet').isHidden()}`);
+    await page.locator('#close-sheet').click();
+    await page.waitForTimeout(240);
+    await page.reload({ waitUntil: 'networkidle' });
+    record('C13', 'explicit closed preference is remembered per document', await page.locator('#pdf-sheet').isHidden(), `sheetHidden=${await page.locator('#pdf-sheet').isHidden()}`);
+    await session.context.close();
+  }
+
+  // Show matches toggles only page overlays, not the answer.
+  {
+    const session = await makePage(browser, `${entry}?state=answered-open`, { w: 1440, h: 900 });
+    const { page } = session;
+    const beforeText = await page.locator('.assistant-message').innerText();
+    const initiallyOff = await page.locator('#matches-toggle').getAttribute('aria-pressed') === 'false';
+    await page.locator('#matches-toggle').click();
+    const afterText = await page.locator('.assistant-message').innerText();
+    const visibleOn = await page.locator('.evidence-target:visible').count();
+    const methodNames = await page.locator('.method-tag:visible').allInnerTexts();
+    await page.locator('#matches-toggle').click();
+    const visibleOff = await page.locator('.evidence-target:visible').count();
+    record('C15', 'matches default off; toggle shows representative page overlays', initiallyOff && visibleOn === 4 && ['words','meaning','figure'].every(name=>methodNames.includes(name)), `initiallyOff=${initiallyOff}; visibleTargetsOn=${visibleOn}; methods=${methodNames.join(',')}`);
+    record('C15', 'turning matches off removes extra marks; answer is unchanged', visibleOff === 1 && beforeText === afterText, `visibleTargetsOff=${visibleOff}; answerByteEquivalent=${beforeText===afterText}`);
+    await session.context.close();
+  }
+
+  // Reduced motion disables the three defined motions, while citation opening still works.
+  {
+    const session = await makePage(browser, `${entry}?state=answered-closed`, { w: 390, h: 844 }, { reducedMotion: 'reduce' });
+    const { page } = session;
+    const motion = await page.evaluate(() => ({
+      scan: getComputedStyle(document.querySelector('.page-thumb[aria-current="page"]'),'::after').animationName,
+      pulse: getComputedStyle(document.querySelector('.evidence-mark')).animationName,
+      sheetTransition: getComputedStyle(document.querySelector('#pdf-sheet')).transitionDuration,
+    }));
+    await page.locator('.citation-chip').first().click();
+    const opened = !(await page.locator('#pdf-sheet').isHidden());
+    record('C4', 'reduced motion removes scan, pulse and sheet transition', motion.scan === 'none' && motion.pulse === 'none' && motion.sheetTransition.split(',').every(value=>parseFloat(value)===0), JSON.stringify(motion));
+    record('C4', 'reduced motion preserves citation opening', opened, `opened=${opened}; selected=${await page.locator('#evidence-layer').getAttribute('data-active-target')}`);
+    await session.context.close();
+  }
+
+  // Attachment is optional; choosing a checked-in PDF changes the chip only and sends no request.
+  {
+    const session = await makePage(browser, `${entry}?state=first-run`, { w: 1440, h: 900 });
+    const { page, external } = session;
+    await page.locator('#attach-button').click();
+    await page.locator('#pdf-input').setInputFiles(path.resolve('data/pdf/mars-science-laboratory.pdf'));
+    const filename = await page.locator('#attachment-name').innerText();
+    const status = await page.locator('#composer-status').innerText();
+    const requestsBeforeSubmit = await page.evaluate(() => performance.getEntriesByType('resource').map(entry=>entry.name));
+    record('C14', 'optional file picker shows selected filename without ingestion', filename === 'mars-science-laboratory.pdf' && status === '' && external.length === 0, `filename=${filename}; status=${JSON.stringify(status)}; no upload handler is present`);
+    await page.locator('#question-input').fill('A local question');
+    await page.locator('#send-button').click();
+    const explicitNoSend = await page.locator('#composer-status').innerText();
+    const requestCountAfter = await page.evaluate(() => performance.getEntriesByType('resource').length);
+    record('C14', 'static send action does not claim generation or send a request', explicitNoSend === 'Question not sent.' && requestCountAfter === requestsBeforeSubmit.length, `status=${JSON.stringify(explicitNoSend)}; resourceEntriesBefore=${requestsBeforeSubmit.length}; after=${requestCountAfter}`);
+    await session.context.close();
+  }
+
+  // CSS/JS motion, connector absence, banned visual forms, and actual computed typography.
+  {
+    const css = await fs.readFile(path.join(root, 'assets/reading-desk.css'), 'utf8');
+    const html = await fs.readFile(path.join(root, 'proof-static-not-functional.html'), 'utf8');
+    const badTransition = [...css.matchAll(/\btransition(?:-[a-z]+)?\s*:\s*([^;{}]+)/giu)].filter(match => /\b(?:left|top|width|height)\b/iu.test(match[1]));
+    const keyframes = [];
+    for (const match of css.matchAll(/@keyframes\s+[\w-]+\s*\{/giu)) {
+      const open = match.index + match[0].lastIndexOf('{');
+      let depth=0, end=open;
+      for (; end<css.length; end++) { if (css[end]==='{') depth++; else if (css[end]==='}' && --depth===0) { end++; break; } }
+      keyframes.push(css.slice(open,end));
+    }
+    const badKeyframes = keyframes.filter(block=>/\b(?:left|top|width|height)\s*:/iu.test(block));
+    const jsMotion = [...html.matchAll(/\.animate\s*\(([^;]+)\)/gu)].filter(match=>/\b(?:left|top|width|height)\b/iu.test(match[1]));
+    record('C3', 'CSS and JavaScript animate only transform/opacity', badTransition.length===0 && badKeyframes.length===0 && jsMotion.length===0, `geometry transitions=${badTransition.length}; geometry keyframes=${badKeyframes.length}; geometry JS animations=${jsMotion.length}`);
+    const forbiddenDom = await browser.newPage();
+    await forbiddenDom.goto(`${entry}?state=answered-closed`, { waitUntil: 'networkidle' });
+    const connectorNodes = await forbiddenDom.locator('[id*="leader" i],[class*="leader" i],[id*="connector" i],[class*="connector" i],svg path[data-connector]').count();
+    const cardStyles = await forbiddenDom.evaluate(() => [...document.querySelectorAll('.assistant-message,.answer-paragraph')].map(node=>{const s=getComputedStyle(node);return {background:s.backgroundColor,borderWidth:[s.borderTopWidth,s.borderRightWidth,s.borderBottomWidth,s.borderLeftWidth].map(parseFloat),borderStyle:[s.borderTopStyle,s.borderRightStyle,s.borderBottomStyle,s.borderLeftStyle]};}));
+    const boxed = cardStyles.some(item=>item.background!=='rgba(0, 0, 0, 0)' || item.borderWidth.some(width=>width>0&&item.borderStyle[0]!=='none'));
+    record('C8/C12/C16', 'assistant remains unboxed and no connector exists in DOM', connectorNodes===0 && !boxed, `connectorNodes=${connectorNodes}; assistantStyles=${JSON.stringify(cardStyles)}`);
+    const bannedVisual = await forbiddenDom.evaluate(() => {
+      const buttons=[...document.querySelectorAll('button')].filter(el=>el.getClientRects().length);
+      const blueButton=buttons.some(el=>{const m=getComputedStyle(el).backgroundColor.match(/\d+/g)?.map(Number)||[];return m.length>=3&&m[2]>m[0]*1.1&&m[2]>m[1]*1.05;});
+      const cardLike=[...document.querySelectorAll('#thread *')].filter(el=>{
+        if(el.matches('img,svg,.citation-mark,.citation-chip,.suggestion,.user-message')||el.closest('.citation-popover')) return false;
+        const s=getComputedStyle(el),r=el.getBoundingClientRect();
+        return s.backgroundColor!=='rgba(0, 0, 0, 0)'&&r.width>300&&r.height>120&&parseFloat(s.borderTopLeftRadius)>16;
+      }).map(el=>el.className||el.tagName);
+      return {blueButton,largeLightCard:cardLike,centeredSerifHero:!!document.querySelector('h1,.hero-title'),stepper:!!document.querySelector('.stepper,[aria-label*="step" i]')};
+    });
+    const hasGradient=/\b(?:linear|radial|conic)-gradient\s*\(/iu.test(css);
+    record('C8', 'banned visual treatments are absent from the proof structure', !hasGradient&&!bannedVisual.blueButton&&!bannedVisual.largeLightCard.length&&!bannedVisual.centeredSerifHero&&!bannedVisual.stepper, `gradient=${hasGradient}; ${JSON.stringify(bannedVisual)}`);
+    await forbiddenDom.close();
+  }
+
+  // Contrast measurements for tokens actually used in the proof.
+  const contrasts = [
+    ['warm text / dark room','#F0EBDD','#16140F'],
+    ['muted text / conversation','#B9B3A6','#211F19'],
+    ['quiet composer hint / composer','#B9B3A6','#25231D'],
+    ['figure caption / raised panel','#DFD9CB','#29271F'],
+    ['figure credit / raised panel','#B9B3A6','#29271F'],
+    ['PDF ink / warm paper','#211F19','#EEE8D9'],
+    ['citation numeral / lime','#18170F','#D7FF3A'],
+    ['status text / dark room','#B9B3A6','#16140F'],
   ];
-  for (const [name,fg,bg] of contrastPairs) {
-    const value = ratio(fg,bg);
-    record(`contrast ${name}`, value >= 4.5, `${value.toFixed(2)}:1 (${fg} on ${bg})`);
+  for (const [label, foreground, background] of contrasts) {
+    const value = ratios(foreground, background);
+    record('C6', `contrast ${label}`, value >= 4.5, `${value.toFixed(2)}:1 (${foreground} / ${background})`);
   }
-  const css = await fs.readFile(path.join(root,'assets/reading-desk.css'),'utf8');
-  const geometry = ['left:','top:','width:','height:'];
-  const transitionGeometry = css.split(';').map(part => {
-    const colon = part.lastIndexOf(':');
-    return { property:part.slice(0,colon).split('}').at(-1).trim().toLowerCase(), value:part.slice(colon+1).toLowerCase() };
-  }).filter(item => (item.property === 'transition' || item.property.startsWith('transition-')) && ['left','top','width','height'].some(property => item.value.includes(property)));
-  const keyframeBlocks = [];
-  let scanAt = 0;
-  while ((scanAt = css.indexOf('@keyframes',scanAt)) >= 0) {
-    const open = css.indexOf('{',scanAt);
-    if (open < 0) break;
-    let depth = 0, end = open;
-    for (; end < css.length; end++) { if (css[end] === '{') depth++; else if (css[end] === '}' && --depth === 0) { end++; break; } }
-    keyframeBlocks.push(css.slice(open,end));
-    scanAt = end;
+
+  // Real rendering checks for both comparison pages and three local logo marks.
+  {
+    const fontPage = await makePage(browser, `${origin}/font-comparison.html`, { w: 1440, h: 900 });
+    const fonts = await fontPage.page.evaluate(() => ({
+      candidates: ['Newsreader','SourceSerif4','Instrument','Geist'].map(name=>({name,loaded:document.fonts.check(`18px "${name}"`)})),
+      measures: [...document.querySelectorAll('[data-measure]')].map(el=>({family:el.dataset.measure,summary:el.textContent.trim()})),
+    }));
+    record('C17/C7', 'four candidate fonts are bundled and comparison specimens render locally', fonts.candidates.every(candidate=>candidate.loaded) && fonts.measures.length===2 && fonts.measures.every(item=>item.summary.includes('Rendered family')) && fontPage.external.length===0 && fontPage.failedResponses.length===0, JSON.stringify({...fonts,external:fontPage.external,failedResponses:fontPage.failedResponses}));
+    await fontPage.context.close();
+    const logoPage = await makePage(browser, `${origin}/logo-comparison.html`, { w: 1440, h: 900 });
+    const logos = await logoPage.page.evaluate(() => ({
+      candidates: [...document.querySelectorAll('.candidate h2')].map(el=>el.textContent.trim()),
+      renderedUses: [...document.querySelectorAll('svg.mark use')].length,
+      sampleSizes: [...new Set([...document.querySelectorAll('.sample svg.mark')].map(el=>Math.round(el.getBoundingClientRect().width)))].sort((a,b)=>a-b),
+      lockupMarks: document.querySelectorAll('.lockup svg.mark').length,
+      surfaceCount: document.querySelectorAll('.surface').length,
+      lockupCount: document.querySelectorAll('.lockup').length,
+      externalImages: [...document.images].filter(image=>new URL(image.src).origin!==origin).length,
+    }));
+    const markFiles = ['mark-a-page-window.svg','mark-b-source-brackets.svg','mark-c-margin-r.svg'];
+    const markContents = await Promise.all(markFiles.map(name=>fs.readFile(path.join(root,'assets','marks',name),'utf8')));
+    const markValid = markContents.every(text=>text.includes('viewBox="0 0 24 24"') && text.includes('id="mark"') && !/gradient/iu.test(text));
+    record('C18/C7', 'three original logo marks render locally in mono/color on both surfaces at 16/32/64px', logos.candidates.length===3 && logos.renderedUses===42 && [16,32,64].every(size=>logos.sampleSizes.includes(size)) && logos.surfaceCount===6 && logos.lockupCount===6 && logos.lockupMarks===6 && markValid && logoPage.external.length===0 && logoPage.failedResponses.length===0, JSON.stringify({...logos,markFiles,markValid,external:logoPage.external,failedResponses:logoPage.failedResponses}));
+    await logoPage.context.close();
   }
-  const keyframeGeometry = keyframeBlocks.filter(block => geometry.some(property => block.includes(property)));
-  const htmlContent = await fs.readFile(path.join(root,'proof-static-not-functional.html'),'utf8');
-  const jsOpen = htmlContent.indexOf('<script>');
-  const jsClose = htmlContent.indexOf('</script>',jsOpen);
-  const jsSource = htmlContent.slice(jsOpen + 8,jsClose);
-  const jsAnimationCalls = jsSource.match(/\.animate\s*\([\s\S]*?\)/g) || [];
-  const jsGeometryMotion = jsAnimationCalls.filter(call => geometry.some(property => call.toLowerCase().includes(property)));
-  const motionProblems = [...transitionGeometry.map(item => `${item.property}:${item.value}`), ...keyframeGeometry, ...jsGeometryMotion];
-  const hasGradient = css.toLowerCase().includes('gradient(');
-  const lowerCss = css.toLowerCase();
-  const hasBluePrimary = lowerCss.includes('blue-primary') || (lowerCss.includes('blue') && lowerCss.includes('.primary'));
-  const hasSerif = ['Georgia','Times New Roman','font-family:serif'].some(term => css.includes(term));
-  const lowerHtml = htmlContent.toLowerCase();
-  const hasStepper = lowerHtml.includes('stepper') || lowerHtml.includes('step-indicator');
-  record('CSS and JS motion avoids left/top/width/height animation', motionProblems.length === 0, motionProblems.length ? JSON.stringify(motionProblems) : 'transitions use transform/opacity; keyframes use opacity/transform; JavaScript does not animate geometry');
-  record('banned gradient absent', !hasGradient, `gradient declarations=${hasGradient ? 'found' : 'none'}`);
-  record('banned blue primary absent', !hasBluePrimary, `blue primary pattern=${hasBluePrimary}`);
-  record('banned serif hero absent', !hasSerif, `serif font declaration=${hasSerif}`);
-  record('banned numbered stepper absent', !hasStepper, `stepper markup=${hasStepper}`);
-  const total = lines.filter(line => line.startsWith('PASS |') || line.startsWith('FAIL |')).length;
-  lines.push('', `TOTAL: ${total - failures}/${total} checks passed; failures=${failures}.`, 'Scope: static HTML, local assets, and deterministic UI interactions only. No product API or AI path was exercised.');
+
+  // Citation claim text and exact source metadata stay attached to verified, distinct page targets.
+  {
+    const session = await makePage(browser, `${entry}?state=answered-closed`, { w: 1440, h: 900 });
+    const mapping = await session.page.evaluate(() => ({
+      citations: [...document.querySelectorAll('.citation-chip')].map(el=>el.dataset.sourceId),
+      targets: window.__sources.filter(source=>source.cited).map(source=>({id:source.id,page:source.page,quoteWords:(source.quote.match(/[\p{L}\p{N}]+/gu)||[]).length,boxes:source.boxes.length,method:source.method})),
+      figureAlt: document.querySelector('.inline-figure img')?.alt,
+      figureCredit: document.querySelector('.figure-credit')?.textContent,
+    }));
+    const uniqueTargets = new Set(mapping.citations).size === 3 && mapping.citations.every(id=>mapping.targets.some(target=>target.id===id));
+    record('C1/C2', 'three inline citations map to distinct quoted verified page passages', uniqueTargets && mapping.targets.every(target=>target.page===2&&target.quoteWords<=25&&target.boxes>0), JSON.stringify(mapping));
+    record('C1', 'figure includes original image description and adjacent NASA credit', !!mapping.figureAlt && mapping.figureCredit==='NASA/JPL-Caltech/MSSS', `alt=${JSON.stringify(mapping.figureAlt)}; credit=${mapping.figureCredit}`);
+    await session.context.close();
+  }
+
+  // Capture dimensions are verified after the capture step.
+  const requiredShots = [];
+  for (const state of states) for (const {w} of viewports) requiredShots.push(`${state}-${w}.png`);
+  requiredShots.push('citation-popover-desktop.png','citation-popover-mobile.png','model-missing-pdf-open.png','font-comparison.png','logo-comparison.png','attachment-selected-1440.png');
+  const shotResults = [];
+  for (const name of requiredShots) {
+    const full = path.join(root,'shots',name);
+    try {
+      const stat = await fs.stat(full);
+      const page = await browser.newPage();
+      const dimensions = await page.evaluate(async (url) => new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve({width:image.naturalWidth,height:image.naturalHeight});image.onerror=reject;image.src=url; }), `${origin}/shots/${name}`);
+      await page.close();
+      shotResults.push({name,bytes:stat.size,...dimensions});
+    } catch (error) { shotResults.push({name,error:error.message}); }
+  }
+  const requiredCount = states.length * viewports.length + 6;
+  record('C1/C2/C7/C18', 'all required screenshots exist at exact viewport dimensions', shotResults.length===requiredCount && shotResults.every(shot=>shot.bytes>0&&!shot.error&&((shot.name.endsWith('-1440.png')&&shot.width===1440&&shot.height===900)||(shot.name.endsWith('-1024.png')&&shot.width===1024&&shot.height===768)||(shot.name.endsWith('-390.png')&&shot.width===390&&shot.height===844)||(!/-(?:1440|1024|390)\.png$/u.test(shot.name)&&shot.width>0&&shot.height>0))), `${shotResults.length}/${requiredCount}; ${JSON.stringify(shotResults)}`);
+
+  // Per-state copy and interface facts for the requested 1440px review.
+  lines.push('', 'VISIBLE COPY WORD COUNTS AT 1440PX (document body, user-authored question, answer, source quotation/caption/credit excluded):');
+  for (const state of states) {
+    const result = stateResults.get(`${state}:1440`);
+    lines.push(`COPY | ${state} | ${result?.wordCount ?? 'unavailable'} words | ${result ? JSON.stringify(result.text) : 'state did not render'}`);
+  }
+  const total = passed + failures;
+  lines.push('', `TOTAL: ${passed}/${total} automated checks passed; failures=${failures}.`, 'Manual screenshot review remains separate from these measurements. Production application behavior is unverified by this static proof.');
 } finally {
   await browser.close();
 }
-const output = lines.join(String.fromCharCode(10)) + String.fromCharCode(10);
-await fs.writeFile(path.join(root,'CHECK-RESULTS.txt'),output,'utf8');
+const output = lines.join('\n') + '\n';
+await fs.writeFile(path.join(root, 'CHECK-RESULTS.txt'), output, 'utf8');
 process.stdout.write(output);
 if (failures) process.exitCode = 1;

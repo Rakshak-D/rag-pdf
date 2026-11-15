@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG-PDF mark comparison</title>
+  <style>
+    @font-face{font-family:Instrument;src:url("assets/fonts/InstrumentSans-Variable.ttf") format("truetype");font-weight:400 700;font-display:swap}
+    *{box-sizing:border-box}body{margin:0;background:#16140f;color:#f0ebdd;font:16px/1.45 Instrument, sans-serif;padding:30px 42px 40px}
+    h1{margin:0;font-size:28px;font-weight:500;letter-spacing:-.03em} .intro{margin:5px 0 22px;color:#b9b3a6;font-size:15px}
+    .candidate{display:grid;grid-template-columns:190px 1fr 260px;gap:18px;align-items:stretch;padding:14px 0;border-top:1px solid #4b483f}
+    .candidate h2{margin:4px 0 6px;font-size:17px;font-weight:600}.candidate p{margin:0;color:#b9b3a6;font-size:14px}
+    .variants{display:grid;grid-template-columns:1fr 1fr;gap:8px}.surface{min-height:132px;padding:10px 12px;border-radius:4px;display:flex;flex-direction:column;justify-content:space-between}
+    .dark{background:#211f19;color:#eee8d9}.paper{background:#eee8d9;color:#211f19}.surface-label{font:11px/1.2 ui-monospace,monospace;opacity:.75}
+    .samples{display:flex;align-items:end;justify-content:center;gap:18px}.sample{display:flex;min-width:48px;flex-direction:column;align-items:center;gap:4px;font:10px/1 ui-monospace,monospace;opacity:.8}
+    svg.mark{display:block;width:var(--size);height:var(--size);color:inherit;overflow:visible}.mono svg{filter:grayscale(1)}
+    .lockups{display:flex;flex-direction:column;justify-content:space-between;gap:8px}.lockup{display:flex;min-height:61px;align-items:center;gap:10px;padding:9px 12px;border-radius:4px}.lockup svg{width:34px;height:34px;flex:none}.lockup span{font-size:18px;font-weight:600;letter-spacing:-.04em}.lockup-label{font:10px/1.1 ui-monospace,monospace;opacity:.7}
+    @media(max-width:900px){body{padding:22px}.candidate{grid-template-columns:150px 1fr}.lockups{grid-column:1/-1;flex-direction:row}.lockup{flex:1}}
+    @media(max-width:600px){body{padding:18px}.candidate{grid-template-columns:1fr}.variants{grid-template-columns:1fr 1fr}.lockups{grid-column:auto}.surface{padding:8px 6px}.samples{gap:8px}.sample{min-width:38px}}
+  </style>
+</head>
+<body>
+  <h1>RAG-PDF mark studies</h1>
+  <p class="intro">Three original 24px-grid directions. Shown in one colour and neutral + lime, from 16px to 64px. No permanent mark selected.</p>
+  <main id="studies"></main>
+  <script>
+    const candidates=[
+      {id:"mark-a-page-window",name:"A · Page window",meaning:"A page frame with one marked line: a selected passage in context."},
+      {id:"mark-b-source-brackets",name:"B · Source brackets",meaning:"Two brackets gather a short excerpt around one emphasized source line."},
+      {id:"mark-c-margin-r",name:"C · Margin note",meaning:"A lowercase r sits inside a folded page corner, with one margin mark."},
+    ];
+    const studies=document.getElementById("studies");
+    const symbol=(candidate,mono=false)=>`<svg class="mark" aria-hidden="true" viewBox="0 0 24 24"><use href="assets/marks/${candidate.id}.svg#mark"></use></svg>`;
+    for(const candidate of candidates){
+      const section=document.createElement("section");section.className="candidate";
+      const intro=document.createElement("div");intro.innerHTML=`<h2>${candidate.name}</h2><p>${candidate.meaning}</p>`;
+      const variants=document.createElement("div");variants.className="variants";
+      for(const [surfaceName,surfaceClass] of [["Dark room","dark"],["Warm paper","paper"]]){
+        const surface=document.createElement("div");surface.className=`surface ${surfaceClass}`;
+        const label=document.createElement("span");label.className="surface-label";label.textContent=surfaceName;
+        const samples=document.createElement("div");samples.className="samples";
+        for(const mono of [true,false]){
+          for(const size of [16,32,64]){
+            const sample=document.createElement("span");sample.className=`sample ${mono?"mono":"color"}`;
+            sample.style.setProperty("--size",`${size}px`);
+            sample.innerHTML=`${symbol(candidate,mono)}<span>${size}px ${mono?"mono":"lime"}</span>`;
+            samples.append(sample);
+          }
+        }
+        surface.append(label,samples);variants.append(surface);
+      }
+      const lockups=document.createElement("div");lockups.className="lockups";
+      for(const [surfaceClass,label] of [["dark","Header · dark"],["paper","Header · paper"]]){
+        const row=document.createElement("div");row.className=`lockup ${surfaceClass}`;
+        row.innerHTML=`${symbol(candidate)}<span>RAG-PDF</span><small class="lockup-label">${label}</small>`;lockups.append(row);
+      }
+      section.append(intro,variants,lockups);studies.append(section);
+    }
+  </script>
+</body>
+</html>
