@@ -20,9 +20,19 @@ try {
         await Promise.all([...document.images].map((image) => image.decode().catch(() => undefined)));
       });
       if (state === 'answered') {
-        const sentence = page.locator('.evidence-sentence').first();
+        const claimId = w === 1440 ? 'link-caption' : w === 1024 ? 'stream-flow' : 'john-klein-water';
+        const sentence = page.locator(`.evidence-sentence[data-evidence-target="${claimId}"]`);
         await sentence.focus();
-        await page.waitForFunction(() => document.querySelector('#leader-line')?.classList.contains('is-visible'));
+        await page.waitForFunction((id) => {
+          const path = document.querySelector('#leader-line');
+          const target = [...document.querySelectorAll('.evidence-target')].find((item) => item.dataset.evidenceTarget === id);
+          const anchor = target?.querySelector('[data-leader-anchor]')?.getBoundingClientRect();
+          const numbers = (path?.getAttribute('d') || '').match(/-?(?:\d+\.?\d*|\.\d+)/g)?.map(Number) || [];
+          if (!path?.classList.contains('is-visible') || path.dataset.targetId !== id || !anchor) return false;
+          const endpoint = path.dataset.route === 'mobile-gutter' ? [numbers[4], numbers[3]] : numbers.slice(-2);
+          const expectedX = path.dataset.route === 'mobile-gutter' ? anchor.right : anchor.left;
+          return endpoint.length === 2 && Math.hypot(endpoint[0] - expectedX, endpoint[1] - (anchor.top + anchor.height / 2)) < 2;
+        }, claimId);
         await page.waitForTimeout(280);
       }
       const shot = path.join(root, 'shots', `${state}-${w}.png`);

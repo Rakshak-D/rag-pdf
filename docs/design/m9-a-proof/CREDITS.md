@@ -8,15 +8,18 @@
 - Static page renders: `assets/pages/page-02.png`, `assets/pages/page-03.png`; contact-sheet thumbnails: `assets/pages/contact-1.png` through `contact-4.png`.
 - Rendering method: Poppler `pdftoppm`; proof page renders at 130 dpi and thumbnails at 45 dpi. The PDF itself was not modified.
 
-## Figure and passage
+## Figure and claim-specific source passages
 
 - Figure: the Link outcrop on page 2, extracted from repository source `data/images_pymupdf/mars-science-laboratory/page_2_img_0.png`; copied as `assets/figures/link-outcrop.png`.
 - Original extracted-figure Git blob: dddaf8883e7b1d677569efd8c0afcea0fe9c1452.
 - Figure identity: NASA/JPL-Caltech/MSSS image PIA16188, “Link to a Watery Past.” NASA's Photojournal page identifies the image and credit: <https://science.nasa.gov/photojournal/link-to-a-watery-past/>.
 - Visible caption, transcribed from the page 2 factsheet: “A rock outcrop called Link shows signs of being formed by the deposition of water.”
 - Displayed credit: `NASA/JPL-Caltech/MSSS`.
-- Highlighted passage, page 2: “The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.”
-- Highlight geometry method: `pdftotext -bbox-layout` was run against the source PDF and the passage's rendered line boxes were matched on page 2 (612×792 PDF points): (44.50, 584.66)–(274.20, 596.48), (44.50, 600.16)–(286.42, 611.98), and (44.50, 615.66)–(133.78, 627.48). These boxes were normalized onto the 130 dpi Poppler page image. This validates only this static page overlay; it does not validate production PDF.js coordinate conversion.
+- Claim 1 — “The NASA caption says Link shows signs of being formed by the deposition of water.” Its source is the italic caption immediately under the Link photograph: “A rock outcrop called Link shows signs of being formed by the deposition of water.” The highlight boxes are (46.080, 217.376)–(282.285, 227.600) and (46.080, 229.376)–(74.692, 239.600) PDF points.
+- Claim 2 — “The factsheet identifies rounded pebbles and hardened sand in conglomerate rocks as evidence of stream flow.” Its source is: “The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.” The three highlight boxes are (44.500, 584.660)–(274.202, 596.480), (44.500, 600.160)–(286.421, 611.980), and (44.500, 615.660)–(133.780, 627.480) PDF points. The final box ends at the word “site.” before the next unrelated word, “Analysis,” on the same printed line.
+- Claim 3 — “The first drilled sample from a rock target called John Klein provided evidence of conditions favorable for life and sustained liquid water.” Its exact source passage is `first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,`. The four highlight boxes are (314.640, 139.400)–(559.882, 151.220), (314.640, 154.900)–(547.671, 166.720), (314.640, 170.400)–(560.840, 182.220), and (314.640, 185.900)–(423.730, 197.720) PDF points. The last box ends at “water,” before the subsequent words “other key elemental ingredients.”
+- Coordinate verification: Poppler `pdftotext -bbox-layout -f 2 -l 2` extracted word and line boxes from the original PDF. The selected words were matched to the rendered page 2 image; page coordinates use the PDF page’s 612×792-point bounds and top-left origin. Each box was normalized to the 1105×1430-pixel, 130 dpi Poppler page render. This validates only the static Poppler page overlay; it does not validate production PDF.js coordinate conversion.
+- The three claims use separate source IDs, numbered chips (`1 · p.02`, `2 · p.02`, `3 · p.02`) and separately selectable verified boxes. Only the selected claim's passage is highlighted; each leader ends at that claim's first marked line.
 - NASA media guidance: <https://www.nasa.gov/nasa-brand-center/images-and-media/>. The cited image credit is preserved next to the figure. The proof does not use NASA marks as product branding.
 
 ## Fonts

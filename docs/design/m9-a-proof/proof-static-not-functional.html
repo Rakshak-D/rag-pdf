@@ -20,7 +20,7 @@
     </div>
     <div class="top-spacer"></div>
     <div id="local-status" class="local-status" role="status" aria-live="polite">
-      <span class="status-dot" aria-hidden="true"></span><span id="status-text">Local files</span>
+      <span class="status-dot" aria-hidden="true"></span><span id="status-text">Model ready</span>
     </div>
     <div class="settings-mark" aria-label="Settings">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Zm0-5v2m0 13.6v2m9-8.8h-2m-14 0H3m15.36-6.36-1.42 1.42M7.06 16.94l-1.42 1.42m12.72 0-1.42-1.42m-9.88-9.88L5.64 5.66" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="12" r="8.7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>
@@ -54,7 +54,7 @@
     <section class="reader" aria-label="PDF reading area">
       <div class="reader-toolbar">
         <div class="reader-identity"><strong id="reader-title">Mars Science Laboratory/Curiosity</strong><span id="reader-subtitle">NASA FACTS · 4 PAGES</span></div>
-        <div class="reader-controls" aria-label="Page controls"><span class="control-glyph" aria-hidden="true">−</span><span class="control-glyph" aria-hidden="true">＋</span><span class="control-glyph fit-mark" aria-hidden="true">FIT</span><span id="page-count" class="page-count">— / 4</span></div>
+        <div class="reader-controls" aria-label="Page controls"><span class="control-glyph" aria-hidden="true">−</span><span class="control-glyph" aria-hidden="true">＋</span><span class="control-glyph fit-mark" aria-hidden="true">FIT</span><span id="page-count" class="page-count">2 / 4</span></div>
       </div>
       <div class="page-area">
         <div id="empty-desk" class="empty-desk">
@@ -63,11 +63,7 @@
         </div>
         <div id="page-frame" class="page-frame" hidden>
           <img id="page-image" src="assets/pages/page-02.png" alt="Page 2 of the NASA Mars Science Laboratory/Curiosity factsheet" width="1105" height="1430">
-          <div id="evidence-highlight" class="evidence-highlight" aria-label="Highlighted source passage on page 2">
-            <i style="left:7.27%;top:73.82%;width:37.53%;height:1.50%"></i>
-            <i style="left:7.27%;top:75.78%;width:39.53%;height:1.50%"></i>
-            <i style="left:7.27%;top:77.74%;width:14.59%;height:1.50%"></i>
-          </div>
+          <div id="evidence-highlight" class="evidence-highlight" aria-label="Highlighted source passage on page 2"></div>
           <div class="page-warmth" aria-hidden="true"></div>
         </div>
       </div>
@@ -79,7 +75,7 @@
         <span class="strip-note">4 pages</span>
       </div>
     </section>
-    <svg id="leader-overlay" class="leader-overlay" aria-hidden="true"><line id="leader-line" x1="0" y1="0" x2="0" y2="0"></line></svg>
+    <svg id="leader-overlay" class="leader-overlay" aria-hidden="true"><path id="leader-line" d=""></path></svg>
   </main>
   <script>
 (() => {
@@ -104,13 +100,72 @@
   const highlight = document.getElementById("evidence-highlight");
   const thumbStrip = document.getElementById("page-strip");
   const commonTitle = "Mars Science Laboratory/Curiosity";
-  const sentence = (text, label) =>
-    '<p class="evidence-sentence" tabindex="0" data-evidence="link">' + text +
-    ' <a class="source-chip" href="#evidence-highlight" aria-label="Open source passage on page 2">' +
-    label + '<span class="chip-thumb" aria-hidden="true"><img src="assets/pages/contact-2.png" alt=""></span></a></p>';
+  const pdfPage = { width: 612, height: 792 };
+  const sources = [
+    {
+      id: "link-caption", page: 2, label: "1 · p.02",
+      passage: "A rock outcrop called Link shows signs of being formed by the deposition of water.",
+      boxes: [[46.08,217.376,282.285,227.6],[46.08,229.376,74.6919,239.6]],
+    },
+    {
+      id: "stream-flow", page: 2, label: "2 · p.02",
+      passage: "The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.",
+      boxes: [[44.5,584.66,274.202,596.48],[44.5,600.16,286.421,611.98],[44.5,615.66,133.78,627.48]],
+    },
+    {
+      id: "john-klein-water", page: 2, label: "3 · p.02",
+      passage: "first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,",
+      boxes: [[314.64,139.4,559.882,151.22],[314.64,154.9,547.671,166.72],[314.64,170.4,560.84,182.22],[314.64,185.9,423.73,197.72]],
+    },
+  ];
+  const sourceById = new Map(sources.map(source => [source.id, source]));
+  const targets = new Map();
+  for (const source of sources) {
+    const target = document.createElement("div");
+    target.className = "evidence-target";
+    target.id = `evidence-target-${source.id}`;
+    target.dataset.evidenceTarget = source.id;
+    target.dataset.page = String(source.page);
+    target.dataset.sourcePassage = source.passage;
+    target.hidden = true;
+    source.boxes.forEach((box, index) => {
+      const [x0,y0,x1,y1] = box;
+      const mark = document.createElement("i");
+      mark.dataset.pdfBox = box.join(",");
+      mark.style.left = `${x0 / pdfPage.width * 100}%`;
+      mark.style.top = `${y0 / pdfPage.height * 100}%`;
+      mark.style.width = `${(x1 - x0) / pdfPage.width * 100}%`;
+      mark.style.height = `${(y1 - y0) / pdfPage.height * 100}%`;
+      if (index === 0) mark.dataset.leaderAnchor = "true";
+      target.append(mark);
+    });
+    highlight.append(target);
+    targets.set(source.id, target);
+  }
+  const sentence = (text, source) =>
+    `<p class="evidence-sentence" tabindex="0" data-evidence-target="${source.id}">${text} ` +
+    `<a class="source-chip" data-source-id="${source.id}" href="#evidence-target-${source.id}" aria-label="Open source ${source.label.split(" · ")[0]} on page ${source.page}">${source.label}` +
+    '<span class="chip-thumb" aria-hidden="true"><img src="assets/pages/contact-2.png" alt=""></span></a></p>';
+  const selectEvidence = (id) => {
+    const target = targets.get(id);
+    if (!target) return null;
+    targets.forEach((candidate, candidateId) => { candidate.hidden = candidateId !== id; });
+    highlight.dataset.activeTarget = id;
+    highlight.setAttribute("aria-label", `Source passage on page ${target.dataset.page}: ${target.dataset.sourcePassage}`);
+    return target;
+  };
   docName.textContent = state === "drop" ? "No PDF open" : commonTitle;
-  document.getElementById("reader-title").textContent = commonTitle;
-  document.getElementById("reader-subtitle").textContent = "NASA FACTS · 4 PAGES";
+  const readerIdentity = document.querySelector(".reader-identity");
+  const readerControls = document.querySelector(".reader-controls");
+  const readerTitle = document.getElementById("reader-title");
+  const readerSubtitle = document.getElementById("reader-subtitle");
+  const showReaderIdentity = (visible) => {
+    readerIdentity.hidden = !visible;
+    readerControls.hidden = !visible;
+    readerTitle.textContent = visible ? commonTitle : "";
+    readerSubtitle.textContent = visible ? "NASA FACTS · 4 PAGES" : "";
+    if (!visible) pageCount.textContent = "";
+  };
   const setPage = (page, pageAlt) => {
     emptyDesk.hidden = true;
     pageFrame.hidden = false;
@@ -125,16 +180,18 @@
     });
   };
   if (state === "drop") {
+    showReaderIdentity(false);
     title.textContent = "Put a PDF here";
     description.textContent = "Open a document to read its pages and ask about what you find.";
     content.innerHTML = '<p class="body-copy drop-note">Your conversation and the original page belong on the same desk.</p>';
     composerHint.textContent = "Open a PDF to begin";
     composerPlaceholder.textContent = "Drop a PDF or choose one to begin";
-    statusText.textContent = "Local files";
+    statusText.textContent = "Model ready";
     status.classList.remove("is-missing");
     emptyDesk.hidden = false; pageFrame.hidden = true; figureCard.hidden = true; sourceCard.hidden = true; thumbStrip.hidden = true;
-    pageCount.textContent = "— / 4";
+    pageCount.textContent = "";
   } else if (state === "reading") {
+    showReaderIdentity(true);
     title.textContent = "Read, then ask.";
     description.textContent = "Mars Science Laboratory/Curiosity · 4 pages";
     content.innerHTML = '<p class="body-copy">Choose a question to follow a detail back to its page.</p>' +
@@ -144,26 +201,29 @@
       '<div class="suggestion">What water evidence appears on page 2, and how much power did the generator supply on page 3?</div></div>';
     composerHint.textContent = "Questions use the open document";
     composerPlaceholder.textContent = "Ask a question about this PDF";
-    statusText.textContent = "Local files";
+    statusText.textContent = "Model ready";
     status.classList.remove("is-missing");
     setPage("3", "Page 3 of the NASA Mars Science Laboratory/Curiosity factsheet");
     figureCard.hidden = false; sourceCard.hidden = true; highlight.hidden = true;
   } else if (state === "answered") {
+    showReaderIdentity(true);
     title.textContent = "A page-backed answer.";
     description.textContent = "Question, figure and source on one reading desk.";
     content.innerHTML = '<div class="question-bubble">What does Link tell us about water on ancient Mars?</div>' +
       '<div class="answer-label">From the document</div><div class="answer">' +
-      sentence("The booklet describes Link as an outcrop formed by water deposition.", "p.02") +
-      sentence("Rounded pebbles mixed with hardened sand in nearby conglomerate rocks are evidence of stream flow.", "p.02") +
-      sentence("Curiosity’s first John Klein drill sample showed evidence of sustained liquid water and conditions favorable for life.", "p.02") +
+      sentence("The NASA caption says Link shows signs of being formed by the deposition of water.", sources[0]) +
+      sentence("The factsheet identifies rounded pebbles and hardened sand in conglomerate rocks as evidence of stream flow.", sources[1]) +
+      sentence("The first drilled sample from a rock target called John Klein provided evidence of conditions favorable for life and sustained liquid water.", sources[2]) +
       '</div>';
     composerHint.textContent = "Ask a follow-up";
     composerPlaceholder.textContent = "Ask another question about this PDF";
-    statusText.textContent = "Local files";
+    statusText.textContent = "Model ready";
     status.classList.remove("is-missing");
     setPage("2", "Page 2 of the NASA Mars Science Laboratory/Curiosity factsheet, with the source passage highlighted.");
     figureCard.hidden = false; sourceCard.hidden = true; highlight.hidden = false;
+    selectEvidence("link-caption");
   } else {
+    showReaderIdentity(true);
     title.textContent = "The document stays open.";
     description.textContent = "You can still inspect the page and its source passage.";
     content.innerHTML = '<p class="body-copy">The local answer model is unavailable. Connect Ollama to ask a question.</p>';
@@ -173,22 +233,55 @@
     status.classList.add("is-missing");
     setPage("2", "Page 2 of the NASA Mars Science Laboratory/Curiosity factsheet, with a source passage highlighted.");
     figureCard.hidden = false; sourceCard.hidden = false; highlight.hidden = false;
+    sourceCard.querySelector("p").textContent = sourceById.get("stream-flow").passage;
+    selectEvidence("stream-flow");
   }
   const line = document.getElementById("leader-line");
   let activeSentence = null;
+  const isMobile = () => window.matchMedia("(max-width: 640px)").matches;
+  const positionMobilePage = (target) => {
+    if (!isMobile()) return;
+    const pageAreaRect = document.querySelector(".page-area").getBoundingClientRect();
+    const anchor = target.querySelector("[data-leader-anchor]");
+    const before = anchor.getBoundingClientRect();
+    const visibleRoom = Math.max(28, window.innerHeight - pageAreaRect.top - 20);
+    const desiredY = pageAreaRect.top + Math.min(pageAreaRect.height * 0.38, visibleRoom / 2);
+    const desiredRight = pageAreaRect.right - 26;
+    const currentTransform = new DOMMatrixReadOnly(getComputedStyle(pageFrame).transform);
+    pageFrame.style.setProperty("--mobile-x", `${currentTransform.m41 + desiredRight - before.right}px`);
+    pageFrame.style.setProperty("--mobile-y", `${currentTransform.m42 + desiredY - before.top - before.height / 2}px`);
+  };
+  const drawLeader = (sentenceNode, target) => {
+    const sourceChip = sentenceNode.querySelector(".source-chip");
+    const sourceRect = sourceChip.getBoundingClientRect();
+    const anchorRect = target.querySelector("[data-leader-anchor]").getBoundingClientRect();
+    const sx = sourceRect.right;
+    const sy = sourceRect.top + sourceRect.height / 2;
+    const ty = anchorRect.top + anchorRect.height / 2;
+    if (isMobile()) {
+      const gutterX = Math.min(window.innerWidth - 6, document.querySelector(".page-area").getBoundingClientRect().right + 6);
+      line.setAttribute("d", `M ${sx} ${sy} H ${gutterX} V ${ty} H ${anchorRect.right}`);
+      line.dataset.route = "mobile-gutter";
+    } else {
+      const tx = anchorRect.left;
+      const controlX = (sx + tx) / 2;
+      line.setAttribute("d", `M ${sx} ${sy} C ${controlX} ${sy}, ${controlX} ${ty}, ${tx} ${ty}`);
+      line.dataset.route = "direct";
+    }
+    line.dataset.targetId = target.dataset.evidenceTarget;
+    line.dataset.sourceId = sourceChip.dataset.sourceId;
+    line.classList.add("is-visible");
+  };
   const showLeader = (element) => {
     const sentenceNode = element.closest(".evidence-sentence");
     if (!sentenceNode || highlight.hidden) return;
     activeSentence = sentenceNode;
-    highlight.querySelector("i")?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
-    const sourceRect = sentenceNode.getBoundingClientRect();
-    const targetMark = highlight.querySelector("i"); if (!targetMark) return;
-    const targetRect = targetMark.getBoundingClientRect();
-    line.setAttribute("x1", String(Math.min(sourceRect.right + 8, window.innerWidth - 16)));
-    line.setAttribute("y1", String(sourceRect.top + sourceRect.height / 2));
-    line.setAttribute("x2", String(Math.max(targetRect.left + 6, 10)));
-    line.setAttribute("y2", String(targetRect.top + targetRect.height / 2));
-    line.classList.add("is-visible");
+    const target = selectEvidence(sentenceNode.dataset.evidenceTarget);
+    if (!target) return;
+    if (isMobile()) {
+      positionMobilePage(target);
+      requestAnimationFrame(() => drawLeader(sentenceNode, target));
+    } else drawLeader(sentenceNode, target);
   };
   const hideLeaderIfInactive = (sentenceNode) => {
     if (!sentenceNode.contains(document.activeElement) && !sentenceNode.matches(":hover")) {
@@ -204,10 +297,18 @@
     });
     node.querySelector(".source-chip").addEventListener("click", (event) => {
       event.preventDefault(); showLeader(node);
-      highlight.querySelector("i")?.scrollIntoView({ block: "nearest", behavior: "instant" });
     });
   });
-  window.addEventListener("resize", () => { if (activeSentence) showLeader(activeSentence); });
+  if (state === "model-missing") document.fonts.ready.then(() => positionMobilePage(targets.get("stream-flow")));
+  window.addEventListener("resize", () => {
+    if (activeSentence) showLeader(activeSentence);
+    else if (state === "model-missing") positionMobilePage(targets.get("stream-flow"));
+  });
+  window.addEventListener("scroll", () => {
+    if (!activeSentence || highlight.hidden) return;
+    const target = targets.get(activeSentence.dataset.evidenceTarget);
+    if (target) drawLeader(activeSentence, target);
+  }, { passive: true });
 })();
 </script>
 </body>

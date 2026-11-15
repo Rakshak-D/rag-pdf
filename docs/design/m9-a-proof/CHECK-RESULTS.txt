@@ -10,11 +10,13 @@ PASS | drop 1440x900: major zones do not overlap | conversation and reader bound
 PASS | drop 1440x900: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
 PASS | drop 1440x900: body and evidence copy >=16px | checked 4 visible body/evidence text nodes
 PASS | drop 1440x900: interactive citation target >=44px | checked 0 visible links
-PASS | drop 1440x900: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | drop 1440x900: visible control target boxes >=44px | checked 1 shell/citation targets
 PASS | drop 1440x900: visible document assets loaded | 0 visible local images loaded
 PASS | drop 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | drop 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
 PASS | drop 1440x900: empty desk shown | emptyDocumentOutline=true
+PASS | drop 1440x900: empty reader has no stale document identity or page controls | {"title":"","subtitle":"","pageCount":"","identityHidden":true,"controlsHidden":true}
+PASS | drop 1440x900: status describes the answer model | visible status="Model ready"; expected="Model ready"
 PASS | drop 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | drop 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | drop 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -26,11 +28,13 @@ PASS | drop 1024x768: major zones do not overlap | conversation and reader bound
 PASS | drop 1024x768: major layout bounds and mobile scroll access | top bar, split panes, reader controls and composer remain in viewport
 PASS | drop 1024x768: body and evidence copy >=16px | checked 4 visible body/evidence text nodes
 PASS | drop 1024x768: interactive citation target >=44px | checked 0 visible links
-PASS | drop 1024x768: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | drop 1024x768: visible control target boxes >=44px | checked 1 shell/citation targets
 PASS | drop 1024x768: visible document assets loaded | 0 visible local images loaded
 PASS | drop 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | drop 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
 PASS | drop 1024x768: empty desk shown | emptyDocumentOutline=true
+PASS | drop 1024x768: empty reader has no stale document identity or page controls | {"title":"","subtitle":"","pageCount":"","identityHidden":true,"controlsHidden":true}
+PASS | drop 1024x768: status describes the answer model | visible status="Model ready"; expected="Model ready"
 PASS | drop 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | drop 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | drop 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -42,11 +46,13 @@ PASS | drop 390x844: major zones do not overlap | conversation and reader bounds
 PASS | drop 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (891px page)
 PASS | drop 390x844: body and evidence copy >=16px | checked 4 visible body/evidence text nodes
 PASS | drop 390x844: interactive citation target >=44px | checked 0 visible links
-PASS | drop 390x844: visible control target boxes >=44px | checked 4 shell/citation targets
+PASS | drop 390x844: visible control target boxes >=44px | checked 1 shell/citation targets
 PASS | drop 390x844: visible document assets loaded | 0 visible local images loaded
 PASS | drop 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | drop 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
 PASS | drop 390x844: empty desk shown | emptyDocumentOutline=true
+PASS | drop 390x844: empty reader has no stale document identity or page controls | {"title":"","subtitle":"","pageCount":"","identityHidden":true,"controlsHidden":true}
+PASS | drop 390x844: status describes the answer model | visible status="Model ready"; expected="Model ready"
 PASS | drop 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | drop 390x844: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | reading 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -62,6 +68,7 @@ PASS | reading 1440x900: visible control target boxes >=44px | checked 4 shell/c
 PASS | reading 1440x900: visible document assets loaded | 6 visible local images loaded
 PASS | reading 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | reading 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | reading 1440x900: status describes the answer model | visible status="Model ready"; expected="Model ready"
 PASS | reading 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | reading 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | reading 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -77,6 +84,7 @@ PASS | reading 1024x768: visible control target boxes >=44px | checked 4 shell/c
 PASS | reading 1024x768: visible document assets loaded | 6 visible local images loaded
 PASS | reading 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | reading 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | reading 1024x768: status describes the answer model | visible status="Model ready"; expected="Model ready"
 PASS | reading 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | reading 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | reading 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -92,6 +100,7 @@ PASS | reading 390x844: visible control target boxes >=44px | checked 4 shell/ci
 PASS | reading 390x844: visible document assets loaded | 6 visible local images loaded
 PASS | reading 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | reading 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
+PASS | reading 390x844: status describes the answer model | visible status="Model ready"; expected="Model ready"
 PASS | reading 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | reading 390x844: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | answered 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -107,11 +116,17 @@ PASS | answered 1440x900: visible control target boxes >=44px | checked 7 shell/
 PASS | answered 1440x900: visible document assets loaded | 9 visible local images loaded
 PASS | answered 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | answered 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | answered 1440x900: hover/focus leader and evidence highlight | mode=pointer hover; leader=true; highlighted lines=3
+PASS | answered 1440x900: hover/focus leader and evidence highlight | mode=pointer hover; leader=true; active highlighted lines=2
 PASS | answered 1440x900: leader removed after pointer leaves | lineVisible=false
 PASS | answered 1440x900: keyboard focus shows leader | focusedAnswerSentence=true; leader=true
 PASS | answered 1440x900: keyboard focus ring visible | outline=2px rgb(215, 255, 58)
 PASS | answered 1440x900: leader removed after keyboard leaves sentence | lineVisible=false
+PASS | answered 1440x900: claims map to distinct source passages | [{"id":"link-caption","label":"1 · p.02","page":"2","marks":2,"passage":"A rock outcrop called Link shows signs of being formed by the deposition of water."},{"id":"stream-flow","label":"2 · p.02","page":"2","marks":3,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site."},{"id":"john-klein-water","label":"3 · p.02","page":"2","marks":4,"passage":"first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,"}]
+PASS | answered 1440x900: highlight bounds match verified PDF coordinates | page-2 highlight boxes match the independently extracted Poppler point bounds
+PASS | answered 1440x900: link-caption selects its own highlight and leader endpoint | {"activeTarget":"link-caption","lineTarget":"link-caption","sourceTarget":"link-caption","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[250.921875,393.84375,517.8515625,393.84375,517.8515625,327.1953125,784.78125,327.1953125],"anchorBounds":{"left":784.78125,"right":994.140625,"top":322.671875,"bottom":331.71875},"pageAreaBounds":{"left":615.390625,"right":1414.984375,"top":130,"bottom":832},"endpointError":0,"mobile":null}
+PASS | answered 1440x900: stream-flow selects its own highlight and leader endpoint | {"activeTarget":"stream-flow","lineTarget":"stream-flow","sourceTarget":"stream-flow","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[450.078125,468.84375,616.734375,468.84375,616.734375,653.453125,783.390625,653.453125],"anchorBounds":{"left":783.390625,"right":986.984375,"top":648.21875,"bottom":658.6875},"pageAreaBounds":{"left":615.390625,"right":1414.984375,"top":130,"bottom":832},"endpointError":0,"mobile":null}
+PASS | answered 1440x900: john-klein-water selects its own highlight and leader endpoint | {"activeTarget":"john-klein-water","lineTarget":"john-klein-water","sourceTarget":"john-klein-water","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[105.8125,567.84375,564.3203125,567.84375,564.3203125,258.78125,1022.828125,258.78125],"anchorBounds":{"left":1022.828125,"right":1240.1875,"top":253.546875,"bottom":264.015625},"pageAreaBounds":{"left":615.390625,"right":1414.984375,"top":130,"bottom":832},"endpointError":0,"mobile":null}
+PASS | answered 1440x900: status describes the answer model | visible status="Model ready"; expected="Model ready"
 PASS | answered 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | answered 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | answered 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -127,11 +142,17 @@ PASS | answered 1024x768: visible control target boxes >=44px | checked 7 shell/
 PASS | answered 1024x768: visible document assets loaded | 9 visible local images loaded
 PASS | answered 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | answered 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | answered 1024x768: hover/focus leader and evidence highlight | mode=pointer hover; leader=true; highlighted lines=3
+PASS | answered 1024x768: hover/focus leader and evidence highlight | mode=pointer hover; leader=true; active highlighted lines=2
 PASS | answered 1024x768: leader removed after pointer leaves | lineVisible=false
 PASS | answered 1024x768: keyboard focus shows leader | focusedAnswerSentence=true; leader=true
 PASS | answered 1024x768: keyboard focus ring visible | outline=2px rgb(215, 255, 58)
 PASS | answered 1024x768: leader removed after keyboard leaves sentence | lineVisible=false
+PASS | answered 1024x768: claims map to distinct source passages | [{"id":"link-caption","label":"1 · p.02","page":"2","marks":2,"passage":"A rock outcrop called Link shows signs of being formed by the deposition of water."},{"id":"stream-flow","label":"2 · p.02","page":"2","marks":3,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site."},{"id":"john-klein-water","label":"3 · p.02","page":"2","marks":4,"passage":"first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,"}]
+PASS | answered 1024x768: highlight bounds match verified PDF coordinates | page-2 highlight boxes match the independently extracted Poppler point bounds
+PASS | answered 1024x768: link-caption selects its own highlight and leader endpoint | {"activeTarget":"link-caption","lineTarget":"link-caption","sourceTarget":"link-caption","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[346.90625,309.65625,437.4921875,309.65625,437.4921875,288.5234375,528.078125,288.5234375],"anchorBounds":{"left":528.078125,"right":699.5625,"top":284.8125,"bottom":292.234375},"pageAreaBounds":{"left":426.59375,"right":1006.984375,"top":127,"bottom":702},"endpointError":0,"mobile":null}
+PASS | answered 1024x768: stream-flow selects its own highlight and leader endpoint | {"activeTarget":"stream-flow","lineTarget":"stream-flow","sourceTarget":"stream-flow","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[208.15625,408.65625,367.5390625,408.65625,367.5390625,555.7578125,526.921875,555.7578125],"anchorBounds":{"left":526.921875,"right":693.671875,"top":551.46875,"bottom":560.046875},"pageAreaBounds":{"left":426.59375,"right":1006.984375,"top":127,"bottom":702},"endpointError":0,"mobile":null}
+PASS | answered 1024x768: john-klein-water selects its own highlight and leader endpoint | {"activeTarget":"john-klein-water","lineTarget":"john-klein-water","sourceTarget":"john-klein-water","targetVisible":true,"lineVisible":true,"route":"direct","routeNumbers":[97.8125,531.65625,410.4296875,531.65625,410.4296875,232.4921875,723.046875,232.4921875],"anchorBounds":{"left":723.046875,"right":901.078125,"top":228.203125,"bottom":236.78125},"pageAreaBounds":{"left":426.59375,"right":1006.984375,"top":127,"bottom":702},"endpointError":0,"mobile":null}
+PASS | answered 1024x768: status describes the answer model | visible status="Model ready"; expected="Model ready"
 PASS | answered 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | answered 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | answered 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -140,18 +161,27 @@ PASS | answered 390x844: no browser exceptions | no page errors
 PASS | answered 390x844: no horizontal overflow | scrollWidth=390px, viewport=390px
 PASS | answered 390x844: proof-render layout shift | CLS=0
 PASS | answered 390x844: major zones do not overlap | conversation and reader bounds are disjoint
-PASS | answered 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (1267px page)
+PASS | answered 390x844: major layout bounds and mobile scroll access | no horizontal escape; reader remains in vertical document flow (1289px page)
 PASS | answered 390x844: body and evidence copy >=16px | checked 7 visible body/evidence text nodes
 PASS | answered 390x844: interactive citation target >=44px | checked 3 visible links
 PASS | answered 390x844: visible control target boxes >=44px | checked 7 shell/citation targets
 PASS | answered 390x844: visible document assets loaded | 9 visible local images loaded
 PASS | answered 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | answered 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | answered 390x844: hover/focus leader and evidence highlight | mode=keyboard focus; leader=true; highlighted lines=3
+PASS | answered 390x844: hover/focus leader and evidence highlight | mode=keyboard focus; leader=true; active highlighted lines=2
 N/A | answered 390x844: pointer hover on touch viewport | touch viewport has no hover input; keyboard focus and dismissal are tested below
 PASS | answered 390x844: keyboard focus shows leader | focusedAnswerSentence=true; leader=true
 PASS | answered 390x844: keyboard focus ring visible | outline=2px rgb(215, 255, 58)
 PASS | answered 390x844: leader removed after keyboard leaves sentence | lineVisible=false
+PASS | answered 390x844: claims map to distinct source passages | [{"id":"link-caption","label":"1 · p.02","page":"2","marks":2,"passage":"A rock outcrop called Link shows signs of being formed by the deposition of water."},{"id":"stream-flow","label":"2 · p.02","page":"2","marks":3,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site."},{"id":"john-klein-water","label":"3 · p.02","page":"2","marks":4,"passage":"first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,"}]
+PASS | answered 390x844: highlight bounds match verified PDF coordinates | page-2 highlight boxes match the independently extracted Poppler point bounds
+PASS | answered 390x844: link-caption selects its own highlight and leader endpoint | {"activeTarget":"link-caption","lineTarget":"link-caption","sourceTarget":"link-caption","targetVisible":true,"lineVisible":true,"route":"mobile-gutter","routeNumbers":[336.90625,267.46875,384,781.249755859375,352],"anchorBounds":{"left":69.484375,"right":352,"top":775.140380859375,"bottom":787.359130859375},"pageAreaBounds":{"left":12,"right":378,"top":738.5,"bottom":968.5},"endpointError":0,"mobile":{"anchorInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}}
+PASS | answered 390x844: link-caption mobile connector clears content and passage is readable | {"anchorInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}
+PASS | answered 390x844: stream-flow selects its own highlight and leader endpoint | {"activeTarget":"stream-flow","lineTarget":"stream-flow","sourceTarget":"stream-flow","targetVisible":true,"lineVisible":true,"route":"mobile-gutter","routeNumbers":[198.15625,360.25,384,781.25,352],"anchorBounds":{"left":77.265625,"right":352,"top":774.1875,"bottom":788.3125},"pageAreaBounds":{"left":12,"right":378,"top":738.5,"bottom":968.5},"endpointError":0,"mobile":{"anchorInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}}
+PASS | answered 390x844: stream-flow mobile connector clears content and passage is readable | {"anchorInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}
+PASS | answered 390x844: john-klein-water selects its own highlight and leader endpoint | {"activeTarget":"john-klein-water","lineTarget":"john-klein-water","sourceTarget":"john-klein-water","targetVisible":true,"lineVisible":true,"route":"mobile-gutter","routeNumbers":[87.8125,475.421875,384,781.249755859375,352.0000305175781],"anchorBounds":{"left":58.671905517578125,"right":352.0000305175781,"top":774.187255859375,"bottom":788.312255859375},"pageAreaBounds":{"left":12,"right":378,"top":738.5,"bottom":968.5},"endpointError":0,"mobile":{"anchorInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}}
+PASS | answered 390x844: john-klein-water mobile connector clears content and passage is readable | {"anchorInViewport":true,"answerAndFigureVisible":true,"sourceStartMatchesChip":true,"gutterOutsideAnswerAndFigure":true,"shortFinalGutter":true}
+PASS | answered 390x844: status describes the answer model | visible status="Model ready"; expected="Model ready"
 PASS | answered 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | answered 390x844: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | model-missing 1440x900: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -167,7 +197,8 @@ PASS | model-missing 1440x900: visible control target boxes >=44px | checked 4 s
 PASS | model-missing 1440x900: visible document assets loaded | 6 visible local images loaded
 PASS | model-missing 1440x900: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | model-missing 1440x900: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | model-missing 1440x900: missing model preserves source without fake answer | answers=0; page=true; figure=true; highlight=true
+PASS | model-missing 1440x900: missing model preserves the verified source without a fake answer | {"answers":0,"page":true,"figure":true,"targetVisible":true,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.","marks":3,"marksInMobileReader":true,"leaderHidden":true}
+PASS | model-missing 1440x900: status describes the answer model | visible status="Ollama unavailable"; expected="Ollama unavailable"
 PASS | model-missing 1440x900: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | model-missing 1440x900: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | model-missing 1024x768: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -183,7 +214,8 @@ PASS | model-missing 1024x768: visible control target boxes >=44px | checked 4 s
 PASS | model-missing 1024x768: visible document assets loaded | 6 visible local images loaded
 PASS | model-missing 1024x768: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | model-missing 1024x768: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | model-missing 1024x768: missing model preserves source without fake answer | answers=0; page=true; figure=true; highlight=true
+PASS | model-missing 1024x768: missing model preserves the verified source without a fake answer | {"answers":0,"page":true,"figure":true,"targetVisible":true,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.","marks":3,"marksInMobileReader":true,"leaderHidden":true}
+PASS | model-missing 1024x768: status describes the answer model | visible status="Ollama unavailable"; expected="Ollama unavailable"
 PASS | model-missing 1024x768: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | model-missing 1024x768: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | model-missing 390x844: same-origin requests | all browser requests used http://127.0.0.1:8765
@@ -199,7 +231,8 @@ PASS | model-missing 390x844: visible control target boxes >=44px | checked 4 sh
 PASS | model-missing 390x844: visible document assets loaded | 6 visible local images loaded
 PASS | model-missing 390x844: bundled fonts loaded | IBM Plex Sans=true; IBM Plex Mono=true
 PASS | model-missing 390x844: no proof disclaimer in visible UI | none of the restricted terms appear in rendered UI text
-PASS | model-missing 390x844: missing model preserves source without fake answer | answers=0; page=true; figure=true; highlight=true
+PASS | model-missing 390x844: missing model preserves the verified source without a fake answer | {"answers":0,"page":true,"figure":true,"targetVisible":true,"passage":"The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.","marks":3,"marksInMobileReader":true,"leaderHidden":true}
+PASS | model-missing 390x844: status describes the answer model | visible status="Ollama unavailable"; expected="Ollama unavailable"
 PASS | model-missing 390x844: reduced-motion keeps controls/content and removes motion | {"anim":"none","thumbAnim":"none","transition":"0s","pageVisible":true}
 PASS | model-missing 390x844: reduced-motion keeps citation interaction | focused citation leader=true
 PASS | contrast body text on conversation | 13.83:1 (#F0EBDD on #211F19)
@@ -219,5 +252,5 @@ PASS | banned blue primary absent | blue primary pattern=false
 PASS | banned serif hero absent | serif font declaration=false
 PASS | banned numbered stepper absent | stepper markup=false
 
-TOTAL: 216/216 checks passed; failures=0.
+TOTAL: 249/249 checks passed; failures=0.
 Scope: static HTML, local assets, and deterministic UI interactions only. No product API or AI path was exercised.

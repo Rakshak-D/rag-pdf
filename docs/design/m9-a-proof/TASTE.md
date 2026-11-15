@@ -2,10 +2,10 @@
 
 ## If the logo were covered
 
-- **Drop:** The empty, paper-shaped dashed outline sits beside a quiet conversation and document controls, making the blank page itself the invitation to read.
-- **Reading:** A full scanned PDF page occupies the brighter right side while a small contact sheet anchors the conversation to page order.
-- **Answered:** The answer's page chips, matching fluorescent marks on the real rendered page, and the linked figure credit form a visible trail from claim to source.
-- **Model missing:** The NASA page, marked passage and credited figure remain inspectable while a small amber status explains that only local answering is unavailable.
+- **Drop:** The empty, paper-shaped dashed outline sits beside a quiet conversation; the right reader shows no sample title, page count or inactive page controls. The “No PDF open” switch and “Put a PDF here” outline make the empty document state explicit.
+- **Reading:** A full scanned PDF page occupies the brighter right side while a small contact sheet anchors the conversation to page order. The top-bar “Model ready” label names answer-model status rather than local file storage.
+- **Answered:** Numbered claim-specific source chips and distinct fluorescent boxes connect the answer to the Link caption, stream-flow paragraph and John Klein paragraph on the real rendered page. The credited Link figure stays adjacent to the answer, so the screen reads as a page-and-evidence workspace.
+- **Model missing:** The NASA page, selected stream-flow passage and credited figure remain inspectable while the amber “Ollama unavailable” status explains that local answering is unavailable.
 
 ## Design values
 
@@ -17,6 +17,14 @@
 - Evidence links use a 44×44 px hit box while retaining a compact mono label. The reader controls have 44×44 px boxes to keep the shell touch-friendly.
 - This remains a static composition: the question, answer, figure association and source highlight are hard-coded proof states. It does not demonstrate live upload, retrieval, generation, streaming, or production coordinate conversion.
 
+## R1 corrections reviewed
+
+- The prior shared `data-evidence="link"` mapping was the root of the source mismatch: all three sentences selected the same first highlight. Each answer sentence now has its own source ID, exact page-2 passage, numbered chip and Poppler-verified boxes. Hover or focus selects only that target; the leader endpoint is measured against its own first marked line.
+- At 390×844, the selected page crop now preserves the PDF's 612:792 aspect ratio instead of being capped to the short reader viewport. The crop positions the selected passage within the visible reader area. The connector runs from the citation's trailing edge to a narrow outer gutter, then into the target's right edge; it does not cross answer text or the credited figure. The mobile answered capture focuses the John Klein claim and shows its four-line highlighted support with surrounding page text.
+- In `drop`, the reader identity and page controls are hidden and the page counter is empty. The empty paper outline remains the reader focus.
+- The status dot now says “Model ready” in the connected composition and “Ollama unavailable” in the unavailable composition. These are static design states, not runtime health checks.
+- Palette, font families, component spacing and the overall Light Table composition were retained. The mobile crop correction removes a height cap that distorted the page; no new color or decorative treatment was added.
+
 ## Banned-look checklist
 
 | Banned treatment | Result | Evidence |
@@ -26,4 +34,4 @@
 | Gradient background | Absent in the proof CSS. | `assets/reading-desk.css` scan |
 | Centered serif hero | Absent; layout is split and IBM Plex Sans is used. | All four state screenshots |
 | Numbered stepper | Absent. | All four state screenshots |
-| Unresolved visual concern | At 390×844 the conversation remains above the reader; the cited page is zoomed to the highlighted passage in the visible reader window. The full page remains a vertical scroll/viewer responsibility for a later functional implementation. | `shots/*-390.png` |
+| Unresolved visual concern | At 390×844 the conversation remains above the reader; the cited page is cropped to the selected, readable passage in the visible reader window. The static proof does not provide production page scrolling, zoom controls or verified PDF.js coordinate conversion. | `shots/*-390.png` |

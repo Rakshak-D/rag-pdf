@@ -23,6 +23,26 @@ const ratio = (fg, bg) => {
   const a = lum(fg), b = lum(bg);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 };
+const expectedEvidence = [
+  {
+    id: 'link-caption',
+    label: '1 · p.02',
+    passage: 'A rock outcrop called Link shows signs of being formed by the deposition of water.',
+    boxes: [[46.08,217.376,282.285,227.6],[46.08,229.376,74.6919,239.6]],
+  },
+  {
+    id: 'stream-flow',
+    label: '2 · p.02',
+    passage: 'The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.',
+    boxes: [[44.5,584.66,274.202,596.48],[44.5,600.16,286.421,611.98],[44.5,615.66,133.78,627.48]],
+  },
+  {
+    id: 'john-klein-water',
+    label: '3 · p.02',
+    passage: 'first drilled sample, from a rock target called “John Klein,” provided the evidence of conditions favorable for life in Mars’ early history: geological and mineralogical evidence for sustained liquid water,',
+    boxes: [[314.64,139.4,559.882,151.22],[314.64,154.9,547.671,166.72],[314.64,170.4,560.84,182.22],[314.64,185.9,423.73,197.72]],
+  },
+];
 const browser = await chromium.launch({ headless: true, channel: 'chrome' });
 try {
   for (const state of states) {
@@ -62,6 +82,12 @@ try {
           visibleText:document.body.innerText.toLowerCase(),
           pageImage:rect('#page-image'), figure:rect('.figure-card'), highlight:rect('#evidence-highlight'),
           answerCount:document.querySelectorAll('.evidence-sentence').length,
+          readerTitle:document.querySelector('#reader-title')?.textContent.trim(),
+          readerSubtitle:document.querySelector('#reader-subtitle')?.textContent.trim(),
+          readerIdentityHidden:document.querySelector('.reader-identity')?.hidden,
+          readerControlsHidden:document.querySelector('.reader-controls')?.hidden,
+          pageCount:document.querySelector('#page-count')?.textContent.trim(),
+          statusText:document.querySelector('#status-text')?.textContent.trim(),
         };
       });
       record(`${label}: same-origin requests`, external.length === 0, external.length ? external.join(', ') : 'all browser requests used http://127.0.0.1:8765');
@@ -90,8 +116,9 @@ try {
         if (w === 390) await sentence.focus(); else await sentence.hover();
         await page.waitForFunction(() => Number.parseFloat(getComputedStyle(document.querySelector('#leader-line')).opacity) > 0.8);
         const activeLeader = await line.evaluate(el => el.classList.contains('is-visible') && Number.parseFloat(getComputedStyle(el).opacity) > 0.8);
-        const highlightVisible = await page.locator('#evidence-highlight').evaluate(el => !el.hidden && el.querySelectorAll('i').length === 3);
-        record(`${label}: hover/focus leader and evidence highlight`, activeLeader && highlightVisible, `mode=${w === 390 ? 'keyboard focus' : 'pointer hover'}; leader=${activeLeader}; highlighted lines=${await page.locator('#evidence-highlight i').count()}`);
+        const activeMarkCount = await page.locator('#evidence-highlight .evidence-target:not([hidden]) i').count();
+        const highlightVisible = await page.locator('#evidence-highlight').evaluate(el => !el.hidden && el.querySelectorAll('.evidence-target:not([hidden])').length === 1);
+        record(`${label}: hover/focus leader and evidence highlight`, activeLeader && highlightVisible, `mode=${w === 390 ? 'keyboard focus' : 'pointer hover'}; leader=${activeLeader}; active highlighted lines=${activeMarkCount}`);
         if (w !== 390) {
           await page.mouse.move(5, h - 5);
           await page.waitForTimeout(280);
@@ -108,21 +135,121 @@ try {
         record(`${label}: keyboard focus shows leader`, keyboardVisible, `focusedAnswerSentence=${focused || await page.evaluate(() => document.activeElement?.classList.contains('evidence-sentence'))}; leader=${keyboardVisible}`);
         const visibleFocus = await sentence.evaluate(el => getComputedStyle(el).outlineStyle !== 'none' && parseFloat(getComputedStyle(el).outlineWidth) >= 2);
         record(`${label}: keyboard focus ring visible`, visibleFocus, `outline=${await sentence.evaluate(el => getComputedStyle(el).outlineWidth)} ${await sentence.evaluate(el => getComputedStyle(el).outlineColor)}`);
-        await page.keyboard.press('Tab');
-        const focusStayedWithin = await page.evaluate(() => !!document.activeElement?.closest('.evidence-sentence'));
-        if (focusStayedWithin) await page.keyboard.press('Tab');
+        await page.evaluate(() => { const composer = document.querySelector('.composer-box'); composer.setAttribute('tabindex','-1'); composer.focus(); });
         await page.waitForTimeout(280);
         const keyboardRemoved = await line.evaluate(el => !el.classList.contains('is-visible') || getComputedStyle(el).opacity === '0');
         record(`${label}: leader removed after keyboard leaves sentence`, keyboardRemoved, `lineVisible=${!keyboardRemoved}`);
+
+        const mappings = await page.locator('.evidence-sentence').evaluateAll((nodes, expected) => {
+          const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
+          return nodes.map(node => {
+            const id = node.dataset.evidenceTarget;
+            const target = [...document.querySelectorAll('.evidence-target')].find(item => item.dataset.evidenceTarget === id);
+            const chip = node.querySelector('.source-chip');
+            const text = chip ? [...chip.childNodes].find(item => item.nodeType === Node.TEXT_NODE)?.textContent.trim() : '';
+            const marks = [...(target?.querySelectorAll('i') || [])];
+            const boxes = marks.map(mark => (mark.dataset.pdfBox || '').split(',').map(Number));
+            const geometry = marks.map(mark => {
+              const [x0,y0,x1,y1] = (mark.dataset.pdfBox || '').split(',').map(Number);
+              return [parseFloat(mark.style.left) * 6.12, parseFloat(mark.style.top) * 7.92, (parseFloat(mark.style.left) + parseFloat(mark.style.width)) * 6.12, (parseFloat(mark.style.top) + parseFloat(mark.style.height)) * 7.92, x0,y0,x1,y1];
+            });
+            return { id, label:text, href:chip?.getAttribute('href'), page:target?.dataset.page, passage:normalize(target?.dataset.sourcePassage), marks:marks.length, boxes, geometry, expected:expected.find(item => item.id === id) || null };
+          });
+        }, expectedEvidence);
+        const mappedClaims = mappings.length === expectedEvidence.length && mappings.every((item, index) => item.expected && item.id === item.expected.id && item.label === item.expected.label && item.href === `#evidence-target-${item.id}` && item.page === '2' && item.passage === item.expected.passage && item.marks === item.expected.boxes.length);
+        record(`${label}: claims map to distinct source passages`, mappedClaims, JSON.stringify(mappings.map(({id,label,page,marks,passage}) => ({id,label,page,marks,passage}))));
+        const coordinateErrors = mappings.flatMap(item => item.geometry.flatMap((box, markIndex) => {
+          const expected = item.expected?.boxes[markIndex];
+          return !expected || box.some((value, index) => Math.abs(value - expected[index]) > 0.12) ? [{id:item.id, mark:markIndex, actual:box, expected}] : [];
+        }));
+        record(`${label}: highlight bounds match verified PDF coordinates`, mappings.length === expectedEvidence.length && coordinateErrors.length === 0, coordinateErrors.length ? JSON.stringify(coordinateErrors) : 'page-2 highlight boxes match the independently extracted Poppler point bounds');
+
+        for (const expected of expectedEvidence) {
+          const claim = page.locator(`.evidence-sentence[data-evidence-target="${expected.id}"]`);
+          if (await claim.count() !== 1) {
+            record(`${label}: ${expected.id} selects its own highlight and leader endpoint`, false, 'expected one claim with this evidence identity; none was mapped');
+            if (w === 390) record(`${label}: ${expected.id} mobile connector clears content and passage is readable`, false, 'claim-specific source target is missing');
+            continue;
+          }
+          if (w === 390) await claim.focus(); else await claim.hover();
+          await page.waitForFunction(id => {
+            const path = document.querySelector('#leader-line');
+            const target = [...document.querySelectorAll('.evidence-target')].find(item => item.dataset.evidenceTarget === id);
+            const anchor = target?.querySelector('[data-leader-anchor]');
+            const rect = anchor?.getBoundingClientRect();
+            const numbers = (path?.getAttribute('d') || '').match(/-?(?:\d+\.?\d*|\.\d+)/g)?.map(Number) || [];
+            if (document.querySelector('#evidence-highlight')?.dataset.activeTarget !== id || path?.dataset.targetId !== id || !path?.classList.contains('is-visible') || !rect || numbers.length < 2) return false;
+            const end = path.dataset.route === 'mobile-gutter' ? [numbers[4],numbers[3]] : numbers.slice(-2);
+            return Math.hypot(end[0] - (path.dataset.route === 'mobile-gutter' ? rect.right : rect.left), end[1] - (rect.top + rect.height / 2)) < 2;
+          }, expected.id);
+          const linkState = await page.evaluate(id => {
+            const sentence = document.querySelector(`.evidence-sentence[data-evidence-target="${id}"]`);
+            const chip = sentence?.querySelector('.source-chip');
+            const target = [...document.querySelectorAll('.evidence-target')].find(item => item.dataset.evidenceTarget === id);
+            const anchor = target?.querySelector('[data-leader-anchor]');
+            const path = document.querySelector('#leader-line');
+            const nums = (path?.getAttribute('d') || '').match(/-?(?:\d+\.?\d*|\.\d+)/g)?.map(Number) || [];
+            const end = path?.dataset.route === 'mobile-gutter' ? [nums[4],nums[3]] : nums.slice(-2);
+            const chipRect = chip?.getBoundingClientRect();
+            const anchorRect = anchor?.getBoundingClientRect();
+            const pageArea = document.querySelector('.page-area')?.getBoundingClientRect();
+            const figure = document.querySelector('.figure-card')?.getBoundingClientRect();
+            const sentenceRect = sentence?.getBoundingClientRect();
+            const visibleTargets = [...document.querySelectorAll('.evidence-target')].filter(item => !item.hidden).length;
+            const marks = [...(target?.querySelectorAll('i') || [])].map(item => item.getBoundingClientRect());
+            return {
+              activeTarget:document.querySelector('#evidence-highlight')?.dataset.activeTarget,
+              lineTarget:path?.dataset.targetId,
+              sourceTarget:chip?.dataset.sourceId,
+              targetVisible:!!target && !target.hidden && visibleTargets === 1,
+              lineVisible:path?.classList.contains('is-visible'),
+              route:path?.dataset.route,
+              routeNumbers:nums,
+              anchorBounds:anchorRect && {left:anchorRect.left,right:anchorRect.right,top:anchorRect.top,bottom:anchorRect.bottom},
+              pageAreaBounds:pageArea && {left:pageArea.left,right:pageArea.right,top:pageArea.top,bottom:pageArea.bottom},
+              endpointError:anchorRect && end.length === 2 ? Math.hypot(end[0] - (innerWidth <= 640 ? anchorRect.right : anchorRect.left), end[1] - (anchorRect.top + anchorRect.height / 2)) : Infinity,
+              mobile:innerWidth <= 640 ? {
+                anchorInViewport:!!anchorRect && anchorRect.left >= -1 && anchorRect.right <= innerWidth + 1 && marks.length > 0 && marks.every(rect => rect.top >= Math.max(0,pageArea.top) - 1 && rect.bottom <= innerHeight + 1),
+                answerAndFigureVisible:!!sentenceRect && sentenceRect.top >= 0 && sentenceRect.bottom <= innerHeight && !!figure && figure.top >= 0 && figure.bottom <= innerHeight,
+                sourceStartMatchesChip:chipRect && nums.length === 5 && Math.abs(nums[0] - chipRect.right) < 2 && Math.abs(nums[1] - (chipRect.top + chipRect.height / 2)) < 2,
+                gutterOutsideAnswerAndFigure:nums.length === 5 && nums[2] > Math.max(sentence?.closest('.answer')?.getBoundingClientRect().right || 0, figure?.right || 0),
+                shortFinalGutter:nums.length === 5 && nums[2] - nums[4] <= 42,
+              } : null,
+            };
+          }, expected.id);
+          const linkMatches = linkState.activeTarget === expected.id && linkState.lineTarget === expected.id && linkState.sourceTarget === expected.id && linkState.targetVisible && linkState.lineVisible && linkState.endpointError < 2;
+          record(`${label}: ${expected.id} selects its own highlight and leader endpoint`, linkMatches, JSON.stringify(linkState));
+          if (w === 390) {
+            const mobile = linkState.mobile || {};
+            const mobileOk = linkState.route === 'mobile-gutter' && mobile.anchorInViewport && mobile.answerAndFigureVisible && mobile.sourceStartMatchesChip && mobile.gutterOutsideAnswerAndFigure && mobile.shortFinalGutter;
+            record(`${label}: ${expected.id} mobile connector clears content and passage is readable`, mobileOk, JSON.stringify(mobile));
+          }
+        }
       }
       if (state === 'model-missing') {
-        const present = metrics.answerCount === 0 && !!metrics.pageImage && !!metrics.figure && !!metrics.highlight;
-        record(`${label}: missing model preserves source without fake answer`, present, `answers=${metrics.answerCount}; page=${!!metrics.pageImage}; figure=${!!metrics.figure}; highlight=${!!metrics.highlight}`);
+        const sourceState = await page.evaluate(() => {
+          const target = document.querySelector('.evidence-target[data-evidence-target="stream-flow"]');
+          const area = document.querySelector('.page-area').getBoundingClientRect();
+          const marks = [...(target?.querySelectorAll('i') || [])].map(mark => mark.getBoundingClientRect());
+          return {
+            targetVisible:!!target && !target.hidden && document.querySelector('#evidence-highlight')?.dataset.activeTarget === 'stream-flow',
+            passage:target?.dataset.sourcePassage || '',
+            marks:marks.length,
+            marksInMobileReader:innerWidth !== 390 || marks.length === 3 && marks.every(mark => mark.top >= Math.max(0,area.top) - 1 && mark.bottom <= innerHeight + 1),
+            leaderHidden:!document.querySelector('#leader-line')?.classList.contains('is-visible'),
+          };
+        });
+        const present = metrics.answerCount === 0 && !!metrics.pageImage && !!metrics.figure && !!metrics.highlight && sourceState.targetVisible && sourceState.passage.includes('evidence for stream flow') && sourceState.marks === 3 && sourceState.marksInMobileReader && sourceState.leaderHidden;
+        record(`${label}: missing model preserves the verified source without a fake answer`, present, JSON.stringify({answers:metrics.answerCount,page:!!metrics.pageImage,figure:!!metrics.figure,...sourceState}));
       }
       if (state === 'drop') {
         const empty = await page.locator('#empty-desk').isVisible();
         record(`${label}: empty desk shown`, empty, `emptyDocumentOutline=${empty}`);
+        const staleSource = !!metrics.readerTitle || !!metrics.readerSubtitle || !!metrics.pageCount || !metrics.readerIdentityHidden || !metrics.readerControlsHidden;
+        record(`${label}: empty reader has no stale document identity or page controls`, !staleSource, JSON.stringify({title:metrics.readerTitle,subtitle:metrics.readerSubtitle,pageCount:metrics.pageCount,identityHidden:metrics.readerIdentityHidden,controlsHidden:metrics.readerControlsHidden}));
       }
+      const expectedStatus = state === 'model-missing' ? 'Ollama unavailable' : 'Model ready';
+      record(`${label}: status describes the answer model`, metrics.statusText === expectedStatus, `visible status=${JSON.stringify(metrics.statusText)}; expected=${JSON.stringify(expectedStatus)}`);
       const reducePage = await browser.newPage({ viewport:{width:w,height:h}, reducedMotion:'reduce' });
       await reducePage.goto(`${base}?state=answered`, { waitUntil:'networkidle' });
       const reduced = await reducePage.evaluate(() => {
@@ -177,7 +304,8 @@ try {
   const jsOpen = htmlContent.indexOf('<script>');
   const jsClose = htmlContent.indexOf('</script>',jsOpen);
   const jsSource = htmlContent.slice(jsOpen + 8,jsClose);
-  const jsGeometryMotion = ['.style.left','.style.top','.style.width','.style.height','.animate({'].filter(token => jsSource.includes(token));
+  const jsAnimationCalls = jsSource.match(/\.animate\s*\([\s\S]*?\)/g) || [];
+  const jsGeometryMotion = jsAnimationCalls.filter(call => geometry.some(property => call.toLowerCase().includes(property)));
   const motionProblems = [...transitionGeometry.map(item => `${item.property}:${item.value}`), ...keyframeGeometry, ...jsGeometryMotion];
   const hasGradient = css.toLowerCase().includes('gradient(');
   const lowerCss = css.toLowerCase();

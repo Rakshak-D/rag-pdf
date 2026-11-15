@@ -19,6 +19,8 @@ Open one of these local URLs:
 
 All document images, fonts, styles and scripts are local to this directory. No application services or models are needed.
 
+In the answered state, each numbered source chip selects a separate verified passage on page 2: the Link caption, the stream-flow paragraph or the John Klein drilling paragraph. On narrow screens, the reader crops around the selected source and routes its leader through the outer gutter. The `drop` state has no sample title, page count or page controls. “Model ready” and “Ollama unavailable” are static composition states, not live service checks.
+
 ## Evidence
 
-`shots/` contains full-viewport browser captures at 1440×900, 1024×768 and 390×844. `CHECK-RESULTS.txt` records proof-level automated checks. `CREDITS.md` records the source material and font licenses. `TASTE.md` records the visual review and deviations from the Light Table design bible.
+`shots/` contains full-viewport browser captures at 1440×900, 1024×768 and 390×844. In the answered captures, those widths focus the caption, stream-flow and John Klein claims respectively. `CHECK-RESULTS.txt` records proof-level automated checks. `CREDITS.md` records the claim-to-passage coordinates, source material and font licenses. `TASTE.md` records the visual review and deviations from the Light Table design bible.
