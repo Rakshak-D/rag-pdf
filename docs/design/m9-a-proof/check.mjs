@@ -8,7 +8,7 @@ const root = path.resolve('docs/design/m9-a-proof');
 const base = 'http://127.0.0.1:8765/proof-static-not-functional.html';
 const viewports = [{ w: 1440, h: 900 }, { w: 1024, h: 768 }, { w: 390, h: 844 }];
 const states = ['drop', 'reading', 'answered', 'model-missing'];
-const lines = ['M9-A static proof verification', 'Classification: PASS_SYNTHETIC applies only to the rendered HTML composition and local interaction checks; no backend, retrieval, or generation was tested.', ''];
+const lines = ['M9-A static proof verification', 'Browser: Playwright-managed Chrome channel, headless', 'Classification: PASS_SYNTHETIC applies only to the rendered HTML composition and local interaction checks; no backend, retrieval, or generation was tested.', ''];
 let failures = 0;
 const record = (name, pass, detail) => {
   lines.push(`${pass ? 'PASS' : 'FAIL'} | ${name} | ${detail}`);
@@ -208,22 +208,62 @@ try {
               anchorBounds:anchorRect && {left:anchorRect.left,right:anchorRect.right,top:anchorRect.top,bottom:anchorRect.bottom},
               pageAreaBounds:pageArea && {left:pageArea.left,right:pageArea.right,top:pageArea.top,bottom:pageArea.bottom},
               endpointError:anchorRect && end.length === 2 ? Math.hypot(end[0] - (innerWidth <= 640 ? anchorRect.right : anchorRect.left), end[1] - (anchorRect.top + anchorRect.height / 2)) : Infinity,
-              mobile:innerWidth <= 640 ? {
-                anchorInViewport:!!anchorRect && anchorRect.left >= -1 && anchorRect.right <= innerWidth + 1 && marks.length > 0 && marks.every(rect => rect.top >= Math.max(0,pageArea.top) - 1 && rect.bottom <= innerHeight + 1),
-                answerAndFigureVisible:!!sentenceRect && sentenceRect.top >= 0 && sentenceRect.bottom <= innerHeight && !!figure && figure.top >= 0 && figure.bottom <= innerHeight,
-                sourceStartMatchesChip:chipRect && nums.length === 5 && Math.abs(nums[0] - chipRect.right) < 2 && Math.abs(nums[1] - (chipRect.top + chipRect.height / 2)) < 2,
-                gutterOutsideAnswerAndFigure:nums.length === 5 && nums[2] > Math.max(sentence?.closest('.answer')?.getBoundingClientRect().right || 0, figure?.right || 0),
-                shortFinalGutter:nums.length === 5 && nums[2] - nums[4] <= 42,
-              } : null,
+              mobile:innerWidth <= 640 ? (() => {
+                const intersect = (a,b) => ({left:Math.max(a.left,b.left),top:Math.max(a.top,b.top),right:Math.min(a.right,b.right),bottom:Math.min(a.bottom,b.bottom)});
+                const viewport = {left:0,top:0,right:innerWidth,bottom:innerHeight};
+                const reader = document.querySelector('.reader');
+                let clip = intersect(intersect(viewport,reader.getBoundingClientRect()),pageArea);
+                for (let node=document.querySelector('.page-area'); node; node=node.parentElement) {
+                  const style = getComputedStyle(node);
+                  const rect = node.getBoundingClientRect();
+                  if (['hidden','clip','auto','scroll'].includes(style.overflowX)) { clip.left=Math.max(clip.left,rect.left); clip.right=Math.min(clip.right,rect.right); }
+                  if (['hidden','clip','auto','scroll'].includes(style.overflowY)) { clip.top=Math.max(clip.top,rect.top); clip.bottom=Math.min(clip.bottom,rect.bottom); }
+                }
+                const marksBounds = marks.length ? {left:Math.min(...marks.map(rect=>rect.left)),top:Math.min(...marks.map(rect=>rect.top)),right:Math.max(...marks.map(rect=>rect.right)),bottom:Math.max(...marks.map(rect=>rect.bottom))} : null;
+                const sourceChipInViewport=!!chipRect && chipRect.left>=0 && chipRect.right<=innerWidth && chipRect.top>=0 && chipRect.bottom<=innerHeight;
+                return {
+                  clip,
+                  marksBounds,
+                  allMarksInsideEffectiveClip:!!marksBounds && marks.every(rect=>rect.left>=clip.left-1 && rect.right<=clip.right+1 && rect.top>=clip.top-1 && rect.bottom<=clip.bottom+1),
+                  bottomClearance:marksBounds ? clip.bottom-marksBounds.bottom : -Infinity,
+                  contextBefore:marksBounds ? marksBounds.top-clip.top : -Infinity,
+                  sourceChipInViewport,
+                  answerAndFigureVisible:!!sentenceRect && sentenceRect.top>=0 && sentenceRect.bottom<=innerHeight && !!figure && figure.top>=0 && figure.bottom<=innerHeight,
+                  sourceStartMatchesChip:!!chipRect && nums.length===5 && Math.abs(nums[0]-chipRect.right)<2 && Math.abs(nums[1]-(chipRect.top+chipRect.height/2))<2,
+                  gutterOutsideAnswerAndFigure:nums.length===5 && nums[2]>Math.max(sentence?.closest('.answer')?.getBoundingClientRect().right||0,figure?.right||0),
+                  shortFinalGutter:nums.length===5 && nums[2]-nums[4]<=42,
+                };
+              })() : null,
             };
           }, expected.id);
           const linkMatches = linkState.activeTarget === expected.id && linkState.lineTarget === expected.id && linkState.sourceTarget === expected.id && linkState.targetVisible && linkState.lineVisible && linkState.endpointError < 2;
           record(`${label}: ${expected.id} selects its own highlight and leader endpoint`, linkMatches, JSON.stringify(linkState));
           if (w === 390) {
             const mobile = linkState.mobile || {};
-            const mobileOk = linkState.route === 'mobile-gutter' && mobile.anchorInViewport && mobile.answerAndFigureVisible && mobile.sourceStartMatchesChip && mobile.gutterOutsideAnswerAndFigure && mobile.shortFinalGutter;
-            record(`${label}: ${expected.id} mobile connector clears content and passage is readable`, mobileOk, JSON.stringify(mobile));
+            const mobileOk = linkState.route === 'mobile-gutter' && mobile.allMarksInsideEffectiveClip && mobile.bottomClearance >= 20 && mobile.contextBefore >= 12 && mobile.sourceChipInViewport && mobile.answerAndFigureVisible && mobile.sourceStartMatchesChip && mobile.gutterOutsideAnswerAndFigure && mobile.shortFinalGutter;
+            record(`${label}: ${expected.id} full passage fits effective mobile clip with context and 20px trailing clearance`, mobileOk, JSON.stringify(mobile));
           }
+        }
+        if (w === 390) {
+          await page.evaluate(() => window.scrollBy(0, 24));
+          await page.waitForFunction(() => {
+            const path=document.querySelector('#leader-line');
+            const id=document.querySelector('#evidence-highlight')?.dataset.activeTarget;
+            const target=document.querySelector(`.evidence-target[data-evidence-target="${id}"]`);
+            const anchor=target?.querySelector('[data-leader-anchor]')?.getBoundingClientRect();
+            const numbers=(path?.getAttribute('d')||'').match(/-?(?:\d+\.?\d*|\.\d+)/g)?.map(Number)||[];
+            return !!anchor && path?.classList.contains('is-visible') && path.dataset.route==='mobile-gutter' && Math.hypot(numbers[4]-anchor.right,numbers[3]-(anchor.top+anchor.height/2))<2;
+          });
+          const followsScroll=await page.evaluate(()=>{
+            const path=document.querySelector('#leader-line');
+            const id=document.querySelector('#evidence-highlight')?.dataset.activeTarget;
+            const target=document.querySelector(`.evidence-target[data-evidence-target="${id}"]`);
+            const anchor=target?.querySelector('[data-leader-anchor]')?.getBoundingClientRect();
+            const numbers=(path?.getAttribute('d')||'').match(/-?(?:\d+\.?\d*|\.\d+)/g)?.map(Number)||[];
+            return {scrollY:window.scrollY,activeTarget:id,lineTarget:path?.dataset.targetId,route:path?.dataset.route,endpointError:anchor?Math.hypot(numbers[4]-anchor.right,numbers[3]-(anchor.top+anchor.height/2)):Infinity};
+          });
+          record(`${label}: mobile leader stays attached after page scroll`, followsScroll.scrollY>0 && followsScroll.activeTarget==='john-klein-water' && followsScroll.lineTarget==='john-klein-water' && followsScroll.route==='mobile-gutter' && followsScroll.endpointError<2, JSON.stringify(followsScroll));
+          await page.evaluate(() => window.scrollTo(0, 0));
         }
       }
       if (state === 'model-missing') {

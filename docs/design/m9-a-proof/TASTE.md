@@ -25,6 +25,14 @@
 - The status dot now says “Model ready” in the connected composition and “Ollama unavailable” in the unavailable composition. These are static design states, not runtime health checks.
 - Palette, font families, component spacing and the overall Light Table composition were retained. The mobile crop correction removes a height cap that distorted the page; no new color or decorative treatment was added.
 
+## R2 mobile evidence visibility
+
+- **Before:** R1 positioned the first marked line. In the 390×844 browser measurement, the John Klein passage ended at y=843.94 in an effective visible reader clip ending at y=844, leaving only 0.06 px below its final highlighted line. The remainder of its highlighted passage was too close to the viewport edge for comfortable inspection.
+- **After:** The crop now uses the union of every verified mark for the selected claim and positions that complete range inside the intersection of the viewport, reader pane, page area and clipping ancestors. At 390×844, all marks are visible with 22 px below the final mark; space above the first mark is 56.92 px for Link caption, 32.30 px for stream-flow and 13.75 px for John Klein. The source chip stays on screen, and the connector remains in the outer gutter.
+- The original page is still rendered at its 612:792 aspect ratio. The page itself supplies the surrounding context; no replacement passage panel was added. The small mobile crop is the only visual adjustment. Desktop layout and typography remain unchanged.
+- Manual review of `answered-link-caption-390.png`, `answered-stream-flow-390.png` and `answered-390.png` confirmed the complete respective highlights are visible, legible at capture scale, and surrounded by original PDF content. The credited figure remains visible in each capture. Automated coordinates verify clipping and clearance; visual readability is assessed manually.
+- `capture.mjs` now waits until all selected marks are within the effective clip and the minimum clearance is met before capturing the main John Klein mobile state or the two additional focused mobile captures.
+
 ## Banned-look checklist
 
 | Banned treatment | Result | Evidence |
@@ -34,4 +42,4 @@
 | Gradient background | Absent in the proof CSS. | `assets/reading-desk.css` scan |
 | Centered serif hero | Absent; layout is split and IBM Plex Sans is used. | All four state screenshots |
 | Numbered stepper | Absent. | All four state screenshots |
-| Unresolved visual concern | At 390×844 the conversation remains above the reader; the cited page is cropped to the selected, readable passage in the visible reader window. The static proof does not provide production page scrolling, zoom controls or verified PDF.js coordinate conversion. | `shots/*-390.png` |
+| Unresolved visual concern | At 390×844 the conversation remains above the reader; selecting a claim frames its full passage in the visible reader clip. The static proof does not provide production page scrolling, zoom controls or verified PDF.js coordinate conversion. | `shots/answered-*-390.png` |
