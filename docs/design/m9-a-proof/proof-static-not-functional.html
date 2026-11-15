@@ -28,7 +28,8 @@
   <form id="composer" class="composer" aria-label="Question composer">
     <div id="attachment-row" class="attachment-row" hidden>
       <span class="attachment-mark" aria-hidden="true">PDF</span>
-      <span id="attachment-name" class="attachment-name"></span>
+      <span id="attachment-name" class="attachment-name" aria-live="polite"></span>
+      <button id="open-selected-sample" class="open-selected-sample" type="button" hidden>Open sample pages</button>
       <button id="remove-attachment" class="remove-attachment" type="button" aria-label="Remove selected PDF">×</button>
     </div>
     <div class="composer-row">
@@ -79,6 +80,7 @@
     (() => {
       const pageSize = { width: 612, height: 792 };
       const documentKey = "msl-curiosity";
+      const sampleFileIdentity = { name: "mars-science-laboratory.pdf", bytes: 1512372, sha256: "2baee40744fc1c35b3ad015f8672a45710ac6bd9124a4041cfc0d7bfba4e10f6" };
       const sourceList = [
         {
           id: "link-caption", page: 2, number: "1", method: "figure", cited: true,
@@ -126,6 +128,7 @@
       const pdfInput = document.getElementById("pdf-input");
       const attachmentRow = document.getElementById("attachment-row");
       const attachmentName = document.getElementById("attachment-name");
+      const openSelectedSampleButton = document.getElementById("open-selected-sample");
       const citationTriggers = new Map();
       let activeSource = null;
       let activePage = 2;
@@ -245,6 +248,7 @@
             button.type = "button";
             button.addEventListener("click", () => {
               questionInput.value = prompt;
+              composerStatus.textContent = "";
               questionInput.focus();
               resizeComposer();
             });
@@ -261,9 +265,9 @@
         thread.replaceChildren(content);
       };
 
-      const renderAnswered = () => {
+      const renderAnswered = (question = "What does Link tell us about water on ancient Mars?") => {
         const content = make("div", "thread-content answer-content");
-        const user = make("p", "user-message", "What does Link tell us about water on ancient Mars?");
+        const user = make("p", "user-message", question);
         const assistant = make("article", "assistant-message");
         assistant.setAttribute("aria-label", "Answer");
         addClaim(assistant, "The page caption says the Link outcrop shows signs of formation by water.", sourceById.get("link-caption"));
@@ -277,7 +281,7 @@
       const renderState = (state) => {
         document.body.dataset.state = state;
         modelStatus.classList.toggle("is-missing", state === "model-missing");
-        statusLabel.textContent = state === "model-missing" ? "Ollama unavailable" : "Model ready";
+        statusLabel.textContent = state === "model-missing" ? "Ollama unavailable — start Ollama." : "Model ready";
         if (state === "answered-closed" || state === "answered-open" || state === "answered-matches") {
           renderAnswered();
         } else {
@@ -334,7 +338,11 @@
           const last = Math.max(...rects.map((rect) => rect.bottom));
           const usableTop = viewport.top + 14;
           const usableBottom = viewport.bottom - 22;
-          const delta = (first + last) / 2 - (usableTop + usableBottom) / 2;
+          const centerY = (first + last) / 2;
+          const centerX = (Math.min(...rects.map((rect) => rect.left)) + Math.max(...rects.map((rect) => rect.right))) / 2;
+          const delta = centerY - (usableTop + usableBottom) / 2;
+          const deltaX = centerX - (viewport.left + viewport.width / 2);
+          pageViewport.scrollLeft += deltaX;
           pageViewport.scrollTop += delta;
         });
       };
@@ -345,9 +353,10 @@
           const chip = citationTriggers.get(sourceId);
           const rect = chip?.getBoundingClientRect();
           if (!rect) return;
-          const targetTop = sourceId === "link-caption" ? 50 : 90;
+          const conversation = document.getElementById("app");
+          const targetTop = conversation.getBoundingClientRect().top + (sourceId === "link-caption" ? 14 : 30);
           const delta = rect.top - targetTop;
-          if (Math.abs(delta) > 2) window.scrollBy({ top: delta, behavior: "instant" });
+          if (Math.abs(delta) > 2) conversation.scrollTop += delta;
         });
       };
 
@@ -365,6 +374,7 @@
         matchesToggle.hidden = activePage !== 2 || document.body.dataset.state === "model-missing";
         evidenceLayer.hidden = activePage !== 2;
         pageViewport.scrollTop = 0;
+        pageViewport.scrollLeft = 0;
         updateZoom();
       };
 
@@ -372,6 +382,7 @@
         const available = Math.max(180, pageViewport.clientWidth - 24);
         const base = Math.min(520, available);
         pageFrame.style.width = `${Math.round(base * zoom)}px`;
+        pageViewport.classList.toggle("is-zoomed", zoom > 1.01);
       };
 
       const setMatches = (enabled) => {
@@ -397,6 +408,7 @@
         hidePopover();
         activeSource = sourceId;
         focusReturn = citationTriggers.get(sourceId) || document.activeElement;
+        zoom = matchMedia("(max-width: 760px)").matches ? 2.5 : 1;
         setPage(source.page);
         visibleTarget(source.page === 2 ? sourceId : null);
         sheet.hidden = false;
@@ -450,6 +462,26 @@
         });
       };
 
+      const openSelectedSample = () => {
+        if (!selectedFile || openSelectedSampleButton.hidden) return;
+        activeSource = null;
+        focusReturn = openSelectedSampleButton;
+        renderState("reading-progress");
+        setMatches(false);
+        setPage(3);
+        visibleTarget(null);
+        sheet.hidden = false;
+        sheet.setAttribute("aria-hidden", "false");
+        document.body.dataset.pdfOpen = "true";
+        writePreference(true);
+        history.replaceState({}, "", "?state=reading-progress");
+        requestAnimationFrame(() => {
+          sheet.classList.add("is-open");
+          updateZoom();
+          document.getElementById("close-sheet").focus({ preventScroll: true });
+        });
+      };
+
       const initialSheetPreference = readPreference();
       let defaultOpen = ["answered-open","answered-matches","reading-progress"].includes(initialState) || (initialState === "model-missing" && new URLSearchParams(location.search).get("open") === "1");
       if (initialSheetPreference === "open") defaultOpen = true;
@@ -464,6 +496,7 @@
       if (initialState === "answered-open" || initialState === "answered-matches") {
         activeSource = "link-caption";
         visibleTarget(activeSource);
+        if (innerWidth <= 760) zoom = 2.5;
       }
       if (defaultOpen) {
         sheet.hidden = false;
@@ -481,10 +514,10 @@
 
       document.getElementById("close-sheet").addEventListener("click", () => closeSheet(true));
       matchesToggle.addEventListener("click", () => setMatches(!matchState));
-      document.getElementById("zoom-in").addEventListener("click", () => { zoom = Math.min(1.5, zoom + 0.1); updateZoom(); });
-      document.getElementById("zoom-out").addEventListener("click", () => { zoom = Math.max(0.75, zoom - 0.1); updateZoom(); });
-      document.getElementById("zoom-fit").addEventListener("click", () => { zoom = 1; updateZoom(); });
-      window.addEventListener("resize", updateZoom, { passive: true });
+      document.getElementById("zoom-in").addEventListener("click", () => { zoom = Math.min(3, zoom + 0.1); updateZoom(); if (activeSource) positionSelectedPassage(activeSource); });
+      document.getElementById("zoom-out").addEventListener("click", () => { zoom = Math.max(0.75, zoom - 0.1); updateZoom(); if (activeSource) positionSelectedPassage(activeSource); });
+      document.getElementById("zoom-fit").addEventListener("click", () => { zoom = 1; updateZoom(); pageViewport.scrollLeft = 0; pageViewport.scrollTop = 0; });
+      window.addEventListener("resize", () => { updateZoom(); if (activeSource) positionSelectedPassage(activeSource); }, { passive: true });
       window.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && !sheet.hidden) {
           event.preventDefault();
@@ -495,8 +528,20 @@
       });
 
       document.getElementById("attach-button").addEventListener("click", () => pdfInput.click());
-      const selectFile = (file) => {
+      const sha256 = async (file) => {
+        if (!globalThis.crypto?.subtle) return "";
+        const digest = await globalThis.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+        return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+      };
+      let selectionGeneration = 0;
+      const selectFile = async (file) => {
         if (!file) return;
+        const generation = ++selectionGeneration;
+        selectedFile = null;
+        openSelectedSampleButton.hidden = true;
+        attachmentRow.hidden = true;
+        attachmentName.textContent = "";
+        document.body.classList.remove("has-attachment");
         if (!file.name.toLowerCase().endsWith(".pdf") || (file.type && file.type !== "application/pdf")) {
           composerStatus.textContent = "Choose a PDF file.";
           return;
@@ -504,13 +549,27 @@
         selectedFile = file;
         attachmentName.textContent = file.name;
         attachmentRow.hidden = false;
+        document.body.classList.add("has-attachment");
+        openSelectedSampleButton.hidden = true;
         composerStatus.textContent = "";
+        if (file.name === sampleFileIdentity.name && file.size === sampleFileIdentity.bytes) {
+          try {
+            const digest = await sha256(file);
+            if (generation === selectionGeneration && selectedFile === file && digest === sampleFileIdentity.sha256) {
+              openSelectedSampleButton.hidden = false;
+            }
+          } catch { /* An unverified local file remains a filename-only selection. */ }
+        }
       };
       pdfInput.addEventListener("change", () => selectFile(pdfInput.files?.[0]));
+      openSelectedSampleButton.addEventListener("click", openSelectedSample);
       document.getElementById("remove-attachment").addEventListener("click", () => {
         selectedFile = null;
+        selectionGeneration += 1;
         pdfInput.value = "";
         attachmentRow.hidden = true;
+        document.body.classList.remove("has-attachment");
+        openSelectedSampleButton.hidden = true;
         attachmentName.textContent = "";
         document.getElementById("attach-button").focus();
       });
@@ -540,8 +599,19 @@
       });
       composer.addEventListener("submit", (event) => {
         event.preventDefault();
-        if (!questionInput.value.trim()) return;
-        composerStatus.textContent = "Question not sent.";
+        const question = questionInput.value.trim();
+        if (!question) return;
+        if (question === prompts[0]) {
+          renderAnswered(question);
+          document.body.dataset.state = "answered-closed";
+          questionInput.value = "";
+          resizeComposer();
+          composerStatus.textContent = "";
+          history.replaceState({}, "", "?state=answered-closed");
+          document.getElementById("app").scrollTop = 0;
+          return;
+        }
+        composerStatus.textContent = "No sample answer is scripted for this question.";
       });
 
       window.__setProofState = (state) => {

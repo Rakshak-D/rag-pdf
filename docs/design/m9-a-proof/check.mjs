@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 
 const require = createRequire(path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@playwright', 'cli', 'package.json'));
 const { chromium } = require('playwright');
@@ -78,8 +79,43 @@ const visibleClipAndMarks = async (page, sourceId) => page.evaluate((id) => {
   const target = document.querySelector(`.evidence-target[data-evidence-target="${id}"]`);
   const marks = [...(target?.querySelectorAll('.evidence-mark') || [])].map(mark => { const r = mark.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; });
   const union = marks.length ? { top: Math.min(...marks.map(r => r.top)), bottom: Math.max(...marks.map(r => r.bottom)) } : null;
-  return { clip, marks, union, scrollTop: pageViewport.scrollTop, scrollHeight: pageViewport.scrollHeight, clientHeight: pageViewport.clientHeight };
+  const pageFrame = document.querySelector('#page-frame');
+  const image = document.querySelector('#page-image');
+  return {
+    clip, marks, union,
+    scrollTop: pageViewport.scrollTop, scrollLeft: pageViewport.scrollLeft,
+    scrollHeight: pageViewport.scrollHeight, scrollWidth: pageViewport.scrollWidth,
+    clientHeight: pageViewport.clientHeight, clientWidth: pageViewport.clientWidth,
+    frame: pageFrame ? { width: pageFrame.getBoundingClientRect().width, height: pageFrame.getBoundingClientRect().height } : null,
+    image: image ? { naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight, width: image.getBoundingClientRect().width, height: image.getBoundingClientRect().height } : null,
+  };
 }, sourceId);
+
+const answerGlyphsIntersectingComposer = async (page) => page.evaluate(() => {
+  const composer = document.querySelector('#composer')?.getBoundingClientRect();
+  const appNode = document.querySelector('#app');
+  if (!composer || !appNode) return [];
+  const appRect = appNode.getBoundingClientRect();
+  const appClip = { left: appRect.left + appNode.clientLeft, top: appRect.top + appNode.clientTop, right: appRect.left + appNode.clientLeft + appNode.clientWidth, bottom: appRect.top + appNode.clientTop + appNode.clientHeight };
+  const hits = [];
+  for (const paragraph of document.querySelectorAll('.answer-paragraph')) {
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const textNode = walker.currentNode;
+      for (let index = 0; index < textNode.length; index += 1) {
+        const range = document.createRange();
+        range.setStart(textNode, index);
+        range.setEnd(textNode, index + 1);
+        for (const rect of range.getClientRects()) {
+          if (rect.width > 0 && rect.height > 0 && rect.right > composer.left && rect.left < composer.right && rect.bottom > composer.top && rect.top < composer.bottom && rect.right > appClip.left && rect.left < appClip.right && rect.bottom > appClip.top && rect.top < appClip.bottom) {
+            hits.push({ text: textNode.data[index], rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, composerTop: composer.top });
+          }
+        }
+      }
+    }
+  }
+  return hits;
+});
 
 const browser = await chromium.launch({ headless: true, channel: 'chrome' });
 try {
@@ -184,7 +220,7 @@ try {
           record('C15', `${label}: Show matches on exposes on-page sources`, metrics.matchState === 'true' && metrics.visibleTargets.length === 4 && ['words','meaning','figure'].every(method=>metrics.methodLabels.includes(method)), `pressed=${metrics.matchState}; targets=${metrics.visibleTargets.join(',')}; methods=${metrics.methodLabels.join(',')}`);
         }
         if (state === 'model-missing') {
-          record('C1/C2', `${label}: unavailable model does not invent an answer`, metrics.status === 'Ollama unavailable' && metrics.answerCount === 0 && metrics.text.includes('Ollama unavailable'), `status=${metrics.status}; answerParagraphs=${metrics.answerCount}; message=${metrics.text.includes('Ollama unavailable')}`);
+          record('F1-F', `${label}: unavailable-model line names the local corrective action`, metrics.status === 'Ollama unavailable — start Ollama.' && metrics.answerCount === 0 && metrics.text.includes('Ollama unavailable') && metrics.text.includes('start Ollama'), `status=${JSON.stringify(metrics.status)}; answerParagraphs=${metrics.answerCount}; message=${metrics.text.includes('Ollama unavailable') && metrics.text.includes('start Ollama')}`);
         }
         if (state === 'reading-progress') record('C4', `${label}: reading page and progress strip visible`, metrics.pageImage === 'assets/pages/page-03.png' && !metrics.sheetHidden, `page image=${metrics.pageImage}; page=${metrics.page}`);
         await session.context.close();
@@ -193,6 +229,70 @@ try {
         if (session) await session.context.close().catch(() => undefined);
       }
     }
+  }
+
+  // Corrective gate: actual answer glyphs may never sit underneath the fixed composer.
+  {
+    const session = await makePage(browser, `${entry}?state=answered-closed`, { w: 1024, h: 768 });
+    const { page } = session;
+    const initialHits = await answerGlyphsIntersectingComposer(page);
+    const initialScroll = await page.evaluate(() => ({ appTop: document.querySelector('#app').scrollTop, appMax: document.querySelector('#app').scrollHeight - document.querySelector('#app').clientHeight }));
+    record('F1-A', '1024px answer text does not intersect the fixed composer on arrival', initialHits.length === 0, `overlappingGlyphs=${initialHits.length}; first=${JSON.stringify(initialHits[0] || null)}; appScroll=${JSON.stringify(initialScroll)}`);
+    await page.evaluate(() => { const app = document.querySelector('#app'); app.scrollTop = app.scrollHeight; });
+    await page.waitForTimeout(50);
+    const finalLine = await page.evaluate(() => {
+      const paragraph = document.querySelectorAll('.answer-paragraph')[2];
+      const composer = document.querySelector('#composer').getBoundingClientRect();
+      const textNode = [...paragraph.childNodes].find(node => node.nodeType === Node.TEXT_NODE);
+      const range = document.createRange();
+      range.selectNodeContents(textNode);
+      const rects = [...range.getClientRects()].filter(rect => rect.width && rect.height);
+      const last = rects.at(-1);
+      return { text: textNode.textContent.trim(), top: last?.top, bottom: last?.bottom, composerTop: composer.top, appScrollTop: document.querySelector('#app').scrollTop, appMax: document.querySelector('#app').scrollHeight - document.querySelector('#app').clientHeight };
+    });
+    record('F1-A', '1024px final answer sentence is reachable above the composer by scrolling the conversation', !!finalLine.bottom && finalLine.bottom <= finalLine.composerTop - 8 && finalLine.appMax > 0, JSON.stringify(finalLine));
+    await session.context.close();
+  }
+  for (const viewport of [{ w: 390, h: 844 }, { w: 1440, h: 900 }]) {
+    const session = await makePage(browser, `${entry}?state=answered-closed`, viewport);
+    const hits = await answerGlyphsIntersectingComposer(session.page);
+    record('F1-A', `${viewport.w}px answer glyphs stay outside the visible composer region`, hits.length === 0, `visibleGlyphIntersections=${hits.length}; example=${JSON.stringify(hits[0] || null)}`);
+    await session.context.close();
+  }
+
+  // Corrective gate: the first sample prompt has one deterministic, zero-network proof path.
+  {
+    const session = await makePage(browser, `${entry}?state=first-run`, { w: 1440, h: 900 });
+    const { page, external } = session;
+    const requestCount = await page.evaluate(() => performance.getEntriesByType('resource').filter(entry => ['fetch','xmlhttprequest'].includes(entry.initiatorType)).length);
+    await page.locator('.suggestion').first().click();
+    const selected = await page.locator('#question-input').inputValue();
+    await page.locator('#send-button').click();
+    const answered = await page.locator('.assistant-message').count();
+    await page.waitForFunction(() => { const image=document.querySelector('.inline-figure img'); return image?.complete && image.naturalWidth > 0; });
+    const visibleQuestion = await page.locator('.user-message').innerText().catch(() => '');
+    const citations = await page.locator('.citation-chip').count();
+    const figureCredit = await page.locator('.figure-credit').innerText().catch(() => '');
+    const figureLoaded = await page.locator('.inline-figure img').evaluate(image => image.complete && image.naturalWidth > 0);
+    const afterRequests = await page.evaluate(() => performance.getEntriesByType('resource').filter(entry => ['fetch','xmlhttprequest'].includes(entry.initiatorType)).length);
+    record('F1-C', 'Link suggestion sends the matching pre-authored answer, loaded figure and citations with no backend request', selected === 'What does Link show?' && answered === 1 && visibleQuestion === selected && citations === 3 && figureCredit === 'NASA/JPL-Caltech/MSSS' && figureLoaded && requestCount === afterRequests && external.length === 0, `selected=${JSON.stringify(selected)}; answerCount=${answered}; displayedQuestion=${JSON.stringify(visibleQuestion)}; citations=${citations}; figureLoaded=${figureLoaded}; credit=${JSON.stringify(figureCredit)}; requests=${requestCount}->${afterRequests}; external=${external.length}`);
+    await session.context.close();
+  }
+
+  // Corrective gate: only the bundled NASA sample may enter the scripted reading state.
+  {
+    const session = await makePage(browser, `${entry}?state=first-run`, { w: 1440, h: 900 });
+    const { page, external } = session;
+    await page.locator('#attach-button').click();
+    await page.locator('#pdf-input').setInputFiles(path.resolve('data/pdf/mars-science-laboratory.pdf'));
+    const selectedName = await page.locator('#attachment-name').innerText();
+    const openAction = page.getByRole('button', { name: 'Open sample pages' });
+    await openAction.waitFor({ state: 'visible', timeout: 5000 }).catch(() => undefined);
+    const actionVisible = await openAction.isVisible().catch(() => false);
+    if (actionVisible) await openAction.click();
+    const reading = await page.evaluate(() => ({ state: document.body.dataset.state, title: document.querySelector('#sheet-title').textContent, page: document.querySelector('#page-count').textContent.trim(), open: !document.querySelector('#pdf-sheet').hidden, filename: document.querySelector('#attachment-name').textContent.trim() }));
+    record('F1-D', 'selecting the checked-in NASA sample offers an explicit local reading action', selectedName === 'mars-science-laboratory.pdf' && actionVisible && reading.open && reading.page === '3 / 4' && reading.filename === selectedName && external.length === 0, `selected=${selectedName}; actionVisible=${actionVisible}; reading=${JSON.stringify(reading)}; external=${external.length}`);
+    await session.context.close();
   }
 
   // Three-phase CLS measurement from a fresh first-run context.
@@ -273,7 +373,13 @@ try {
     const contained = !!value && value.marks.length > 0 && value.marks.every(mark => mark.left >= value.clip.left - 1 && mark.right <= value.clip.right + 1 && mark.top >= value.clip.top - 1 && mark.bottom <= value.clip.bottom + 1);
     const topClearance = value ? value.union.top - value.clip.top : -1;
     const bottomClearance = value ? value.clip.bottom - value.union.bottom : -1;
-    record('C13', `${sourceId}: mobile highlight lies in effective reader clip`, contained && topClearance >= 12 && bottomClearance >= 20, `marks=${value?.marks.length}; clip=${JSON.stringify(value?.clip)}; first-to-clip=${topClearance.toFixed(2)}px; final-to-clip=${bottomClearance.toFixed(2)}px; pageScrollTop=${value?.scrollTop}px`);
+    const zoom = value?.image ? value.image.width / Math.min(520, value.clientWidth - 24) : 0;
+    const pageAspect = value?.image ? value.image.width / value.image.height : 0;
+    const markHeight = value?.marks.length ? Math.min(...value.marks.map(mark => mark.bottom - mark.top)) : 0;
+    record('F1-B', `${sourceId}: mobile passage is magnified, proportionate and fully visible`, contained && topClearance >= 12 && bottomClearance >= 20 && zoom >= 2.45 && Math.abs(pageAspect - 1105 / 1430) < .005 && markHeight >= 14.5 && value.scrollLeft > 0 && value.scrollHeight > value.clientHeight, `marks=${value?.marks.length}; allMarksInsideClip=${contained}; clip=${JSON.stringify(value?.clip)}; topClearance=${topClearance.toFixed(2)}px; bottomClearance=${bottomClearance.toFixed(2)}px; zoom=${zoom.toFixed(2)}x; aspect=${pageAspect.toFixed(4)}; minHighlightLine=${markHeight.toFixed(2)}px; pageScroll=${value?.scrollLeft},${value?.scrollTop}; pageExtent=${value?.scrollWidth}x${value?.scrollHeight}; viewport=${value?.clientWidth}x${value?.clientHeight}`);
+    await page.locator('#zoom-fit').click();
+    const fit = await page.evaluate(() => ({ width: document.querySelector('#page-image').getBoundingClientRect().width, height: document.querySelector('#page-image').getBoundingClientRect().height, naturalWidth: document.querySelector('#page-image').naturalWidth, naturalHeight: document.querySelector('#page-image').naturalHeight, zoomed: document.querySelector('#page-viewport').classList.contains('is-zoomed') }));
+    record('F1-B', `${sourceId}: Fit page returns the original page to full-page scale`, !fit.zoomed && Math.abs(fit.width / fit.height - 1105 / 1430) < .005 && fit.width <= 390, JSON.stringify(fit));
     await session.context.close();
   }
 
@@ -330,21 +436,43 @@ try {
     await session.context.close();
   }
 
-  // Attachment is optional; choosing a checked-in PDF changes the chip only and sends no request.
+  // Attachment selection is optional; the bundled sample has a scripted reading path, arbitrary PDFs do not.
   {
     const session = await makePage(browser, `${entry}?state=first-run`, { w: 1440, h: 900 });
     const { page, external } = session;
     await page.locator('#attach-button').click();
     await page.locator('#pdf-input').setInputFiles(path.resolve('data/pdf/mars-science-laboratory.pdf'));
+    await page.getByRole('button', { name: 'Open sample pages' }).waitFor({ state: 'visible', timeout: 5000 }).catch(() => undefined);
     const filename = await page.locator('#attachment-name').innerText();
     const status = await page.locator('#composer-status').innerText();
-    const requestsBeforeSubmit = await page.evaluate(() => performance.getEntriesByType('resource').map(entry=>entry.name));
-    record('C14', 'optional file picker shows selected filename without ingestion', filename === 'mars-science-laboratory.pdf' && status === '' && external.length === 0, `filename=${filename}; status=${JSON.stringify(status)}; no upload handler is present`);
+    const requestsBeforeSubmit = await page.evaluate(() => performance.getEntriesByType('resource').filter(entry => ['fetch','xmlhttprequest'].includes(entry.initiatorType)).map(entry=>entry.name));
+    const openAction = page.getByRole('button', { name: 'Open sample pages' });
+    record('F1-D', 'checked-in sample selection exposes an explicit reading action', filename === 'mars-science-laboratory.pdf' && status === '' && await openAction.isVisible() && external.length === 0, `filename=${filename}; status=${JSON.stringify(status)}; openAction=${await openAction.isVisible()}; no ingestion handler is present`);
+    if (await openAction.isVisible()) await openAction.click();
+    const selectedReading = await page.evaluate(() => ({ state: document.body.dataset.state, title: document.querySelector('#sheet-title').textContent, page: document.querySelector('#page-count').textContent.trim(), open: !document.querySelector('#pdf-sheet').hidden, selected: document.querySelector('#attachment-name').textContent.trim() }));
+    record('F1-D', 'sample reading progress follows explicit selection and remains tied to the filename', selectedReading.state === 'reading-progress' && selectedReading.open && selectedReading.page === '3 / 4' && selectedReading.selected === filename, JSON.stringify(selectedReading));
     await page.locator('#question-input').fill('A local question');
     await page.locator('#send-button').click();
     const explicitNoSend = await page.locator('#composer-status').innerText();
-    const requestCountAfter = await page.evaluate(() => performance.getEntriesByType('resource').length);
-    record('C14', 'static send action does not claim generation or send a request', explicitNoSend === 'Question not sent.' && requestCountAfter === requestsBeforeSubmit.length, `status=${JSON.stringify(explicitNoSend)}; resourceEntriesBefore=${requestsBeforeSubmit.length}; after=${requestCountAfter}`);
+    const requestCountAfter = await page.evaluate(() => performance.getEntriesByType('resource').filter(entry => ['fetch','xmlhttprequest'].includes(entry.initiatorType)).length);
+    record('C14', 'non-scripted question does not claim generation or send a request', explicitNoSend === 'No sample answer is scripted for this question.' && requestCountAfter === requestsBeforeSubmit.length && external.length === 0, `status=${JSON.stringify(explicitNoSend)}; resourceEntriesBefore=${requestsBeforeSubmit.length}; after=${requestCountAfter}; external=${external.length}`);
+    await page.locator('#pdf-input').setInputFiles({ name: 'private-report.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 local placeholder') });
+    record('F1-D', 'arbitrary PDF selection remains filename-only and is not parsed as the sample', await page.locator('#attachment-name').innerText() === 'private-report.pdf' && await page.getByRole('button', { name: 'Open sample pages' }).count() === 0 && await page.locator('#page-count').innerText() === '3 / 4', `filename=${await page.locator('#attachment-name').innerText()}; sampleActionCount=${await page.getByRole('button', { name: 'Open sample pages' }).count()}; currentPage=${await page.locator('#page-count').innerText()}`);
+    await page.locator('#pdf-input').setInputFiles({ name: 'mars-science-laboratory.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 different same-named file') });
+    await page.waitForTimeout(80);
+    record('F1-D', 'a same-named but different PDF cannot open the bundled sample pages', await page.locator('#attachment-name').innerText() === 'mars-science-laboratory.pdf' && await page.getByRole('button', { name: 'Open sample pages' }).count() === 0, `filename=${await page.locator('#attachment-name').innerText()}; sampleActionCount=${await page.getByRole('button', { name: 'Open sample pages' }).count()}; exact sample SHA-256 required`);
+    await session.context.close();
+  }
+  {
+    const session = await makePage(browser, `${entry}?state=first-run`, { w: 390, h: 844 });
+    const { page } = session;
+    await page.locator('#attach-button').click();
+    await page.locator('#pdf-input').setInputFiles(path.resolve('data/pdf/mars-science-laboratory.pdf'));
+    const action = page.getByRole('button', { name: 'Open sample pages' });
+    await action.waitFor({ state: 'visible', timeout: 5000 });
+    const mobileName = await page.locator('#attachment-name').evaluate(node => ({ text:node.textContent, scrollWidth:node.scrollWidth, clientWidth:node.clientWidth, rect:node.getBoundingClientRect().toJSON() }));
+    const actionBox = await action.boundingBox();
+    record('F1-D', 'mobile attachment shows the full sample filename and a reachable 44px action', mobileName.text === 'mars-science-laboratory.pdf' && mobileName.scrollWidth <= mobileName.clientWidth && actionBox.height >= 44 && actionBox.y >= 0 && actionBox.y + actionBox.height <= 844, `name=${JSON.stringify(mobileName)}; action=${JSON.stringify(actionBox)}`);
     await session.context.close();
   }
 
@@ -419,10 +547,16 @@ try {
       lockupCount: document.querySelectorAll('.lockup').length,
       externalImages: [...document.images].filter(image=>new URL(image.src).origin!==origin).length,
     }));
-    const markFiles = ['mark-a-page-window.svg','mark-b-source-brackets.svg','mark-c-margin-r.svg'];
+    const markFiles = ['mark-a-open-passage.svg','mark-b-reading-current.svg','mark-c-section-knot.svg'];
     const markContents = await Promise.all(markFiles.map(name=>fs.readFile(path.join(root,'assets','marks',name),'utf8')));
     const markValid = markContents.every(text=>text.includes('viewBox="0 0 24 24"') && text.includes('id="mark"') && !/gradient/iu.test(text));
-    record('C18/C7', 'three original logo marks render locally in mono/color on both surfaces at 16/32/64px', logos.candidates.length===3 && logos.renderedUses===42 && [16,32,64].every(size=>logos.sampleSizes.includes(size)) && logos.surfaceCount===6 && logos.lockupCount===6 && logos.lockupMarks===6 && markValid && logoPage.external.length===0 && logoPage.failedResponses.length===0, JSON.stringify({...logos,markFiles,markValid,external:logoPage.external,failedResponses:logoPage.failedResponses}));
+    const silhouetteHashes = [];
+    for (let index = 0; index < 3; index += 1) {
+      const png = await logoPage.page.locator('.candidate').nth(index).locator('.sample').first().screenshot();
+      silhouetteHashes.push(createHash('sha256').update(png).digest('hex'));
+    }
+    const distinctAt16 = new Set(silhouetteHashes).size === 3;
+    record('C18/C7', 'three original logo marks render locally and have distinct 16px monochrome silhouettes', logos.candidates.length===3 && logos.renderedUses===42 && [16,32,64].every(size=>logos.sampleSizes.includes(size)) && logos.surfaceCount===6 && logos.lockupCount===6 && logos.lockupMarks===6 && markValid && distinctAt16 && logoPage.external.length===0 && logoPage.failedResponses.length===0, JSON.stringify({...logos,markFiles,markValid,distinctAt16,silhouetteHashes,external:logoPage.external,failedResponses:logoPage.failedResponses}));
     await logoPage.context.close();
   }
 
@@ -444,7 +578,7 @@ try {
   // Capture dimensions are verified after the capture step.
   const requiredShots = [];
   for (const state of states) for (const {w} of viewports) requiredShots.push(`${state}-${w}.png`);
-  requiredShots.push('citation-popover-desktop.png','citation-popover-mobile.png','model-missing-pdf-open.png','font-comparison.png','logo-comparison.png','attachment-selected-1440.png');
+  requiredShots.push('citation-popover-desktop.png','citation-popover-mobile.png','model-missing-pdf-open.png','font-comparison.png','logo-comparison.png','attachment-selected-1440.png','attachment-selected-390.png','attachment-reading-progress-1440.png','attachment-reading-progress-390.png','first-run-to-answered-1440.png','answer-visible-1024.png','source-link-caption-390.png','source-stream-flow-390.png','source-john-klein-water-390.png');
   const shotResults = [];
   for (const name of requiredShots) {
     const full = path.join(root,'shots',name);
@@ -456,7 +590,7 @@ try {
       shotResults.push({name,bytes:stat.size,...dimensions});
     } catch (error) { shotResults.push({name,error:error.message}); }
   }
-  const requiredCount = states.length * viewports.length + 6;
+  const requiredCount = requiredShots.length;
   record('C1/C2/C7/C18', 'all required screenshots exist at exact viewport dimensions', shotResults.length===requiredCount && shotResults.every(shot=>shot.bytes>0&&!shot.error&&((shot.name.endsWith('-1440.png')&&shot.width===1440&&shot.height===900)||(shot.name.endsWith('-1024.png')&&shot.width===1024&&shot.height===768)||(shot.name.endsWith('-390.png')&&shot.width===390&&shot.height===844)||(!/-(?:1440|1024|390)\.png$/u.test(shot.name)&&shot.width>0&&shot.height>0))), `${shotResults.length}/${requiredCount}; ${JSON.stringify(shotResults)}`);
 
   // Per-state copy and interface facts for the requested 1440px review.

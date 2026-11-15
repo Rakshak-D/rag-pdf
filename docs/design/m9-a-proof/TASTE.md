@@ -87,3 +87,29 @@ The generous whitespace and low-emphasis utility controls share a quiet reading 
 ## Remaining visual concern
 
 The default desktop first-run state intentionally has substantial open space between the question suggestions and the composer. It feels calm and gives later turns room, but can read as vacant before the user asks. Showing a page by default would make PDF viewing compulsory, so the proof keeps the citation-open interaction as the reveal.
+
+## M9-A-R3-F1 review corrections
+
+### 1024px answer visibility
+
+The prior 1024×768 capture showed the last John Klein sentence beneath the fixed composer. The corrected layout reserves a separate viewport region above the composer and scrolls the conversation inside that region. Character-range checks measured zero visible answer glyphs crossing the composer at 390, 1024, and 1440px. In the scrolled 1024 capture, the user question, answer paragraphs, figure, and credit remain visible, with the final sentence ending above the composer.
+
+### Mobile cited passage
+
+The mobile PDF sheet keeps the original page image and its source marks in one proportionally scaled frame. At 390×844, opening any citation uses 2.5× magnification and two-axis scrolling; all source marks fit inside the visible clipping rectangle. The Link, stream-flow, and John Klein screenshots show real page text around each highlight. The HTML proof still cannot establish how the production pdf.js viewer will position the same evidence.
+
+### First-run and attachment behavior
+
+Only the first suggestion has a deterministic scripted answer. Its question is repeated above the answer, and the real NASA figure, adjacent credit, and three citations appear without an API request. The other supported questions stay prompts; the proof says when an answer has not been scripted. Selecting the exact bundled NASA sample exposes **Open sample pages**; opening it reveals the static page-three image. Other PDFs, including a same-named file with different bytes, remain filename-only. No percentage, job, indexing, parsing, or generated answer is implied.
+
+### Unavailable model
+
+The amber status now reads **Ollama unavailable — start Ollama.** The independent **Open PDF** action still opens the static sample page without an answer or retrieval mark.
+
+### Mark candidates at 16px
+
+- **A · Open passage:** an incomplete loop with a short highlighted stroke. At 16px it can read as an open C; it does not read as a page frame.
+- **B · Reading current:** a continuous uneven wave. It remains distinct, though the waveform can resemble a generic signal mark at small size.
+- **C · Section knot:** a custom section-sign contour with a lime crossing. It is a familiar typographic citation symbol rather than an invented pictogram.
+
+The pixel captures of the 16px monochrome samples are distinct. None is a file outline, code bracket, or folded-note icon. No winner is selected; the waveform’s resemblance to a generic signal is the main identity question for review.

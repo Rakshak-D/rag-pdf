@@ -1,4 +1,4 @@
-# M9-A-R3 · Conversation-first static proof
+# M9-A-R3-F1 · Conversation-first static proof
 
 This proof is an isolated, scripted composition. It is not the RAG-PDF application and does not call the backend, Ollama, Chroma, or a retrieval service. Its answer, passage marks, method labels, and unavailable-model state are deterministic visual states. The page images, figure, passage text, and Poppler boxes come from the credited NASA factsheet.
 
@@ -25,24 +25,25 @@ The supported state names are `first-run`, `answered-closed`, `answered-open`, `
 
 ## Interactions and limits
 
-- Select a suggested question to fill the composer. The static send action explicitly reports **Question not sent.** No generation request occurs.
-- Use **Add PDF** to select a local PDF. The selected name appears; there is no upload, page parsing, or indexing.
+- Select a suggested question to fill the composer. Submitting the exact first suggestion, **What does Link show?**, replaces the empty thread with the existing pre-authored NASA answer, figure, and three citations. This deterministic transition makes no backend, retrieval, or generation request. The other two suggestions remain source-supported prompts; submitting either reports **No sample answer is scripted for this question.**
+- Use **Add PDF** to select a local PDF. The selected name appears; there is no upload, ingestion, parsing, or indexing. The **Open sample pages** action appears only when the selected bytes match the checked-in `mars-science-laboratory.pdf` (1,512,372 bytes; SHA-256 `2baee40744fc1c35b3ad015f8672a45710ac6bd9124a4041cfc0d7bfba4e10f6`). A same-named but different PDF does not expose that action.
+- Choosing **Open sample pages** for that verified sample moves to the pre-rendered page-three reading composition and retains the selected filename. This transition is scripted; it does not demonstrate arbitrary-PDF parsing, server work, or a completed index.
 - Hover or keyboard-focus a citation to see a page thumbnail and a short source quotation. Click it to open the page with the matching verified Poppler highlight. Escape or **Close PDF** closes the sheet and restores focus.
 - The page sheet remembers an explicit open/closed preference in per-document `localStorage`. A fresh browser context starts closed. This is a prototype-only preference, not production persistence.
 - **Show matches** adds the documented representative source passages and method labels to the page. Turning it off retains only the selected citation mark; it does not change the answer text. The method labels are not outputs of a production retrieval run.
-- The reading-progress state shows a page-three image and a contact strip. The strip is illustrative navigation context, not a complete PDF page-navigation implementation.
+- The reading-progress state is reached from explicit selection of the verified sample, or opened directly through its query string for capture. It shows page 3 and the contact strip without a percentage, job, indexing claim, or generated result. It is not a complete PDF page-navigation implementation.
 
-The mobile sheet is a fixed bottom panel. Opening it scrolls the conversation so the selected sentence and its nearby figure stay above the composer; the page remains independently scrollable inside the sheet. This proves a visual arrangement only, not PDF.js loading, selectable text, or production coordinate conversion.
+The conversation scrolls inside a bounded region above the fixed composer. At 1024×768 the final answer sentence is reachable by scrolling and remains above the composer. The mobile sheet is a fixed bottom panel. Opening a citation magnifies the original page image 2.5× without changing its aspect ratio, scrolls both axes to the selected passage, and keeps the verified overlay marks aligned with that image. **Fit page** returns to the full-page view. These are static Poppler-render interactions only; they do not prove PDF.js loading, selectable text, or production coordinate conversion.
 
 ## Font and mark studies
 
-Open `font-comparison.html` and `logo-comparison.html` on the same loopback server. The chosen proof fonts are Newsreader for answers, Instrument Sans for interface text, and IBM Plex Mono for compact metadata. `FONT-LICENSES.md` records the bundled files, official source revisions, licences, and hashes. Three original 24px-grid mark directions are in `assets/marks/`; their comparison sheet shows 16/32/64px monochrome and neutral-plus-lime samples on dark and paper surfaces, plus header lockups. These are candidates only.
+Open `font-comparison.html` and `logo-comparison.html` on the same loopback server. The chosen proof fonts are Newsreader for answers, Instrument Sans for interface text, and IBM Plex Mono for compact metadata. `FONT-LICENSES.md` records the bundled files, official source revisions, licences, and hashes. Three redesigned 24px-grid marks are in `assets/marks/`: an open passage, a reading-current waveform, and a section-sign contour. Their comparison sheet shows 16/32/64px monochrome and neutral-plus-lime samples on dark and paper surfaces, plus header lockups. No candidate is selected. At 16px their silhouettes differ; B can read as a waveform, C deliberately uses a familiar section-sign form, and none uses a file frame, code brackets, or a folded page.
 
 Alternative product names for later discussion: **Folio** (a compact reference to a collection of pages), **Margin** (a place for notes and citations), and **Pagewise** (a plain reference to working through a document). Name availability and trademark clearance are **unchecked**.
 
 ## Evidence
 
-`shots/` contains the 18 required full-viewport state screenshots at 1440×900, 1024×768, and 390×844, plus citation popovers, the model-unavailable page-open state, attachment selection, font comparison, and mark comparison. `check.mjs` writes its full Playwright measurements to `CHECK-RESULTS.txt`. These checks are synthetic proof-level evidence; they do not qualify production chat or retrieval.
+`shots/` contains the 18 required full-viewport state screenshots at 1440×900, 1024×768, and 390×844, plus the first-run scripted answer, attachment-to-reading transition, 1024px scrolled answer, all three mobile source passages, citation popovers, the model-unavailable page-open state, font comparison, and mark comparison. `check.mjs` writes its full Playwright measurements to `CHECK-RESULTS.txt`. These checks are synthetic proof-level evidence; they do not qualify production chat or retrieval.
 
 ## Review notes
 

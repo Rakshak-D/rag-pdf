@@ -8,16 +8,17 @@ The word counts below are measured from the rendered 1440×900 states by `check.
 |---|---|
 | RAG-PDF | Header wordmark and browser title prefix |
 | Model ready | Static connected-model composition; not a live health check |
-| Ollama unavailable | Static unavailable-model composition and model note |
+| Ollama unavailable — start Ollama. | Static unavailable-model status; not a live service check |
 | Skip to conversation | Focus-only skip link |
 | Add PDF | Plus button accessible name and tooltip |
 | Ask a question | Composer label and placeholder |
 | Send question | Send button accessible name |
 | Question composer | Composer accessible name |
 | Choose a PDF file. | Invalid local file-selection message |
-| Question not sent. | Static composer response; no generation request is made |
+| No sample answer is scripted for this question. | Honest response for either non-Link suggestion; no generation request is made |
 | Remove selected PDF | Selected-file removal button accessible name |
 | PDF | Selected-file type label, shown only after local file selection |
+| Open sample pages | Explicit action for the exact checked-in NASA PDF only |
 | Curiosity | NASA sample document name |
 
 ## First run
@@ -59,6 +60,18 @@ The visible user question and three answer paragraphs are source/demo content, n
 | Open the PDF to read this sample. | Available reading action when the local answer model is unavailable; no answer is shown in this state |
 | Open PDF | Explicit action that opens the sample page without showing a generated answer or retrieval highlight |
 
+The unavailable status names the corrective action: **Ollama unavailable — start Ollama.** Reading remains available separately.
+
+## Deterministic proof interactions
+
+| Interaction | Visible result | Limit |
+|---|---|---|
+| Submit the exact first suggestion, “What does Link show?” | Existing pre-authored answer, figure, credit, and three verified citations | No API, retrieval, or generation request |
+| Submit either other suggestion | “No sample answer is scripted for this question.” | Its facts are supported by the NASA PDF, but no answer is fabricated |
+| Choose the checked-in NASA PDF | Filename and **Open sample pages** action after exact byte-length and SHA-256 match | No upload, parsing, or indexing |
+| Open sample pages | Page 3 reading composition with selected filename | Static local image; not a backend job or index result |
+| Choose any other PDF, including a different file with the same name | Filename only | It is not parsed or shown as the NASA sample |
+
 ## Source-derived strings inventoried separately
 
 The citation popovers contain genuine source quotations of at most 25 words. The Link figure caption, NASA/JPL-Caltech/MSSS credit, alt description, page-image descriptions, and passage text are documented in `CREDITS.md`. They are not interface slogans and are excluded from the state word counts.
@@ -73,7 +86,7 @@ These values are regenerated in `CHECK-RESULTS.txt`:
 | answered-closed | 6 |
 | answered-open | 17 |
 | answered-matches | 21 |
-| model-missing | 16 |
+| model-missing | 18 |
 | reading-progress | 16 |
 
 ## Copy exclusions

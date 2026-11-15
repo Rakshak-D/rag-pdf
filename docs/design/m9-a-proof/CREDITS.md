@@ -47,6 +47,12 @@ Poppler `pdftotext -bbox-layout -f 2 -l 2` extracted word and line boxes from th
 
 The `words`, `meaning`, and `figure` labels are **simulated method labels** attached to genuine passages for this design proof. They were not returned or classified by the production retrieval pipeline. Turning on **Show matches** displays only these on-page overlays; the answer itself is unchanged.
 
+### Mobile passage view and sample-selection identity
+
+On citation open at 390px, the proof scales the same page image and its percentage-positioned Poppler overlays together to 2.5×, then scrolls the page viewport horizontally and vertically to frame the selected source. The page remains at its original `1105:1430` image ratio. Playwright measured a `915 × 1184.11` page image, minimum highlighted-line heights of `15.28px` for Link, `17.67px` for stream flow and `17.67px` for John Klein, with every mark inside the page viewport. **Fit page** resets the scale to a 366px-wide image. The surrounding NASA page text remains visible. This verifies the static Poppler image and overlay transform only; it is not a pdf.js coordinate-conversion result.
+
+The attachment interaction identifies the bundled sample by filename, byte length (`1,512,372`) and SHA-256 (`2baee40744fc1c35b3ad015f8672a45710ac6bd9124a4041cfc0d7bfba4e10f6`). Only that exact local file reveals **Open sample pages**. The action displays a checked-in page render; it does not parse or index the selected PDF. The deterministic Link response is pre-authored and does not call a model or retrieval service.
+
 ## Fonts
 
 Font files, exact SHA-256 values, source revisions, and local SIL Open Font License 1.1 texts are listed in `FONT-LICENSES.md`. The selected proof fonts are Newsreader for answers, Instrument Sans for interface text, and IBM Plex Mono for compact metadata. Source Serif 4 and Geist are locally bundled comparison candidates. All are served from this proof directory.

@@ -25,9 +25,9 @@
   <main id="studies"></main>
   <script>
     const candidates=[
-      {id:"mark-a-page-window",name:"A · Page window",meaning:"A page frame with one marked line: a selected passage in context."},
-      {id:"mark-b-source-brackets",name:"B · Source brackets",meaning:"Two brackets gather a short excerpt around one emphasized source line."},
-      {id:"mark-c-margin-r",name:"C · Margin note",meaning:"A lowercase r sits inside a folded page corner, with one margin mark."},
+      {id:"mark-a-open-passage",name:"A · Open passage",meaning:"An incomplete loop holds one short highlighted reading line."},
+      {id:"mark-b-reading-current",name:"B · Reading current",meaning:"A continuous, uneven rhythm suggests moving through a sentence."},
+      {id:"mark-c-section-knot",name:"C · Section knot",meaning:"A custom section-sign contour acts as a compact citation anchor."},
     ];
     const studies=document.getElementById("studies");
     const symbol=(candidate,mono=false)=>`<svg class="mark" aria-hidden="true" viewBox="0 0 24 24"><use href="assets/marks/${candidate.id}.svg#mark"></use></svg>`;
