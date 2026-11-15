@@ -40,6 +40,7 @@ PASS | C2/C12 | answered-closed 1440x900: visible buttons meet 44px target | 5 v
 PASS | C1 | answered-closed 1440x900: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
 PASS | C13 | answered-closed 1440x900: viewer state matches URL state | sheetHidden=true; page=2 / 4
 PASS | C17 | answered-closed 1440x900: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"18px","lineHeight":"29.88px"}]
+PASS | C17 | answered-closed 1440x900: actual answer line length at the default conversation width | visual text-node line lengths=[[73],[88],[63]]; average=74.7 characters per line; citations excluded
 PASS | C5/C7 | answered-closed 1024x768: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
 PASS | C5 | answered-closed 1024x768: no horizontal overflow | scrollWidth=1024px, viewport=1024px
 PASS | C11 | answered-closed 1024x768: visible interface copy limit | 6 visible interface words; answer, user query, document caption and credit excluded
@@ -60,6 +61,7 @@ PASS | C2/C12 | answered-closed 390x844: visible buttons meet 44px target | 5 vi
 PASS | C1 | answered-closed 390x844: answer, inline citations and genuine figure | answerParagraphs=3; citations=3; Link figure loaded=true
 PASS | C13 | answered-closed 390x844: viewer state matches URL state | sheetHidden=true; page=2 / 4
 PASS | C17 | answered-closed 390x844: answer reading type and size | [{"selector":"assistant-message","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"},{"selector":"answer-paragraph","color":"rgb(240, 235, 221)","background":"rgba(0, 0, 0, 0)","border":"0px/0px/0px/0px","fontSize":"17px","lineHeight":"27.88px"}]
+PASS | C17 | answered-closed 390x844: narrow-screen answer line length | visual text-node line lengths=[[45,28],[40,48],[50,13]]; average=37.3 characters per line; citations excluded; readable type=true
 PASS | C5/C7 | answered-open 1440x900: local assets and no page errors | external=0; failedResponses=0; pageErrors=0
 PASS | C5 | answered-open 1440x900: no horizontal overflow | scrollWidth=1440px, viewport=1440px
 PASS | C11 | answered-open 1440x900: visible interface copy limit | 17 visible interface words; answer, user query, document caption and credit excluded
@@ -247,5 +249,5 @@ COPY | answered-matches | 21 words | "RAG-PDF Model ready Ask a question Curiosi
 COPY | model-missing | 16 words | "RAG-PDF Ollama unavailable Open the PDF to read this sample. Curiosity Open PDF Ask a question"
 COPY | reading-progress | 16 words | "RAG-PDF Model ready Curiosity Ask a question Curiosity factsheet 3 / 4 − + Fit × 01 02 03 04"
 
-TOTAL: 235/235 automated checks passed; failures=0.
+TOTAL: 237/237 automated checks passed; failures=0.
 Manual screenshot review remains separate from these measurements. Production application behavior is unverified by this static proof.

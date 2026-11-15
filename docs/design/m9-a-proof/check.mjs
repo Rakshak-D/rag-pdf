@@ -108,6 +108,19 @@ try {
           };
           const thread = rect('#thread'), sheet = rect('#pdf-sheet'), composer = rect('#composer');
           const paragraphStyles = [...document.querySelectorAll('.assistant-message,.answer-paragraph')].map(el => { const s = getComputedStyle(el); return { selector: el.className, color: s.color, background: s.backgroundColor, border: [s.borderTopWidth,s.borderRightWidth,s.borderBottomWidth,s.borderLeftWidth].join('/'), fontSize: s.fontSize, lineHeight: s.lineHeight }; });
+          const answerLineLengths = [...document.querySelectorAll('.answer-paragraph')].map(paragraph => {
+            const node = [...paragraph.childNodes].find(child => child.nodeType === Node.TEXT_NODE);
+            if (!node) return [];
+            const lineCounts = new Map();
+            for (let index = 0; index < node.textContent.length; index += 1) {
+              const range = document.createRange();
+              range.setStart(node, index);
+              range.setEnd(node, index + 1);
+              const lineTop = Math.round(range.getBoundingClientRect().top * 2) / 2;
+              lineCounts.set(lineTop, (lineCounts.get(lineTop) || 0) + 1);
+            }
+            return [...lineCounts.values()];
+          });
           const buttonTargets = [...document.querySelectorAll('button')].filter(el => el.getClientRects().length && !el.closest('[hidden]')).map(el => { const r=el.getBoundingClientRect(); return {label:el.getAttribute('aria-label')||el.title||el.innerText.trim(),width:r.width,height:r.height}; });
           const fonts = { reading: document.fonts.check('18px "Newsreader"'), interface: document.fonts.check('16px "Instrument Sans"'), mono: document.fonts.check('12px "IBM Plex Mono"') };
           const text = visibleText();
@@ -120,6 +133,7 @@ try {
             status: document.querySelector('#status-label')?.textContent.trim(), answerCount: document.querySelectorAll('.answer-paragraph').length,
             citations: document.querySelectorAll('.citation-chip').length, figureLoaded: [...document.images].some(img=>img.classList.contains('figure-image')&&img.complete&&img.naturalWidth>0) || (document.querySelector('.inline-figure img')?.complete&&document.querySelector('.inline-figure img')?.naturalWidth>0),
             sampleTitle: document.querySelector('.sample-context')?.textContent.trim(), paragraphStyles, buttonTargets, fonts,
+            answerLineLengths,
             pageImage: document.querySelector('#page-image')?.getAttribute('src'), matchState: document.querySelector('#matches-toggle')?.getAttribute('aria-pressed'),
             visibleTargets: [...document.querySelectorAll('.evidence-target')].filter(el=>getComputedStyle(el).visibility!=='hidden'&&Number(getComputedStyle(el).opacity)>0).map(el=>el.dataset.evidenceTarget),
             methodLabels: [...document.querySelectorAll('.method-tag')].filter(el=>getComputedStyle(el).display!=='none').map(el=>el.textContent.trim()),
@@ -149,6 +163,16 @@ try {
           record('C1', `${label}: answer, inline citations and genuine figure`, metrics.answerCount === 3 && metrics.citations === 3 && metrics.figureLoaded, `answerParagraphs=${metrics.answerCount}; citations=${metrics.citations}; Link figure loaded=${metrics.figureLoaded}`);
           record('C13', `${label}: viewer state matches URL state`, (state === 'answered-closed') === metrics.sheetHidden, `sheetHidden=${metrics.sheetHidden}; page=${metrics.page}`);
           record('C17', `${label}: answer reading type and size`, metrics.proseFonts.every(font => font.includes('Newsreader')) && metrics.paragraphStyles.every(item=>parseFloat(item.fontSize)>=17 && parseFloat(item.lineHeight)/parseFloat(item.fontSize)>=1.6), JSON.stringify(metrics.paragraphStyles));
+          if (state === 'answered-closed' && viewport.w === 1440) {
+            const lengths = metrics.answerLineLengths.flat();
+            const average = lengths.length ? lengths.reduce((sum, length) => sum + length, 0) / lengths.length : 0;
+            record('C17', `${label}: actual answer line length at the default conversation width`, average >= 60 && average <= 75, `visual text-node line lengths=${JSON.stringify(metrics.answerLineLengths)}; average=${average.toFixed(1)} characters per line; citations excluded`);
+          }
+          if (state === 'answered-closed' && viewport.w === 390) {
+            const lengths = metrics.answerLineLengths.flat();
+            const average = lengths.length ? lengths.reduce((sum, length) => sum + length, 0) / lengths.length : 0;
+            record('C17', `${label}: narrow-screen answer line length`, lengths.length > 0 && average >= 25 && average <= 55, `visual text-node line lengths=${JSON.stringify(metrics.answerLineLengths)}; average=${average.toFixed(1)} characters per line; citations excluded; readable type=${metrics.paragraphStyles.every(item=>parseFloat(item.fontSize)>=17)}`);
+          }
         }
         if (state === 'answered-open' || state === 'answered-matches' || state === 'reading-progress') {
           const expectedPage = state === 'reading-progress' ? '3 / 4' : '2 / 4';

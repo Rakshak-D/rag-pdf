@@ -8,11 +8,15 @@ These are human screenshot judgments, not automated accessibility or retrieval f
 
 **If the logo were covered:** The sample name and three source-supported questions sit directly above the composer, so the first interaction concerns an actual PDF. There is no empty viewer column or upload step competing with the conversation.
 
+**Against a generic AI chat app:** The sample-specific prompts and document name establish the reading task before a conversation begins; adding a PDF and opening its page remain separate optional actions.
+
 **Calm and distinct:** The quiet spacing and restrained status treatment have a calm pace. The dark room is ours; selecting a citation reveals the physical paper sheet and a lime highlighter mark, while the default screen keeps both document viewing and adding a PDF optional.
 
 ### Answered, PDF closed
 
 **If the logo were covered:** The answer is set as continuous reading text, and the actual Link photograph with its NASA credit sits directly under the paragraph that cites it. Small numbered chips identify passages without a second evidence panel.
+
+**Against a generic AI chat app:** The credited NASA figure is attached to the relevant claim, and each numbered citation refers to source evidence rather than an unrelated message decoration.
 
 **Calm and distinct:** The sentence spacing and low-noise controls feel measured. The near-black room, optional physical paper sheet, and fluorescent lime source marks make the reading language specific to this product.
 
@@ -20,11 +24,15 @@ These are human screenshot judgments, not automated accessibility or retrieval f
 
 **If the logo were covered:** The same answer remains visible beside a page image with the cited passage highlighted. The page number and contact strip give document context without turning retrieval into a separate dashboard.
 
+**Against a generic AI chat app:** The source sheet is the original factsheet page with its location and passage mark; the answer remains visibly tied to that page.
+
 **Calm and distinct:** The sheet arrives quietly and the answer retains its reading rhythm. The dark room, warm physical paper, and lime passage highlight remain the signature; no connector line is needed to explain the citation.
 
 ### Answered, matches shown
 
 **If the logo were covered:** Multiple source marks sit on the original page beside compact method labels. The selected citation remains strongest, while the other marks stay faint and do not alter the answer.
+
+**Against a generic AI chat app:** Simulated method labels appear on the document page beside source marks, making evidence inspection part of reading rather than a separate score panel.
 
 **Calm and distinct:** The toolbar is restrained and the page holds the detail. Our dark room, physical paper, and lime highlight make the evidence visible without adding result cards.
 
@@ -32,11 +40,15 @@ These are human screenshot judgments, not automated accessibility or retrieval f
 
 **If the logo were covered:** The amber status names the local service problem, and the page-reading action remains available. No generated answer is shown in this state.
 
+**Against a generic AI chat app:** The local-model problem does not block reading the sample, and the open PDF is shown without pretending a model answered.
+
 **Calm and distinct:** The single quiet error line and open conversation space keep the state calm. The dark room remains; opening the sample shows the physical paper sheet and the lime passage mark, separate from model readiness.
 
 ### Reading progress
 
 **If the logo were covered:** A real page image and its numbered contact strip make the document the subject. The closed viewer state is not represented by a blank reserved pane.
+
+**Against a generic AI chat app:** The page number and contact strip keep document location visible as the primary task, without inventing a conversation or answer.
 
 **Calm and distinct:** The scan line is a restrained progress cue rather than a dashboard animation. The dark room, physical paper sheet, and lime active-page accent distinguish the visual language.
 
