@@ -63,7 +63,7 @@ The generous whitespace and low-emphasis utility controls share a quiet reading 
 - **Is the PDF optional?** Yes. The page is closed by default in a fresh context. A citation or an explicit page preference opens it; Escape and Close PDF dismiss it.
 - **Is adding a PDF optional?** Yes. The composer remains enabled for the checked-in sample; the plus button only selects a file. It does not upload or ingest it.
 - **Does mobile look composed rather than compressed?** Mostly. The open sheet fills the width and preserves the page ratio; the active citation is framed above the composer, source targets are repositioned inside the page clip, and there is no horizontal scroll. In this narrow layout, opening a source scrolls earlier chat context upward; the user can scroll back to it.
-- **Which original mark is strongest at 16px?** Candidate A, “Page window,” because its page outline and one emphasized reading line remain distinct at the smallest comparison size. This is a review preference, not a chosen permanent product mark.
+- **Which mark is strongest at 16px?** No winner is selected. Candidate A reads as an open C, B as a waveform, and C as a section sign; their rendered monochrome silhouettes are distinct, with B's signal-like reading the main identity question.
 
 ## Design-value changes from the previous Light Table brief
 
@@ -82,7 +82,7 @@ The generous whitespace and low-emphasis utility controls share a quiet reading 
 | Motion | Sheet uses 200ms transform/opacity; passage mark pulses once; current page scan uses transform only. Reduced motion disables all three. | Keeps motion attached to source interaction and reading position. |
 | Visible copy | Removed slogans, upload instructions, and separate retrieval explanations; the first screen is sample + three questions + composer. | Makes questioning immediate and removes the impression that upload or viewer setup is mandatory. |
 | Evidence view | Source details appear as an inline citation chip, short quote popover, and page overlay; no connector lines or separate evidence cards. | Keeps source inspection close to the answer and follows the owner’s interpretation. |
-| Attachment behavior | Local file selection is shown as an optional filename chip only. | Demonstrates the optional route without claiming upload or indexing. |
+| Attachment behavior | Local file selection is optional; only the byte-verified bundled NASA sample reveals **Open sample pages**. | Demonstrates a proof-only reading transition without claiming upload, parsing, or indexing for arbitrary PDFs. |
 
 ## Remaining visual concern
 
