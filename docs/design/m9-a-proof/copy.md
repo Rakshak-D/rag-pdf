@@ -1,94 +1,86 @@
-# Interface-copy inventory
+# R4 visible-copy inventory
 
-The word counts below are measured from the rendered 1440×900 states by `check.mjs`. They count visible interface text and controls. They exclude the static user-authored question and answer, NASA page imagery/body text, the figure caption and credit, and the source quotation in a citation popover; those source-derived strings are inventoried in `CREDITS.md`. The focus-only skip link and accessibility names are listed below but are not visible in an unfocused screen and are not included in the counts.
+The Playwright audit counts visible alphabetic words of interface chrome at 1440×900. It excludes answer text, the user question, suggested questions, source quotations, rasterized PDF text, figure caption and figure credit. Numeric page references and citation indices are identifiers, not copy words. Suggested-question words are reported separately. Hidden `.sr-only` labels are listed for accessibility but do not count as visible copy.
 
-## Shared interface strings
+## Visible identity and first run
 
-| String | State or control |
+| Copy | Location or use |
 |---|---|
-| RAG-PDF | Header wordmark and browser title prefix |
-| Model ready | Static connected-model composition; not a live health check |
-| Ollama unavailable — start Ollama. | Static unavailable-model status; not a live service check |
-| Skip to conversation | Focus-only skip link |
-| Add PDF | Plus button accessible name and tooltip |
-| Ask a question | Composer label and placeholder |
-| Send question | Send button accessible name |
-| Question composer | Composer accessible name |
-| Choose a PDF file. | Invalid local file-selection message |
-| No sample answer is scripted for this question. | Honest response for either non-Link suggestion; no generation request is made |
-| Remove selected PDF | Selected-file removal button accessible name |
-| PDF | Selected-file type label, shown only after local file selection |
-| Open sample pages | Explicit action for the exact checked-in NASA PDF only |
-| Curiosity | NASA sample document name |
+| `RAG-PDF` | Product wordmark |
+| `NASA Curiosity fact sheet` | Active sample title |
+| `Sample, 4 pages` | Sample metadata |
+| `Ask a question` | Composer placeholder and accessible label |
+| Three exact suggested questions below | User prompts; excluded from chrome word cap and counted separately |
 
-## First run
+1. “What does the rock Link tell us about water on Mars?”
+2. “How much power did the rover have at launch?”
+3. “Which crater did it land in, and what did it drill first?”
 
-| String | Meaning |
-|---|---|
-| What does Link show? | Figure question |
-| How many watts at launch? | Number question |
-| Which crater and drill target? | Cross-page question, supported by the factsheet's page 1 and page 2 |
+The three prompts total 32 words under the checker’s word-boundary rule. First-run chrome is 10 words; the reported combined visible total is 42.
 
-## Answered states
+## Header and composer controls
 
-The visible user question and three answer paragraphs are source/demo content, not interface copy. Their exact wording appears in `proof-static-not-functional.html` and is verified against the passages in `CREDITS.md`.
+- `New chat` — icon accessible name and tooltip.
+- `Open menu` — header menu accessible name. The menu has the `Settings` item.
+- `Show recent PDFs` — document-menu control accessible name; its panel reads `Recent PDFs` and lists the sample title.
+- `Add a PDF` — plus button accessible name and tooltip.
+- `Choose a PDF` — file input accessible name.
+- `Send question` — send button accessible name when available.
+- `Preparing answer` / `Model unavailable` — send control names in static status variants.
+- `Question composer` — form accessible name.
+- `Remove PDF from this conversation` — active-document removal name; the source file is not deleted.
+- `Open or close NASA Curiosity fact sheet, 4 pages` — sample document control name. For other selected files the control states that page viewing is unavailable.
 
-| String | Meaning |
-|---|---|
-| 1, 2, 3 | Inline citation marks |
-| Open source 1, page 2 | First citation accessible name; numbers change for citations 2 and 3 |
-| Page 2 | Citation quotation popover page label |
-| Close PDF | PDF sheet close control accessible name and tooltip |
+## Attention, local selection, and feedback
 
-## PDF sheet and reading progress
+- Starting state: “Getting the model ready. The first answer can take a minute.” This exact required sentence contains the separately banned phrase “Model ready”; see the documented C33 conflict in `CHECK-RESULTS.txt`.
+- Unavailable state: “Can’t reach the model. Start Ollama, then check again.” Actions: `Check again`, `How to start it`.
+- Local help: “Open the local model app from the Start menu, then select Check again.” The help panel has a `Close` button. The check action does not contact a live service.
+- Invalid selection: “Choose a PDF file.”
+- Other local PDF selection: “This proof displays the file name but does not read the PDF.”
+- Missing scripted answer: “This proof has no saved answer for that question.”
+- Service-check action response: “This proof does not check the local service.”
+- Active file type label: `PDF`.
+- Exact bundled sample action: `Open sample pages`.
 
-| String | State or control |
-|---|---|
-| Curiosity factsheet | PDF sheet title |
-| 2 / 4, 3 / 4 | Current page and total page count |
-| Show matches / Hide matches | Page-overlay toggle and its pressed state |
-| Zoom out / Zoom in / Fit page | Page sizing controls |
-| PDF page | Page viewport accessible name |
-| Reading progress | Contact-sheet accessible name |
-| 01, 02, 03, 04 | Contact-sheet page labels |
-| figure, words, meaning | Simulated source-method labels shown only with matches enabled |
+## Citations and PDF controls
 
-## Model unavailable
+- Inline citations display numeric indices `1`, `2`, `3`; accessible names identify the source number, page, and open action.
+- Citation popover label: `Page 2`, followed by the short source quotation documented in `CREDITS.md`.
+- PDF sheet accessible name: `NASA Curiosity fact sheet` (screen-reader title; not repeated visibly in the sheet header).
+- `Close PDF`; `Previous page`; `Next page`; `Zoom out`; `Zoom in`; `Show matches` / `Hide matches`. Repeated zoom-out returns the page to fit width; there is no separate visible Fit page button.
+- Page state: numeric page and total, for example `2 / 4`; the separate composer status is `Page 2/4`.
+- `Cited` and `Uncited` identify the solid cited mark and dotted uncited mark.
+- Method tags: `Exact words`, `Meaning`, `Figure`. These are simulated classifications, not retrieval results.
+- `Change PDF viewer height` and `PDF viewer height` are accessible names for the sheet grip. Snap choices are 30%, 55%, and 92%.
+- Contact-strip controls are labelled `Go to page 1` through `Go to page 4`.
 
-| String | Meaning |
-|---|---|
-| Open the PDF to read this sample. | Available reading action when the local answer model is unavailable; no answer is shown in this state |
-| Open PDF | Explicit action that opens the sample page without showing a generated answer or retrieval highlight |
+## Settings and accessibility-only strings
 
-The unavailable status names the corrective action: **Ollama unavailable — start Ollama.** Reading remains available separately.
+- Settings panel: `Settings`; “Model checks run on this computer. This proof does not check a live service.”; `Close settings`.
+- Visible page-help panel: “Open the local model app from the Start menu, then select Check again.”; `Close`.
+- Skip-link label: `Skip to conversation`.
+- Live announcements include “Page 2 opened with the cited passage highlighted.”, “NASA Curiosity fact sheet selected.”, and “PDF removed from this conversation. The original file remains available.”
+- Other accessible names include `Conversation controls`, `Conversation`, `Model connection`, `PDF controls`, `PDF page`, `Pages in this PDF`, `Passage marks`, `Source methods`, `Suggested questions`, and `Answer`.
+- Page images and source figure have descriptive alt text recorded in `CREDITS.md`.
 
-## Deterministic proof interactions
+## Other fixture copy
 
-| Interaction | Visible result | Limit |
-|---|---|---|
-| Submit the exact first suggestion, “What does Link show?” | Existing pre-authored answer, figure, credit, and three verified citations | No API, retrieval, or generation request |
-| Submit either other suggestion | “No sample answer is scripted for this question.” | Its facts are supported by the NASA PDF, but no answer is fabricated |
-| Choose the checked-in NASA PDF | Filename and **Open sample pages** action after exact byte-length and SHA-256 match | No upload, parsing, or indexing |
-| Open sample pages | Page 3 reading composition with selected filename | Static local image; not a backend job or index result |
-| Choose any other PDF, including a different file with the same name | Filename only | It is not parsed or shown as the NASA sample |
+The answer gallery is headed `Answer shapes` and labels its five examples `Fixture A` through `Fixture E`. Their questions and answer passages are fixture content rather than interface chrome. The no-answer example reads: “I couldn’t find this in the PDF. The factsheet describes the descent sequence, but it gives no single exact speed.” It is a proof fixture, not a retrieval result.
 
-## Source-derived strings inventoried separately
+## Measured visible interface words
 
-The citation popovers contain genuine source quotations of at most 25 words. The Link figure caption, NASA/JPL-Caltech/MSSS credit, alt description, page-image descriptions, and passage text are documented in `CREDITS.md`. They are not interface slogans and are excluded from the state word counts.
+Latest Playwright measurements at 1440×900; see the complete per-state records in `CHECK-RESULTS.txt`.
 
-## Measured visible interface words per 1440×900 state
+| State | Chrome words | Suggested-question words | Combined visible total |
+|---|---:|---:|---:|
+| first-run | 10 | 32 | 42 |
+| answered-closed | 10 | 0 | 10 |
+| answered-open | 13 | 0 | 13 |
+| answered-matches | 22 | 0 | 22 |
+| model-unreachable | 25 | 0 | 25 |
+| starting | 21 | 0 | 21 |
+| reading-progress | 13 | 0 | 13 |
+| answer-shapes | 4 | 0 | 4 |
 
-These values are regenerated in `CHECK-RESULTS.txt`:
-
-| State | Visible interface words |
-|---|---:|
-| first-run | 21 |
-| answered-closed | 6 |
-| answered-open | 17 |
-| answered-matches | 21 |
-| model-missing | 18 |
-| reading-progress | 16 |
-
-## Copy exclusions
-
-The banned-expression scan is performed on visible rendered text, including status, controls and tooltips currently in the DOM. Document quotations/captions/credits and answer/user content are excluded from the 25-word UI-copy limit, but still remain documented source content. The alternative product names appear only in proof documentation, never in the proof UI.
+The starting state passes the 25-word limit but fails the banned-phrase scan because of the explicit R4 wording conflict. That failure is retained and disclosed rather than silently rewriting the required sentence.

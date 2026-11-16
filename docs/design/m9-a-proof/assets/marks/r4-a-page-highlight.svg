@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <symbol id="mark" viewBox="0 0 24 24">
+    <path fill="currentColor" fill-rule="evenodd" d="M4 2h11l5 5v15H4V2zm2.5 2.5v15h11V8.2h-4.8V4.5H6.5z"/>
+    <path fill="var(--mark-accent,#d7ff3a)" d="M8 12h8v3H8z"/>
+  </symbol>
+</svg>

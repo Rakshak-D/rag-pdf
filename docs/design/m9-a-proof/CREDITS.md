@@ -5,7 +5,7 @@
 - Source PDF: `mars-science-laboratory.pdf`, the four-page Mars Science Laboratory/Curiosity factsheet.
 - Repository source: `data/pdf/mars-science-laboratory.pdf`, read from protected `main` commit `7e9522618296af6a7f25652cc8161009d9a92685`; Git blob SHA-1 `62296a2ce54907e76bb05859524e0184ee351539`.
 - NASA source URL: <https://science.nasa.gov/wp-content/uploads/2023/09/mars-science-laboratory.pdf>.
-- Page renders: `assets/pages/page-02.png`, `assets/pages/page-03.png`; page contact images `assets/pages/contact-1.png` through `contact-4.png`.
+- Page renders: `assets/pages/page-01.png` through `page-04.png`, rendered from the source PDF at 130 dpi with Poppler `pdftoppm`; contact images `assets/pages/contact-1.png` through `contact-4.png` are rendered at 45 dpi. The first-run sample thumbnail and contact strip use the contact images. Pages 2 and 3 support the cited reading proof; full-page renders 1 and 4 are retained as source-derived proof assets.
 - Render method: Poppler `pdftoppm`; page renders at 130 dpi and contact images at 45 dpi. The source PDF was not edited.
 - Page-image accessible labels: “Page 2 of the NASA Mars Science Laboratory/Curiosity factsheet” and “Page 3 of the NASA Mars Science Laboratory/Curiosity factsheet,” matching the image shown.
 
@@ -49,10 +49,19 @@ The `words`, `meaning`, and `figure` labels are **simulated method labels** atta
 
 ### Mobile passage view and sample-selection identity
 
-On citation open at 390px, the proof scales the same page image and its percentage-positioned Poppler overlays together to 2.5×, then scrolls the page viewport horizontally and vertically to frame the selected source. The page remains at its original `1105:1430` image ratio. Playwright measured a `915 × 1184.11` page image, minimum highlighted-line heights of `15.28px` for Link, `17.67px` for stream flow and `17.67px` for John Klein, with every mark inside the page viewport. **Fit page** resets the scale to a 366px-wide image. The surrounding NASA page text remains visible. This verifies the static Poppler image and overlay transform only; it is not a pdf.js coordinate-conversion result.
+At 390×844, a citation opens the original page render in the optional bottom sheet at 118% of the proof's 100% PDF-size scale. The raster image and Poppler-coordinate overlays scale together without changing the 612:792 page ratio. The page viewport is 390px wide; in the captured 55% sheet state its measured vertical clip is y=115.53–727px. Each source is centered vertically and all highlighted lines remain inside the visible clip. The page continues beyond the viewport, so surrounding original text remains available by scrolling; no extracted-text replacement panel is used.
+
+Latest Playwright measurements from `R4-mobile-sources`:
+
+| Source | Page | Scale | Page frame width | Highlight line-box heights | Centre deviation (x/y) | Minimum clip clearance |
+|---|---:|---:|---:|---|---|---:|
+| Link caption | 2 | 118% | 963px | 16.08px | 0.09% / 0.03% | 8.83px |
+| Stream flow | 2 | 118% | 963px | 18.59px | 0.09% / 0.15% | 4.33px |
+| John Klein water | 2 | 118% | 963px | 18.59px | 0.05% / 1.33% | 1.09px |
+
+These are highlight-box line heights, not a measurement of glyph cap height. The complete Playwright rectangles and viewport bounds are in `CHECK-RESULTS.txt`. Manual review of `shots/r4-mobile-sheet-55-390.png` confirms the caption words and nearby original page text can be read at screenshot scale. The John Klein line has only 1.09px of horizontal clearance at this scale; it remains uncut in the capture, but the margin is tight.
 
 The attachment interaction identifies the bundled sample by filename, byte length (`1,512,372`) and SHA-256 (`2baee40744fc1c35b3ad015f8672a45710ac6bd9124a4041cfc0d7bfba4e10f6`). Only that exact local file reveals **Open sample pages**. The action displays a checked-in page render; it does not parse or index the selected PDF. The deterministic Link response is pre-authored and does not call a model or retrieval service.
-
 ## Fonts
 
 Font files, exact SHA-256 values, source revisions, and local SIL Open Font License 1.1 texts are listed in `FONT-LICENSES.md`. The selected proof fonts are Newsreader for answers, Instrument Sans for interface text, and IBM Plex Mono for compact metadata. Source Serif 4 and Geist are locally bundled comparison candidates. All are served from this proof directory.
