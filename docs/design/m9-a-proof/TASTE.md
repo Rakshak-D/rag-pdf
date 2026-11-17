@@ -1,60 +1,28 @@
-# R4 taste review
+# R5 visual review
 
-The “calm” comparison here means restraint, readable type, and low-emphasis controls. It is not a claim of visual originality by itself.
+## Required taste check
 
-## First run
+**Does first-run now look like a reading tool for documents, or still like a generic chat app?** It reads as a document tool because a genuine NASA page with a source-verified lime highlight is the largest object, while the sample identity and three document-specific questions sit beside the composer.
 
-- **Calm:** Empty space and three direct questions keep setup out of the way.
-- **Ours:** The warm sample identity leads into the composer; the page and lime evidence are only revealed on request. This state alone is not strongly distinctive and can still resemble a generic chat until the citation is opened.
-- **Removed:** Header bar, model-ready status, promotional copy, and a required document pane.
+## Screen-by-screen reading
 
-## Answer, PDF closed
+- **First run:** The bright paper page, exact highlighted words, and sample-specific questions establish the document as the subject. The composer remains available and the preview does not require opening the PDF viewer.
+- **Answered, PDF closed:** Newsreader answer text remains unboxed; inline source numbers attach each factual claim to its citation.
+- **Answered, PDF open:** The original page render and its aligned highlight sit in the optional sheet; the user bubble has a measured gap from the sheet.
+- **Matches shown:** Source marks and method labels remain on the original page; the toggle begins off and does not alter the answer.
+- **Model unavailable:** One quiet line gives the correction; the outlined retry is visibly distinct, and the page can still be opened without a generated answer.
+- **Reading progress:** Page thumbnails and the page reference show location without invented percentages or job states.
+- **Answer shapes:** The gallery keeps a single reading column; Fixture C is now four direct, sourced sentences and Fixture E retains its earlier insufficient-evidence wording.
 
-- **Calm:** Unboxed answer text and one compact user turn preserve a reading rhythm.
-- **Ours:** Newsreader answer type and inline lime source indices lead back to a specific page.
-- **Removed:** Assistant cards, slogan headings, and a permanently visible reader.
+## Visual system and R5 changes
 
-## Answer, PDF open
+- **Room and paper:** Existing near-black `#16140F`, warm paper `#F4F1E8`, and evidence lime `#D7FF3A` remain. The first-run page preview uses the paper tone and the lime mark is positioned over the verified “Gale Crater” phrase.
+- **Type:** Bundled Newsreader answers, Instrument Sans controls, and IBM Plex Mono page references remain unchanged.
+- **Spacing:** The answered R4 conversation remains accepted. First run is the scoped exception: a two-column page-and-questions layout on desktop and a page, stacked questions, and bottom composer on mobile.
+- **Citations:** Popovers now follow the cited paragraph in normal flow. This avoids covering the cited words, the user turn, and subsequent answer content; citation switching within one paragraph keeps a stable location.
+- **Mobile evidence:** Zoom is derived from each source passage and the viewport width, and the highlight is centered in the viewer area after excluding the floating toolbar. The full nine-combination geometry report is in `CHECK-RESULTS.txt`; visual readability still requires the screenshots to be inspected manually.
+- **Marks:** Candidate A remains the provisional marked-page symbol. Candidate B remains only the two-tone wordmark study. Candidate C and B monochrome comparisons were removed; no permanent mark is selected.
 
-- **Calm:** The same conversation remains primary while the sheet is a deliberate secondary surface.
-- **Ours:** A warm original-page render carries the matched caption highlight beside the real Link figure and NASA/JPL-Caltech/MSSS credit.
-- **Removed:** Connector lines and separate evidence panels.
+## Remaining concerns
 
-## Matches shown
-
-- **Calm:** The page and its adjacent method gutter form one compact reading surface.
-- **Ours:** Solid cited marks, dotted uncited marks, and exact-words/meaning/figure labels are placed on the source page.
-- **Removed:** Search-score cards, dashboards, and decorative result badges. The proof labels are simulated.
-
-## Model unavailable
-
-- **Calm:** One short attention line names the issue and next action.
-- **Ours:** The PDF remains independently openable while the answer model is unavailable.
-- **Removed:** Full-screen error panels and false generated answers.
-
-## Starting
-
-- **Calm:** The answer area remains unboxed and the send control indicates a static waiting state.
-- **Ours:** The sample and question stay in the conversation instead of switching to infrastructure setup.
-- **Removed:** A model-status header. The required starting sentence conflicts with the banned phrase “Model ready”; the conflict is recorded in the test report.
-
-## Reading progress
-
-- **Calm:** Page position and the thumbnail strip carry navigation without a progress dashboard.
-- **Ours:** The page remains the physical-paper surface; a lime mark identifies cited evidence.
-- **Removed:** Percentages, job identifiers, and indexing claims.
-
-## Five answer shapes
-
-- **Calm:** The long-form gallery uses a single reading column and lets the reader scroll.
-- **Ours:** Citations stay attached to their source claims, including figure-adjacent and list examples.
-- **Removed:** A grid of answer cards. These are static fixtures, not generated answers.
-
-## R4 visual choices and remaining concerns
-
-- **Room:** `#16140F`; **paper:** `#F4F1E8`; **highlight:** `#D7FF3A`; **attention:** amber. The proof keeps the dark room and single evidence accent, and uses the warmer paper value specified for R4.
-- **Fonts:** Bundled Newsreader for answers, Instrument Sans for controls, and IBM Plex Mono for page/source metadata. Comparison fonts are bundled locally; no external font request is made.
-- **Spacing:** 840px conversation shell, 66ch answer measure, 40px turn spacing, a bottom composer, and a 55vw desktop PDF sheet. The page plus method gutter fits together when matches are shown.
-- **Source opening:** Desktop zoom adapts to the verified highlight, capped at 200%. Mobile citations open at 118%; measured highlight-line boxes are 16.08–18.59px high and all source marks remain in the 390px clip. This is a static Poppler raster proof, not production PDF.js behavior.
-- **Marks:** A is a marked page, B a swipe wordmark, C an RP monogram. No winner is selected. A is still page-like at 16px, B is typographic rather than a standalone icon, and C is an RP letterform; the owner should judge whether those concepts fit the product before choosing.
-- **Unresolved:** At 118% on mobile, the longest highlighted line leaves only 1.09px of horizontal clearance, though the full source mark remains inside the viewport and the neighboring original page text is visible. Zoom-out returns toward the width-fit view. The starting-copy conflict is a specification issue, not a visual claim.
+This is a static proof. Its local answer fixtures, sample highlighting, and model-unavailable state do not establish production retrieval, generation, live health checks, file parsing, or PDF.js coordinate conversion. The exact NASA source text and Poppler coordinates are documented in `CREDITS.md`; future production highlighting must be independently verified against the real PDF.js page.

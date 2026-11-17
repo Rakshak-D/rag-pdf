@@ -47,8 +47,8 @@
       <section id="attention" class="attention" aria-label="Model connection" hidden>
         <p class="attention-copy" aria-live="polite"></p>
         <div class="attention-actions">
-          <button id="check-model" class="inline-button" type="button">Check again</button>
-          <button id="model-help-open" class="inline-button" type="button" aria-expanded="false">How to start it</button>
+          <button id="check-model" class="outline-button" type="button">Check again</button>
+          <a id="model-help-open" class="inline-link" href="#help-panel" aria-expanded="false">How to start it</a>
         </div>
         <span id="attention-feedback" class="attention-feedback" role="status" aria-live="polite"></span>
       </section>
@@ -140,7 +140,7 @@
         "Which crater did it land in, and what did it drill first?"
       ];
       const stateFromUrl = new URLSearchParams(location.search).get("state") || "first-run";
-      const supportedStates = new Set(["first-run", "answered-closed", "answered-open", "answered-matches", "model-unreachable", "starting", "reading-progress", "answer-shapes"]);
+      const supportedStates = new Set(["first-run", "answered-closed", "answered-open", "answered-matches", "model-unreachable", "reading-progress", "answer-shapes"]);
       const initialState = supportedStates.has(stateFromUrl) ? stateFromUrl : "first-run";
       const thread = document.getElementById("thread");
       const sheet = document.getElementById("pdf-sheet");
@@ -188,18 +188,23 @@
 
       const getSource = (id) => sources.get(id);
       const citationZoomPercent = (sourceId) => {
-        if (window.matchMedia("(max-width: 760px)").matches) return 118;
         const source = getSource(sourceId);
         if (!source || !source.boxes.length) return 100;
         const viewportWidth = pageViewport.clientWidth || Math.max(0, Math.min(900, window.innerWidth * .55) - 24);
-        const paddingLeft = parseFloat(getComputedStyle(pageViewport).paddingLeft) || 0;
+        const mobile = window.matchMedia("(max-width: 760px)").matches;
+        const horizontalClearance = mobile ? 16 : 40;
         const minX = Math.min(...source.boxes.map((box) => box[0]));
         const maxX = Math.max(...source.boxes.map((box) => box[2]));
-        const targetCenterAt100 = ((minX + maxX) / 2) * (96 / 72);
         const targetWidthAt100 = (maxX - minX) * (96 / 72);
+        if (mobile) {
+          const fitWithClearance = Math.floor(Math.max(100, viewportWidth - horizontalClearance) / targetWidthAt100 * 100 / 5) * 5;
+          return Math.max(100, Math.min(200, fitWithClearance));
+        }
+        const paddingLeft = parseFloat(getComputedStyle(pageViewport).paddingLeft) || 0;
+        const targetCenterAt100 = ((minX + maxX) / 2) * (96 / 72);
         const centerFromPageLeft = Math.max(0, viewportWidth / 2 - paddingLeft);
         const required = Math.max(100, centerFromPageLeft / targetCenterAt100 * 100);
-        const fitWithClearance = Math.floor(Math.max(100, viewportWidth - 40) / targetWidthAt100 * 100 / 25) * 25;
+        const fitWithClearance = Math.floor(Math.max(100, viewportWidth - horizontalClearance) / targetWidthAt100 * 100 / 25) * 25;
         const centered = Math.ceil(required / 25) * 25;
         return Math.max(100, Math.min(200, centered, fitWithClearance));
       };
@@ -222,21 +227,28 @@
       };
       const appendCitedText = (parent, text, sourceId, number) => {
         const match = /(\S+)$/.exec(text);
-        if (!match) { parent.append(document.createTextNode(text)); parent.append(makeCitation(sourceId, number)); return; }
+        const sentence = make("span", "evidence-sentence");
+        sentence.dataset.sourceId = sourceId;
+        sentence.dataset.evidence = sourceId;
+        if (!match) { sentence.append(document.createTextNode(text), makeCitation(sourceId, number)); parent.append(sentence); return; }
         const prefix = text.slice(0, match.index);
-        parent.append(document.createTextNode(prefix));
+        sentence.append(document.createTextNode(prefix));
         const pair = make("span", "citation-pair");
         pair.append(document.createTextNode(match[1]), makeCitation(sourceId, number));
-        parent.append(pair);
+        sentence.append(pair);
+        parent.append(sentence);
       };
 
       const showCitationPopover = (button, source) => {
+        if (activePopover?.button === button) return;
         if (activePopover && activePopover.button !== button) {
           activePopover.element.remove();
           activePopover.button.setAttribute("aria-expanded", "false");
+          activePopover.button.removeAttribute("aria-describedby");
         }
         const popover = make("div", "citation-popover");
         popover.id = "citation-popover-" + source.id + "-" + button.dataset.number;
+        popover.dataset.sourceId = source.id;
         popover.setAttribute("role", "tooltip");
         const thumb = document.createElement("img");
         thumb.src = pageThumbPath(source.page);
@@ -247,13 +259,11 @@
         copy.append(make("span", "popover-page", "Page " + source.page));
         copy.append(make("span", "popover-quote", "“" + source.quote + "”"));
         popover.append(thumb, copy);
-        citationPopoverLayer.replaceChildren(popover);
-        const rect = button.getBoundingClientRect();
-        const left = Math.max(16, Math.min(innerWidth - 364, rect.left + rect.width / 2 - 174));
-        const estimatedHeight = 112;
-        const top = rect.top > estimatedHeight + 16 ? rect.top - estimatedHeight - 8 : rect.bottom + 8;
-        popover.style.left = left + "px";
-        popover.style.top = Math.max(12, Math.min(innerHeight - estimatedHeight - 12, top)) + "px";
+        citationPopoverLayer.replaceChildren();
+        const list = button.closest("ol, ul");
+        const anchor = list || button.closest("p, li") || button.closest(".assistant-answer");
+        if (anchor?.parentElement) anchor.insertAdjacentElement("afterend", popover);
+        else citationPopoverLayer.append(popover);
         requestAnimationFrame(() => popover.classList.add("is-visible"));
         button.setAttribute("aria-expanded", "true");
         button.setAttribute("aria-describedby", popover.id);
@@ -261,9 +271,11 @@
       };
       const hideCitationPopover = (button) => {
         if (!activePopover || activePopover.button !== button) return;
+        const pendingPopover = activePopover;
         window.setTimeout(() => {
+          if (activePopover !== pendingPopover) return;
           if (button.matches(":hover") || document.activeElement === button) return;
-          activePopover.element.remove();
+          pendingPopover.element.remove();
           button.removeAttribute("aria-describedby");
           button.setAttribute("aria-expanded", "false");
           activePopover = null;
@@ -331,16 +343,13 @@
           }
         },
         C: {
-          question: "What did the early mission establish about Curiosity and its power source?",
+          question: "What did the mission establish about landing, water and rover power?",
           render(answer) {
-            answer.classList.add("answer-long");
             const paragraphs = [
-              ["NASA describes the Mars Science Laboratory as setting the mobile Curiosity rover down at Gale Crater using precision-landing technology. The page says that technology made one of Mars’ intriguing regions a viable destination. This passage identifies the landing site and the method; it does not itself describe a water finding.", "gale-site"],
-              ["The landing account gives a sequence rather than one isolated maneuver. During the three minutes before touchdown, a parachute slowed the spacecraft, followed by retrorockets mounted around the upper stage. In the final seconds, that stage acted as a sky crane and lowered the upright rover on a tether so it could land on its wheels.", "landing-sequence"],
-              ["The Link caption gives one geological observation: the rock outcrop shows signs of having formed through water deposition. It is a statement about signs in the outcrop, not a reported measurement of how much water moved through it.", "link-caption"],
-              ["For stream flow, the factsheet points to rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site. It identifies these materials as the evidence for stream flow. The passage ties that interpretation to the rocks and the landing area; it does not quantify flow rate or duration.", "stream-flow"],
-              ["The John Klein passage describes geological and mineralogical evidence for sustained liquid water in the first drilled sample. That is the specific water-related finding highlighted here. The factsheet places it among the conditions it considered favorable for life in Mars’ early history.", "john-klein-water"],
-              ["At launch, the generator provided about 110 watts of electrical power for the rover’s instruments, robotic arm, wheels, computers, and radio. The factsheet identifies this as a launch-time figure. It is not a claim about the rover’s current output.", "power-launch"]
+              ["Curiosity landed at Gale Crater using precision landing technology.", "gale-site"],
+              ["A parachute slowed the spacecraft before retrorockets and a sky crane lowered the rover.", "landing-sequence"],
+              ["At launch, its generator provided about 110 watts of electrical power.", "power-launch"],
+              ["The first drilled sample came from John Klein and showed evidence of sustained liquid water.", "john-klein-water"]
             ];
             paragraphs.forEach((row, index) => addParagraph(answer, [{ text: row[0], source: row[1], number: index + 1 }], "answer-paragraph"));
           }
@@ -363,6 +372,12 @@
             const paragraph = make("p", "no-answer", "I couldn't find this in the PDF. The factsheet describes the descent sequence, but it gives no single exact speed.");
             appendCitedText(paragraph, " It says the spacecraft slowed its descent with a parachute.", "landing-sequence", 1);
             answer.append(paragraph);
+          }
+        },
+        F: {
+          question: prompts[1],
+          render(answer) {
+            addParagraph(answer, [{ text: "At launch, the generator provided about 110 watts of electrical power.", source: "power-launch", number: 1 }], "answer-lead");
           }
         }
       };
@@ -388,6 +403,7 @@
 
       const renderFirstRun = () => {
         const content = make("div", "first-run-content");
+        const left = make("div", "first-run-left");
         const suggestions = make("div", "suggested-questions");
         suggestions.setAttribute("aria-label", "Suggested questions");
         prompts.forEach((prompt) => {
@@ -401,12 +417,21 @@
           });
           suggestions.append(button);
         });
-        content.append(suggestions);
+        left.append(suggestions);
+        const page = make("figure", "first-run-page");
+        const pagePreview = document.createElement("img");
+        pagePreview.src = "assets/pages/page-01.png";
+        pagePreview.alt = "NASA factsheet, page 1, showing Gale Crater";
+        pagePreview.width = 1105;
+        pagePreview.height = 1430;
+        const highlight = make("span", "hero-evidence-mark");
+        highlight.setAttribute("aria-hidden", "true");
+        page.append(pagePreview, highlight);
+        content.append(left, page);
         const state = document.body.dataset.state;
         content.hidden = state !== "first-run";
         const status = document.getElementById("attention");
-        status.hidden = !["model-unreachable", "starting"].includes(state);
-        status.classList.toggle("is-starting", state === "starting");
+        status.hidden = state !== "model-unreachable";
         const checkButton = document.getElementById("check-model");
         const helpButton = document.getElementById("model-help-open");
         if (state === "model-unreachable") {
@@ -416,13 +441,6 @@
           questionInput.disabled = true;
           document.getElementById("send-button").disabled = true;
           document.getElementById("send-button").setAttribute("aria-label", "Model unavailable");
-        } else if (state === "starting") {
-          status.querySelector(".attention-copy").textContent = "Getting the model ready. The first answer can take a minute.";
-          checkButton.hidden = true;
-          helpButton.hidden = true;
-          questionInput.disabled = true;
-          document.getElementById("send-button").disabled = true;
-          document.getElementById("send-button").setAttribute("aria-label", "Preparing answer");
         } else {
           questionInput.disabled = false;
           document.getElementById("send-button").disabled = false;
@@ -453,7 +471,7 @@
       const renderState = (state) => {
         document.body.dataset.state = state;
         document.getElementById("attention-feedback").textContent = "";
-        if (["first-run", "model-unreachable", "starting"].includes(state)) renderFirstRun();
+        if (["first-run", "model-unreachable"].includes(state)) renderFirstRun();
         else if (state === "answer-shapes") renderGallery();
         else if (state === "reading-progress") renderAnswerState("D", prompts[0]);
         else renderAnswerState("D", prompts[0]);
@@ -466,7 +484,7 @@
         open.type = "button";
         const canOpen = !selectedFile || selectedIsSample;
         open.disabled = !canOpen;
-        open.setAttribute("aria-label", canOpen ? "Open or close NASA Curiosity fact sheet, 4 pages" : "Page viewing is unavailable for this selected PDF");
+        open.setAttribute("aria-label", canOpen ? "Open or close Mars Science Laboratory/Curiosity factsheet, 4 pages" : "Page viewing is unavailable for this selected PDF");
         const image = document.createElement("img");
         image.className = "document-thumb";
         image.src = pageThumbPath(1);
@@ -474,8 +492,8 @@
         const thumbFrame = make("span", "document-thumb-frame");
         thumbFrame.append(image, make("span", "document-thumb-highlight"));
         const copy = make("span", "document-copy");
-        copy.append(make("span", "document-name", selectedFile && !selectedIsSample ? selectedFile.name : "NASA Curiosity fact sheet"));
-        copy.append(make("span", "document-meta", selectedFile && !selectedIsSample ? "Selected PDF" : "Sample, 4 pages"));
+        copy.append(make("span", "document-name", selectedFile && !selectedIsSample ? selectedFile.name : "Mars Science Laboratory/Curiosity factsheet"));
+        copy.append(make("span", "document-meta", selectedFile && !selectedIsSample ? "Selected PDF" : "4 pages"));
         open.append(thumbFrame, copy);
         open.addEventListener("click", () => {
           if (!canOpen) return;
@@ -499,7 +517,7 @@
         recentThumb.className = "menu-thumb";
         recentThumb.src = pageThumbPath(1);
         recentThumb.alt = "";
-        recentSample.append(recentThumb, make("span", "", "NASA Curiosity fact sheet"));
+        recentSample.append(recentThumb, make("span", "", "Mars Science Laboratory/Curiosity factsheet"));
         recentSample.addEventListener("click", () => {
           hasDocument = true;
           selectedFile = null;
@@ -507,7 +525,7 @@
           recentMenu.hidden = true;
           renderDocumentPill();
           document.querySelector(".document-open")?.focus({ preventScroll: true });
-          announce("NASA Curiosity fact sheet selected.");
+          announce("Mars Science Laboratory/Curiosity factsheet selected.");
         });
         recentMenu.append(recentSample);
         menuToggle.addEventListener("click", () => {
@@ -665,6 +683,32 @@
         document.getElementById("zoom-out").disabled = zoom === "fit";
         document.getElementById("zoom-in").disabled = zoom === 200;
       };
+      const effectivePageRect = () => {
+        const rect = pageViewport.getBoundingClientRect();
+        const visible = {
+          left: rect.left + pageViewport.clientLeft,
+          top: rect.top + pageViewport.clientTop,
+          right: rect.left + pageViewport.clientLeft + pageViewport.clientWidth,
+          bottom: rect.top + pageViewport.clientTop + pageViewport.clientHeight
+        };
+        for (let node = pageViewport.parentElement; node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          const clip = node.getBoundingClientRect();
+          if (["hidden", "clip", "auto", "scroll"].includes(style.overflowX)) {
+            visible.left = Math.max(visible.left, clip.left);
+            visible.right = Math.min(visible.right, clip.right);
+          }
+          if (["hidden", "clip", "auto", "scroll"].includes(style.overflowY)) {
+            visible.top = Math.max(visible.top, clip.top);
+            visible.bottom = Math.min(visible.bottom, clip.bottom);
+          }
+        }
+        const toolbarRect = sheet.querySelector(".sheet-tools")?.getBoundingClientRect();
+        if (toolbarRect && toolbarRect.width > 0 && toolbarRect.top < visible.bottom && toolbarRect.bottom > visible.top) {
+          visible.bottom = Math.min(visible.bottom, toolbarRect.top);
+        }
+        return visible;
+      };
       const positionSource = (sourceId) => {
         const source = getSource(sourceId);
         if (!source || source.page !== activePage) return;
@@ -677,13 +721,9 @@
             left: Math.min(...rects.map((rect) => rect.left)), right: Math.max(...rects.map((rect) => rect.right)),
             top: Math.min(...rects.map((rect) => rect.top)), bottom: Math.max(...rects.map((rect) => rect.bottom))
           };
-          const viewport = pageViewport.getBoundingClientRect();
-          const mobile = window.matchMedia("(max-width: 760px)").matches;
-          const bottomObstruction = mobile && sheetSnap === 30 ? 62 : 12;
-          const usableTop = viewport.top + 12;
-          const usableBottom = viewport.bottom - bottomObstruction;
-          pageViewport.scrollTop += (union.top + union.bottom) / 2 - (usableTop + usableBottom) / 2;
-          pageViewport.scrollLeft += (union.left + union.right) / 2 - (viewport.left + viewport.width / 2);
+          const visible = effectivePageRect();
+          pageViewport.scrollTop += (union.top + union.bottom) / 2 - (visible.top + visible.bottom) / 2;
+          pageViewport.scrollLeft += (union.left + union.right) / 2 - (visible.left + visible.right) / 2;
         }));
       };
       const positionMatches = () => {
@@ -735,7 +775,7 @@
       const openSource = (sourceId, trigger) => {
         const source = getSource(sourceId);
         if (!source) return;
-        if (activePopover) { activePopover.element.remove(); activePopover.button.setAttribute("aria-expanded", "false"); activePopover = null; }
+        if (activePopover) { activePopover.element.remove(); activePopover.button.removeAttribute("aria-describedby"); activePopover.button.setAttribute("aria-expanded", "false"); activePopover = null; }
         openSheet(trigger, source.page, sourceId);
         announce("Page " + source.page + " opened with the cited passage highlighted.");
       };
@@ -811,11 +851,13 @@
       };
       const submitQuestion = (event) => {
         event.preventDefault();
-        if (["model-unreachable", "starting"].includes(document.body.dataset.state)) return;
+        if (document.body.dataset.state === "model-unreachable") return;
         const question = questionInput.value.trim();
         if (!question) return;
-        if (question === prompts[0] && hasDocument && selectedIsSample) {
-          renderAnswerState("D", question);
+        const fixtureByQuestion = new Map([[prompts[0], "D"], [prompts[1], "F"], [prompts[2], "B"]]);
+        const fixtureId = fixtureByQuestion.get(question);
+        if (fixtureId && hasDocument && selectedIsSample) {
+          renderAnswerState(fixtureId, question);
           questionInput.value = "";
           composerFeedback.textContent = "";
           resizeComposer();
@@ -836,7 +878,8 @@
       document.getElementById("check-model").addEventListener("click", () => {
         attentionFeedback.textContent = "This proof does not check the local service.";
       });
-      document.getElementById("model-help-open").addEventListener("click", () => {
+      document.getElementById("model-help-open").addEventListener("click", (event) => {
+        event.preventDefault();
         document.getElementById("help-panel").hidden = false;
         document.getElementById("model-help-open").setAttribute("aria-expanded", "true");
         document.getElementById("model-help-close").focus();

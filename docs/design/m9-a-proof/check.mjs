@@ -22,7 +22,7 @@ const shots = [
   ['r4-logo-comparison.png', 1440, 900, true], ['r4-reading-progress-1440.png', 1440, 900],
 ];
 const output = [
-  'M9-A-R4 — Reading interface static-proof checks',
+  'M9-A-R5 — Final corrective static-proof checks',
   'Browser: Playwright-managed Chrome; exact version recorded after launch.',
   'Scope: static HTML/CSS and deterministic local interactions only. No backend retrieval, ingestion, generation, or production pdf.js behavior is verified.',
   'Evidence paths are relative to docs/design/m9-a-proof/. Screenshot-only readability and taste checks are identified separately.',
@@ -119,6 +119,10 @@ const clipAndMarks = (page, sourceId) => page.evaluate((id) => {
     if (['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowX)) { clip.left = Math.max(clip.left, rect.left); clip.right = Math.min(clip.right, rect.right); }
     if (['hidden', 'clip', 'auto', 'scroll'].includes(style.overflowY)) { clip.top = Math.max(clip.top, rect.top); clip.bottom = Math.min(clip.bottom, rect.bottom); }
   }
+  const toolbar = sheet.querySelector('.sheet-tools');
+  const toolbarRect = toolbar?.getBoundingClientRect();
+  const toolbarVisible = !!toolbarRect && toolbarRect.width > 0 && toolbarRect.height > 0 && toolbarRect.top < clip.bottom && toolbarRect.bottom > clip.top;
+  if (toolbarVisible) clip.bottom = Math.min(clip.bottom, toolbarRect.top);
   const target = document.querySelector(`.evidence-target[data-evidence-target="${id}"]`);
   const marks = [...(target?.querySelectorAll('.evidence-mark') || [])].map((element) => {
     const rect = element.getBoundingClientRect();
@@ -131,7 +135,7 @@ const clipAndMarks = (page, sourceId) => page.evaluate((id) => {
   } : null;
   const zoom = window.__zoomInfo();
   return {
-    clip, marks, union,
+    clip, marks, union, toolbar: toolbarRect ? { left: toolbarRect.left, top: toolbarRect.top, right: toolbarRect.right, bottom: toolbarRect.bottom } : null,
     viewCenter: { x: (clip.left + clip.right) / 2, y: (clip.top + clip.bottom) / 2 },
     pageWidth: rect.width,
     pageHeight: rect.height,
@@ -240,12 +244,13 @@ try {
         figureCount: fixtures.map((fixture) => fixture.querySelectorAll('.inline-figure img').length),
         orderedListCount: fixtures.map((fixture) => fixture.querySelectorAll('ol').length),
         wordCountLong: (fixtures[2]?.querySelector('.assistant-answer')?.innerText.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu) || []).length,
+        sentenceCountC: (fixtures[2]?.querySelector('.assistant-answer')?.innerText.match(/[.!?](?=\s|$)/gu) || []).length,
         insufficientLead: fixtures[4]?.querySelector('.no-answer')?.innerText.startsWith("I couldn't find this in the PDF") || false,
       };
     });
     const noOverflow = fixtureResult.documentWidth <= viewport.w + 1 && fixtureResult.appScrollWidth <= fixtureResult.appWidth + 1;
-    const fixturesPass = fixtureResult.count === 5 && fixtureResult.figureCount[3] === 1 && fixtureResult.orderedListCount[1] === 1 && fixtureResult.wordCountLong >= 250 && fixtureResult.insufficientLead;
-    record('C32', 'Five grounded answer shapes render without horizontal overflow', `${viewport.w}x${viewport.h}`, fixturesPass && noOverflow, JSON.stringify({ ...fixtureResult, noHorizontalOverflow: noOverflow }), 'shots/r4-answer-shapes-1440.png');
+    const fixturesPass = fixtureResult.count === 5 && fixtureResult.figureCount[3] === 1 && fixtureResult.orderedListCount[1] === 1 && fixtureResult.sentenceCountC >= 3 && fixtureResult.sentenceCountC <= 4 && fixtureResult.insufficientLead;
+    record('C32', 'Five grounded answer shapes render; Fixture C has four concise sentences', `${viewport.w}x${viewport.h}`, fixturesPass && noOverflow, JSON.stringify({ ...fixtureResult, noHorizontalOverflow: noOverflow, fixtureCRequirement: '3–4 grounded sentences; no minimum word count' }), 'shots/r5-answer-shapes.png');
 
     const chipResult = await session.page.evaluate(() => {
       const rows = [];
@@ -369,7 +374,7 @@ try {
     const session = await makePage(browser, 'first-run', viewports[0]);
     const colors = await session.page.evaluate(() => {
       const lime = /rgba?\(\s*215\s*,\s*255\s*,\s*58/i;
-      const allowed = (node) => node.matches('.brand-mark,.document-thumb-highlight,.citation-mark,.evidence-mark,.citation-popover .popover-quote,.match-tag[aria-pressed="true"],.match-mobile button[aria-pressed="true"],.legend-mark') || !!node.closest('.brand-mark,.document-thumb-highlight,.citation-mark,.evidence-mark,.citation-popover .popover-quote,.match-tag[aria-pressed="true"],.match-mobile button[aria-pressed="true"],.legend-mark');
+      const allowed = (node) => node.matches('.brand-mark,.document-thumb-highlight,.hero-evidence-mark,.citation-mark,.evidence-mark,.citation-popover .popover-quote,.match-tag[aria-pressed="true"],.match-mobile button[aria-pressed="true"],.legend-mark') || !!node.closest('.brand-mark,.document-thumb-highlight,.hero-evidence-mark,.citation-mark,.evidence-mark,.citation-popover .popover-quote,.match-tag[aria-pressed="true"],.match-mobile button[aria-pressed="true"],.legend-mark');
       const uses = [];
       for (const node of document.querySelectorAll('body *')) {
         if (!node.getClientRects().length) continue;
@@ -388,7 +393,7 @@ try {
       const rect = document.querySelector('#composer').getBoundingClientRect();
       return { centerY: Number((rect.top + rect.height / 2).toFixed(2)), viewportCenterY: innerHeight / 2, deviation: Number(Math.abs((rect.top + rect.height / 2) - innerHeight / 2).toFixed(2)), deviationPct: Number((Math.abs((rect.top + rect.height / 2) - innerHeight / 2) / innerHeight * 100).toFixed(2)), sample: document.querySelector('.document-name')?.textContent.trim(), metadata: document.querySelector('.document-meta')?.textContent.trim(), suggestions: [...document.querySelectorAll('.suggestion')].map((node) => node.textContent.trim()), pdfOpen: !document.querySelector('#pdf-sheet').hidden };
     });
-    record('C28', 'First-run composer is vertically centered with sample and questions visible', '1440x900', firstRun.deviationPct <= 10 && firstRun.pdfOpen === false && firstRun.suggestions.length === 3, JSON.stringify(firstRun), 'shots/r4-first-run-1440.png');
+    record('C28', 'R4 centered-composer placement is superseded by the R5 document-led first-run composition', '1440x900', 'NOT_TESTED', JSON.stringify({ priorMeasurement: firstRun, reason: 'R5 explicitly replaces centered chat with a left composer and right document preview.' }), 'R5-CHANGES.md');
     const chromeWords = await session.page.evaluate(() => {
       const excluded = '.suggestion,.user-turn,.assistant-answer,.figure-caption,.figure-credit,.popover-quote,.sr-only,.skip-link';
       const parts = [];
@@ -412,12 +417,12 @@ try {
       const rect = document.querySelector('#composer').getBoundingClientRect();
       return { centerY: rect.top + rect.height / 2, viewportCenterY: innerHeight / 2, deviationPct: Math.abs(rect.top + rect.height / 2 - innerHeight / 2) / innerHeight * 100, scrollWidth: document.documentElement.scrollWidth };
     });
-    record('C28', 'Mobile first-run composer position and width', '390x844', mobileMetrics.deviationPct <= 10 && mobileMetrics.scrollWidth <= 391, JSON.stringify(mobileMetrics), 'shots/r4-first-run-390.png');
+    record('C28', 'R4 mobile composer-centering assertion is superseded by R5 document-first mobile order', '390x844', 'NOT_TESTED', JSON.stringify({ priorMeasurement: mobileMetrics, reason: 'R5 positions a real page preview above the composer and suggestions below the preview.' }), 'R5-CHANGES.md');
     await mobile.context.close();
   }
 
   // C27: computed visible text sizes and composited foreground/background contrast.
-  for (const [state, viewport] of [['first-run', viewports[0]], ['answered-open', viewports[0]], ['answered-open', viewports[1]], ['answered-open', viewports[2]], ['answered-open', viewports[3]], ['model-unreachable', viewports[0]], ['starting', viewports[0]]]) {
+  for (const [state, viewport] of [['first-run', viewports[0]], ['answered-open', viewports[0]], ['answered-open', viewports[1]], ['answered-open', viewports[2]], ['answered-open', viewports[3]], ['model-unreachable', viewports[0]]]) {
     const session = await makePage(browser, state, viewport);
     if (state === 'answered-open') await session.page.waitForFunction(() => !document.querySelector('#pdf-sheet').hidden);
     const values = await session.page.evaluate(() => {
@@ -498,8 +503,8 @@ try {
         await session.page.waitForFunction(() => document.querySelector('#pdf-sheet').hidden);
       }
     }
-    const allVisible = sources.length === 3 && sources.every((item) => item.within && item.centered && item.zoom === 118 && item.page === '2 / 4' && item.readableScale);
-    record('R4-mobile-sources', 'All three cited passages remain visible, centered, and magnified on the original page', '390x844', allVisible, JSON.stringify({ sources, readabilityReview: 'The minimum source-mark line height is checked in-browser; manual review of r4-mobile-sheet-55-390.png verifies the original page text remains readable with neighboring context.' }), 'shots/r4-mobile-sheet-55-390.png; CHECK-RESULTS.txt');
+    const allVisible = sources.length === 3 && sources.every((item) => item.within && item.centered && item.zoom <= 200 && item.page === '2 / 4' && item.readableScale);
+    record('R4-mobile-sources', 'R4 fixed 118% mobile zoom and 1.09px clearance gate is superseded by R5 nine-snap geometry', '390x844', 'NOT_TESTED', JSON.stringify({ priorMeasurement: sources, reason: 'R5 requires all three passages at nine sheet-height combinations with at least 8px effective clearance.' }), 'R5-CHANGES.md; CHECK-RESULTS.txt');
     await session.context.close();
   }
 
@@ -563,7 +568,7 @@ try {
   // C33: banned expressions across all directly addressable states and chrome word counts.
   {
     const banned = ['desk', 'belong', 'page-backed', 'read then ask', 'seamless', 'effortless', 'unlock', 'supercharge', 'magic', 'intelligent', 'powered by ai', 'powered by', 'your documents', 'journey', 'insights', 'smart', 'model ready', 'preview', 'illustrative', 'not functional'];
-    const states = ['first-run', 'answered-closed', 'answered-open', 'answered-matches', 'model-unreachable', 'starting', 'reading-progress', 'answer-shapes'];
+    const states = ['first-run', 'answered-closed', 'answered-open', 'answered-matches', 'model-unreachable', 'reading-progress', 'answer-shapes'];
     const findings = [];
     for (const state of states) {
       const session = await makePage(browser, state, viewports[0]);
@@ -627,14 +632,27 @@ try {
       const externalRequests = session.requests.filter((url) => new URL(url).origin !== origin);
       record('C33', `Visible interface copy word count: ${state}`, '1440x900', copyAudit.chromeWords <= 25, JSON.stringify(copyAudit), `?state=${state}; copy.md`);
       record('C33', `Banned visible wording and Ollama placement: ${state}`, '1440x900', matches.length === 0 && ollamaAllowed && externalRequests.length === 0, JSON.stringify({ bannedMatches: matches, ollamaLocations, externalRequests, normalizedVisibleCopy: normalized.slice(0, 700) }), `?state=${state}`);
-      findings.push({ state, banned: matches, ollamaAllowed, externalRequests: externalRequests.length, chromeWords: copyAudit.chromeWords, totalIncludingSuggestions: copyAudit.totalIncludingSuggestions });
+      findings.push({ state, banned: matches, ollamaAllowed, externalRequests: externalRequests.length, chromeWords: copyAudit.chromeWords, chromeText: copyAudit.chromeText, placeholder: copyAudit.placeholder, totalIncludingSuggestions: copyAudit.totalIncludingSuggestions });
       await session.context.close();
     }
+    const startingState = await makePage(browser, 'starting', viewports[0]);
+    const startingVisible = await startingState.page.locator('body').innerText();
+    const startingMetrics = { actualState: await startingState.page.locator('body').getAttribute('data-state'), visibleStartingCopy: startingVisible.includes('Getting the model ready'), readyCopy: startingVisible.includes('Model ready'), attentionVisible: await startingState.page.locator('#attention').isVisible() };
+    record('C33', 'Removed starting URL falls back to first run with no status or ready claim', '1440x900', startingMetrics.actualState === 'first-run' && !startingMetrics.visibleStartingCopy && !startingMetrics.readyCopy && !startingMetrics.attentionVisible, JSON.stringify(startingMetrics), 'copy.md; proof-static-not-functional.html');
+    await startingState.context.close();
+
     const standaloneCuriosity = await makePage(browser, 'first-run', viewports[0]);
     const curiosityLabels = await standaloneCuriosity.page.evaluate(() => [...document.querySelectorAll('body *')].filter((node) => node.getClientRects().length && node.children.length === 0 && node.textContent.trim().toLowerCase() === 'curiosity' && !node.matches('.document-name,.sheet-title')).map((node) => ({ className: node.className?.baseVal || node.className, text: node.textContent.trim() })));
     record('C33', 'Curiosity is not used as a standalone interface label', '1440x900', curiosityLabels.length === 0, JSON.stringify({ standaloneCuriosityLabels: curiosityLabels, permittedSampleTitle: await standaloneCuriosity.page.locator('.document-name').innerText() }), 'copy.md; shots/r4-first-run-1440.png');
     await standaloneCuriosity.context.close();
-    record('C33', 'All directly addressable states meet copy restrictions', '1440x900', findings.every((item) => item.banned.length === 0 && item.ollamaAllowed && item.externalRequests === 0 && item.chromeWords <= 25), JSON.stringify(findings), 'copy.md');
+    const inventory = await fs.readFile(path.join(root, 'copy.md'), 'utf8');
+    const inventoryTokens = new Set((inventory.toLowerCase().match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) || []));
+    const observedChromeWords = [...new Set(findings.flatMap((item) => (item.chromeText + ' ' + item.placeholder).toLowerCase().match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) || []))];
+    const unlistedChromeWords = observedChromeWords.filter((word) => !inventoryTokens.has(word));
+    const inventoryHasSampleIdentity = /Mars Science Laboratory\/Curiosity factsheet/i.test(inventory);
+    const inventoryHasFailureCopy = /Can.t reach the model\. Start Ollama, then check again\./i.test(inventory);
+    const inventoryHasComposerPlaceholder = /Ask a question/i.test(inventory);
+    record('C33', 'All directly addressable states meet copy restrictions and observed visible chrome words are inventoried', '1440x900', findings.every((item) => item.banned.length === 0 && item.ollamaAllowed && item.externalRequests === 0 && item.chromeWords <= 25) && unlistedChromeWords.length === 0 && inventoryHasSampleIdentity && inventoryHasFailureCopy && inventoryHasComposerPlaceholder, JSON.stringify({ findings, observedChromeWordCount: observedChromeWords.length, unlistedChromeWords, inventoryHasSampleIdentity, inventoryHasFailureCopy, inventoryHasComposerPlaceholder, limits: { chromeWords: 25, suggestionsReportedSeparately: true } }), 'copy.md');
   }
 
   // R3 retained interaction requirements: grounded citation, focus restoration, optional viewer and deterministic no-network sample answer.
@@ -740,28 +758,29 @@ try {
     await session.context.close();
   }
 
-  // C21/C18: three mark comparison and all local logo treatments.
+  // R5-7: only provisional mark A and the two-tone wordmark study B remain.
   {
     const session = await makePage(browser, '', viewports[0]);
     await session.page.goto(`${origin}/logo-comparison.html`, { waitUntil: 'networkidle' });
     await waitAssets(session.page);
-    const metric = await session.page.evaluate(() => ({ candidates: [...document.querySelectorAll('.candidate h2')].map((node) => node.innerText.trim()), candidatesCount: document.querySelectorAll('.candidate').length, specimenSizes: [...new Set([...document.querySelectorAll('.specimen svg.mark')].map((node) => Math.round(node.getBoundingClientRect().width)))].sort((a, b) => a - b), surfaces: document.querySelectorAll('.surface').length, headerLockups: document.querySelectorAll('.lockup').length, externalImageCount: [...document.images].filter((node) => new URL(node.src).origin !== location.origin).length, fonts: { newsreader: document.fonts.check('16px Newsreader'), instrument: document.fonts.check('16px Instrument') } }));
-    const markFiles = ['r4-a-page-highlight.svg', 'r4-c-rp-monogram.svg'];
+    const metric = await session.page.evaluate(() => ({ heading: document.querySelector('h1')?.innerText.trim(), candidates: [...document.querySelectorAll('.candidate h2')].map((node) => node.innerText.trim()), candidatesCount: document.querySelectorAll('.candidate').length, specimenSizes: [...new Set([...document.querySelectorAll('.specimen svg.mark')].map((node) => Math.round(node.getBoundingClientRect().width)))].sort((a, b) => a - b), surfaces: document.querySelectorAll('.surface').length, headerLockups: document.querySelectorAll('.lockup').length, wordmarkMonoVariants: document.querySelectorAll('.candidate-word .mono').length, wordmarkTwoToneVariants: document.querySelectorAll('.candidate-word .two-tone').length, externalImageCount: [...document.images].filter((node) => new URL(node.src).origin !== location.origin).length, fonts: { newsreader: document.fonts.check('16px Newsreader'), instrument: document.fonts.check('16px Instrument') } }));
+    const markFiles = ['r4-a-page-highlight.svg'];
     const markText = await Promise.all(markFiles.map((name) => fs.readFile(path.join(root, 'assets', 'marks', name), 'utf8')));
     const validSvg = markText.every((value) => value.includes('viewBox="0 0 24 24"') && value.includes('id="mark"') && !/gradient/iu.test(value));
+    let obsoleteCandidateCExists = true;
+    try { await fs.access(path.join(root, 'assets', 'marks', 'r4-c-rp-monogram.svg')); } catch { obsoleteCandidateCExists = false; }
     const requestOutside = session.requests.filter((url) => new URL(url).origin !== origin);
-    record('R3-18', 'Three R4 marks render at size variants with dark/paper and mono/two-tone treatments', '1440x900', metric.candidatesCount === 3 && metric.specimenSizes.includes(16) && metric.specimenSizes.includes(24) && metric.specimenSizes.includes(48) && metric.surfaces >= 10 && metric.headerLockups === 6 && validSvg && requestOutside.length === 0, JSON.stringify({ ...metric, markFiles, valid24pxGridSvg: validSvg, remoteRequests: requestOutside, originalityNote: 'A new drawing is not trademark clearance; owner comparison remains required.' }), 'shots/r4-logo-comparison.png');
-    const a16 = await session.page.locator('.candidate').nth(0).locator('.specimen svg.mark').first().screenshot();
-    const c16 = await session.page.locator('.candidate').nth(2).locator('.specimen svg.mark').first().screenshot();
-    record('R3-18', 'Candidate A and C retain different one-colour 16px silhouettes', '1440x900', a16.length > 0 && c16.length > 0 && !a16.equals(c16), JSON.stringify({ candidateA: 'Marked page; file/page-like at 16px, with bar remaining visible', candidateB: 'Wordmark, not a standalone icon', candidateC: 'RP monogram; distinct from A at 16px', candidateA16Bytes: a16.length, candidateC16Bytes: c16.length }), 'shots/r4-logo-comparison.png');
+    record('R5-7', 'Only provisional marked-page A and two-tone wordmark B remain; C and B monochrome are removed', '1440x900', metric.heading === 'Two mark directions' && metric.candidatesCount === 2 && metric.specimenSizes.includes(16) && metric.specimenSizes.includes(32) && metric.specimenSizes.includes(64) && metric.wordmarkMonoVariants === 0 && metric.wordmarkTwoToneVariants >= 2 && !obsoleteCandidateCExists && validSvg && requestOutside.length === 0, JSON.stringify({ ...metric, markFiles, valid24pxGridSvg: validSvg, obsoleteCandidateCExists, remoteRequests: requestOutside, permanentWinnerSelected: false }), 'logo-comparison.html');
+    const a16 = await session.page.locator('.candidate').first().locator('.specimen svg.mark').first().screenshot();
+    record('R5-7', 'Provisional mark A remains visible at 16px in its specified one-colour treatment', '1440x900', a16.length > 0, JSON.stringify({ candidateA: 'Marked page; retained as a provisional mark only', screenshotBytes: a16.length }), 'logo-comparison.html');
     await session.context.close();
   }
 
   // Fresh contexts: default states, status wording, local help and first-run persistence.
-  for (const state of ['model-unreachable', 'starting', 'reading-progress']) {
+  for (const state of ['model-unreachable', 'reading-progress']) {
     const session = await makePage(browser, state, viewports[0]);
     const metrics = await session.page.evaluate(() => ({ state: document.body.dataset.state, message: document.querySelector('.attention-copy')?.innerText.trim() || '', buttonLabel: document.querySelector('#send-button').getAttribute('aria-label'), progress: document.querySelector('#document-progress')?.innerText.trim() || '', page: document.querySelector('#toolbar-page')?.innerText.trim(), opened: !document.querySelector('#pdf-sheet').hidden }));
-    const expected = state === 'model-unreachable' ? metrics.message === "Can't reach the model. Start Ollama, then check again." : state === 'starting' ? metrics.message === 'Getting the model ready. The first answer can take a minute.' : metrics.progress === 'Page 3/4' && metrics.page === '3 / 4';
+    const expected = state === 'model-unreachable' ? metrics.message === "Can't reach the model. Start Ollama, then check again." : metrics.progress === 'Page 3/4' && metrics.page === '3 / 4';
     record('R3-4/R4-status', `Truthful static state: ${state}`, '1440x900', expected, JSON.stringify(metrics), state === 'reading-progress' ? 'shots/r4-reading-progress-1440.png' : 'shots/r4-model-unreachable-1440.png');
     if (state === 'model-unreachable') {
       await session.page.locator('#model-help-open').click();
@@ -771,6 +790,211 @@ try {
     }
     await session.context.close();
   }
+
+  // R5-1: every citation popover is measured against a Range for its own sentence and the user bubble.
+  for (const viewport of [viewports[0], viewports[1]]) {
+    const session = await makePage(browser, 'answered-closed', viewport);
+    const citations = session.page.locator('.citation');
+    const rows = [];
+    for (let index = 0; index < await citations.count(); index += 1) {
+      const button = citations.nth(index);
+      const sourceId = await button.getAttribute('data-source-id');
+      await button.hover();
+      await session.page.waitForTimeout(60);
+      const metric = await session.page.evaluate((index) => {
+        const button = document.querySelectorAll('.citation')[index];
+        const sentence = button?.closest('.evidence-sentence');
+        const popover = document.querySelector('.citation-popover.is-visible');
+        const thread = document.querySelector('.thread')?.getBoundingClientRect();
+        const user = button?.closest('.turn')?.querySelector('.user-turn')?.getBoundingClientRect();
+        if (!button || !sentence || !popover || !thread || !user) return { visiblePopover: !!popover, missing: { button: !button, sentenceRange: !sentence, popover: !popover, thread: !thread, userBubble: !user } };
+        const range = document.createRange();
+        range.selectNodeContents(sentence);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        const sentenceRect = rects.length ? { left: Math.min(...rects.map((rect) => rect.left)), top: Math.min(...rects.map((rect) => rect.top)), right: Math.max(...rects.map((rect) => rect.right)), bottom: Math.max(...rects.map((rect) => rect.bottom)) } : null;
+        const pop = popover.getBoundingClientRect();
+        const area = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+        const other = [...button.closest('.turn').querySelectorAll('.evidence-sentence,.inline-figure')].filter((node) => node !== sentence).map((node) => {
+          const rect = node.getBoundingClientRect();
+          return { type: node.matches('.inline-figure') ? 'figure' : 'other sentence', text: node.innerText.trim().slice(0, 42), area: area(pop, rect) };
+        }).filter((item) => item.area > 0.5);
+        return { visiblePopover: true, sentenceRect, popoverRect: { left: pop.left, top: pop.top, right: pop.right, bottom: pop.bottom }, sentencePopoverIntersectionPx2: sentenceRect ? area(pop, sentenceRect) : null, userBubbleIntersectionPx2: area(pop, user), threadBounds: { left: thread.left, top: thread.top, right: thread.right, bottom: thread.bottom }, insideConversationColumn: pop.left >= thread.left - .5 && pop.right <= thread.right + .5, insideViewport: pop.left >= 0 && pop.top >= 0 && pop.right <= innerWidth && pop.bottom <= innerHeight, otherContentIntersections: other };
+      }, index);
+      rows.push({ index, sourceId, ...metric });
+    }
+    const pass = rows.length === 3 && rows.every((row) => row.visiblePopover && row.sentencePopoverIntersectionPx2 === 0 && row.userBubbleIntersectionPx2 === 0 && row.insideConversationColumn && row.insideViewport && row.otherContentIntersections?.length === 0);
+    record('R5-1', 'Every citation popover avoids its cited sentence, user bubble, and following evidence content', `${viewport.w}x${viewport.h}`, pass, JSON.stringify(rows), 'CHECK-RESULTS.txt; citation popover screenshots');
+    await session.context.close();
+  }
+
+  // R5-2: first run is document-led, with a real page-1 render and a source-verified highlight.
+  for (const viewport of [viewports[0], viewports[3]]) {
+    const session = await makePage(browser, 'first-run', viewport);
+    const metric = await session.page.evaluate(() => {
+      const image = document.querySelector('.first-run-page img');
+      const mark = document.querySelector('.first-run-page .hero-evidence-mark');
+      const preview = document.querySelector('.first-run-page');
+      const composer = document.querySelector('#composer')?.getBoundingClientRect();
+      const page = image?.getBoundingClientRect();
+      const markRect = mark?.getBoundingClientRect();
+      const suggestions = [...document.querySelectorAll('.suggestion')].map((node) => { const rect = node.getBoundingClientRect(); return { text: node.innerText.trim(), left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, visible: rect.width > 0 && rect.height > 0 && getComputedStyle(node).visibility !== 'hidden' }; });
+      const name = document.querySelector('.document-name')?.innerText.trim() || '';
+      const meta = document.querySelector('.document-meta')?.innerText.trim() || '';
+      const pdfOpen = document.body.dataset.pdfOpen === 'true';
+      const left = document.querySelector('.first-run-left')?.getBoundingClientRect();
+      const desktop = innerWidth > 760;
+      const normalizedMark = page && markRect ? { x: (markRect.left - page.left) / page.width, y: (markRect.top - page.top) / page.height, width: markRect.width / page.width, height: markRect.height / page.height } : null;
+      const expected = { x: 109.07 / 612, y: 201.22 / 792, width: (160.031 - 109.07) / 612, height: (213.04 - 201.22) / 792 };
+      const highlightMatchesSourceBox = !!normalizedMark && ['x', 'y', 'width', 'height'].every((key) => Math.abs(normalizedMark[key] - expected[key]) <= .003);
+      const mobileOrder = !desktop && !!page && !!composer && page.bottom < composer.top && suggestions.length === 3 && suggestions.every((item) => item.visible && item.top > page.bottom && item.bottom < composer.top);
+      const desktopLayout = desktop && !!page && !!composer && !!left && left.right < page.left && composer.right < page.left - 16 && page.width >= 420 && page.height >= 540;
+      return { src: image?.getAttribute('src'), imageLoaded: !!image?.complete && image.naturalWidth > 0, imageRatio: image?.naturalWidth && image?.naturalHeight ? image.naturalWidth / image.naturalHeight : null, expectedPageRatio: 612 / 792, preview: preview && { left: page?.left, top: page?.top, right: page?.right, bottom: page?.bottom, width: page?.width, height: page?.height }, mark: normalizedMark, expectedMark: expected, highlightMatchesSourceBox, desktopLayout, mobileOrder, composer, leftPane: left && { left: left.left, right: left.right }, sampleIdentity: name, sampleMeta: meta, suggestionCount: suggestions.length, suggestions, pdfOpen, documentWidth: document.documentElement.scrollWidth, noHorizontalOverflow: document.documentElement.scrollWidth <= innerWidth + 1, controlsVisible: ['#attach-button','#question-input','#send-button'].every((selector) => { const rect = document.querySelector(selector).getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= innerHeight; }) };
+    });
+    const pageRatio = metric.imageRatio !== null && Math.abs(metric.imageRatio - metric.expectedPageRatio) < .003;
+    const correctAsset = metric.src === 'assets/pages/page-01.png' && metric.imageLoaded && pageRatio && metric.highlightMatchesSourceBox;
+    const identity = /Mars Science Laboratory\/Curiosity factsheet/i.test(metric.sampleIdentity) && /4 pages/i.test(metric.sampleMeta);
+    const layoutPass = viewport.w > 760 ? metric.desktopLayout : metric.mobileOrder;
+    const pass = correctAsset && identity && metric.suggestionCount === 3 && metric.pdfOpen === false && metric.noHorizontalOverflow && metric.controlsVisible && layoutPass;
+    record('R5-2', 'First run shows the genuine, highlighted NASA page with optional viewer and usable composer', `${viewport.w}x${viewport.h}`, pass, JSON.stringify({ ...metric, pageRatio, correctAsset, identity, layoutPass, highlightProvenance: 'Poppler pdftotext -bbox on original PDF page 1; exact Gale Crater word box.' }), viewport.w === 1440 ? 'shots/r5-first-run-1440.png' : 'shots/r5-first-run-390.png');
+    await session.context.close();
+  }
+
+  // R5-3: each visible suggestion fills and submits a complete source-mapped deterministic fixture.
+  {
+    const cases = [
+      { index: 0, answer: /Link outcrop shows signs/i, sources: ['link-caption', 'stream-flow', 'john-klein-water'], page: '2 / 4' },
+      { index: 1, answer: /110 watts of electrical power/i, sources: ['power-launch'], page: '3 / 4' },
+      { index: 2, answer: /Gale Crater/i, sources: ['gale-site', 'john-klein-first', 'john-klein-water'], page: '1 / 4' },
+    ];
+    for (const item of cases) {
+      const session = await makePage(browser, 'first-run', viewports[0]);
+      await session.page.locator('.suggestion').nth(item.index).click();
+      const populated = await session.page.locator('#question-input').inputValue();
+      await session.page.locator('#send-button').click();
+      await session.page.waitForTimeout(80);
+      const answer = await session.page.locator('.assistant-answer').innerText().catch(() => '');
+      const sources = await session.page.locator('.assistant-answer .citation').evaluateAll((nodes) => nodes.map((node) => node.dataset.sourceId));
+      const feedback = await session.page.locator('#composer-feedback').innerText();
+      let pageReadback = null;
+      const firstCitation = session.page.locator('.assistant-answer .citation').first();
+      if (await firstCitation.count()) {
+        await firstCitation.click();
+        await session.page.waitForFunction(() => document.body.dataset.pdfOpen === 'true');
+        pageReadback = await session.page.locator('#toolbar-page').innerText();
+      }
+      const localRequests = session.requests.filter((url) => new URL(url).origin !== origin || /\/api(?:\/|\?|$)/i.test(new URL(url).pathname));
+      const pass = populated === await session.page.locator('.user-turn').innerText().catch(() => '') && answer.length > 20 && item.answer.test(answer) && item.sources.every((source) => sources.includes(source)) && !/no saved answer/i.test(feedback) && pageReadback === item.page && localRequests.length === 0;
+      record('R5-3', `Suggested question ${item.index + 1} submits a complete grounded fixture`, '1440x900', pass, JSON.stringify({ populated, answer, sources, expectedSources: item.sources, feedback, pageReadback, expectedPage: item.page, disallowedRequests: localRequests, fixtureOnly: true }), 'CHECK-RESULTS.txt; CREDITS.md');
+      await session.context.close();
+    }
+  }
+
+  // R5-4: Fixture C is concise; Fixture E retains its exact existing insufficient-evidence copy.
+  {
+    const session = await makePage(browser, 'answer-shapes', viewports[0]);
+    const metric = await session.page.evaluate(() => {
+      const fixtures = [...document.querySelectorAll('.fixture')];
+      const c = fixtures[2]?.querySelector('.assistant-answer');
+      const e = fixtures[4]?.querySelector('.no-answer');
+      const clone = e?.cloneNode(true);
+      clone?.querySelectorAll('button').forEach((node) => node.remove());
+      const answer = c?.innerText || '';
+      return { fixtureC: answer, fixtureCSentences: (answer.match(/[.!?](?=\s|$)/gu) || []).length, fixtureCCitations: [...(c?.querySelectorAll('.citation') || [])].map((node) => node.dataset.sourceId), fixtureE: clone?.textContent.replace(/\s+/g, ' ').trim() || '', fixtureECitations: [...(e?.querySelectorAll('.citation') || [])].map((node) => node.dataset.sourceId) };
+    });
+    const expectedE = "I couldn't find this in the PDF. The factsheet describes the descent sequence, but it gives no single exact speed. It says the spacecraft slowed its descent with a parachute.";
+    record('R5-4', 'Fixture C has three or four direct grounded sentences and Fixture E is unchanged', '1440x900', metric.fixtureCSentences >= 3 && metric.fixtureCSentences <= 4 && metric.fixtureECitations[0] === 'landing-sequence' && metric.fixtureE === expectedE, JSON.stringify({ ...metric, expectedFixtureE: expectedE }), 'shots/r5-answer-shapes.png');
+    await session.context.close();
+  }
+
+  // R5-5: all three cited passages are checked at all nine viewport-height/sheet-snap combinations.
+  for (const height of [667, 740, 844]) {
+    const session = await makePage(browser, 'answered-closed', { w: 390, h: height });
+    const values = new Map();
+    for (const sourceId of ['link-caption', 'stream-flow', 'john-klein-water']) {
+      const citation = session.page.locator(`.citation[data-source-id="${sourceId}"]`).first();
+      await citation.click();
+      await session.page.waitForFunction((id) => !document.querySelector('#pdf-sheet').hidden && document.querySelector('#evidence-layer').dataset.activeTarget === id, sourceId);
+      for (const snap of [30, 55, 92]) {
+        await session.page.locator('#sheet-grip').click();
+        await session.page.waitForFunction((value) => document.body.dataset.sheetSnap === String(value), snap);
+        await session.page.waitForTimeout(120);
+        const value = await clipAndMarks(session.page, sourceId);
+        const clearance = value?.union ? Math.min(value.union.left - value.clip.left, value.clip.right - value.union.right, value.union.top - value.clip.top, value.clip.bottom - value.union.bottom) : -Infinity;
+        const dx = value?.union ? Math.abs((value.union.left + value.union.right) / 2 - value.viewCenter.x) / Math.max(1, value.clip.right - value.clip.left) : Infinity;
+        const dy = value?.union ? Math.abs((value.union.top + value.union.bottom) / 2 - value.viewCenter.y) / Math.max(1, value.clip.bottom - value.clip.top) : Infinity;
+        const minimumLineHeight = value?.marks.length ? Math.min(...value.marks.map((mark) => mark.height)) : 0;
+        const pageAspect = value?.pageWidth && value?.pageHeight ? value.pageWidth / value.pageHeight : null;
+        const row = { sourceId, snap, ...value, clearancePx: Number(clearance.toFixed(2)), centerDeviationPct: { x: Number((dx * 100).toFixed(2)), y: Number((dy * 100).toFixed(2)) }, minimumLineHeight: Number(minimumLineHeight.toFixed(2)), pageAspect, scrollBehavior: value?.scroll && { horizontal: value.scroll.width > value.scroll.clientWidth, vertical: value.scroll.height > value.scroll.clientHeight, left: value.scroll.left, top: value.scroll.top } };
+        const allInsideWithClearance = !!value && value.marks.length > 0 && value.marks.every((mark) => mark.left >= value.clip.left + 8 && mark.right <= value.clip.right - 8 && mark.top >= value.clip.top + 8 && mark.bottom <= value.clip.bottom - 8);
+        row.pass = allInsideWithClearance && dx <= .15 && dy <= .15 && value.nativePdfPercent <= 200 && pageAspect !== null && Math.abs(pageAspect - 612 / 792) <= .003;
+        const key = `${height}/${snap}`;
+        if (!values.has(key)) values.set(key, []);
+        values.get(key).push(row);
+      }
+      await session.page.locator('#close-sheet').click();
+      await session.page.waitForFunction(() => document.querySelector('#pdf-sheet').hidden);
+    }
+    for (const snap of [30, 55, 92]) {
+      const rows = values.get(`${height}/${snap}`) || [];
+      record('R5-5', `All source passages fit with 8px clearance and 15% centring at ${snap}% snap`, `390x${height}`, rows.length === 3 && rows.every((row) => row.pass), JSON.stringify(rows), 'CHECK-RESULTS.txt; focused mobile screenshots');
+    }
+    await session.context.close();
+  }
+
+  // R5-6: the unavailable-model retry is visibly outlined, has a safe local action, and never claims readiness.
+  {
+    const session = await makePage(browser, 'model-unreachable', viewports[0]);
+    const button = session.page.locator('#check-model');
+    const style = await button.evaluate((node) => ({ borderStyle: getComputedStyle(node).borderTopStyle, borderWidth: getComputedStyle(node).borderTopWidth, borderColor: getComputedStyle(node).borderTopColor, background: getComputedStyle(node).backgroundColor }));
+    const link = session.page.locator('#model-help-open');
+    const href = await link.getAttribute('href');
+    await button.click();
+    const feedback = await session.page.locator('#attention-feedback').innerText();
+    await link.click();
+    const helpVisible = await session.page.locator('#help-panel').isVisible();
+    const exactMessage = await session.page.locator('.attention-copy').innerText();
+    await session.page.locator('#model-help-close').click();
+    await session.page.locator('.document-open').click();
+    await session.page.waitForFunction(() => document.body.dataset.pdfOpen === 'true');
+    const pdfAccessible = await session.page.locator('#pdf-sheet').isVisible() && await session.page.locator('.assistant-answer').count() === 0;
+    const requests = session.requests.filter((url) => new URL(url).origin !== origin);
+    const pass = style.borderStyle === 'solid' && parseFloat(style.borderWidth) >= 1 && !/215,\s*255,\s*58/.test(style.borderColor) && href === '#help-panel' && /does not check the local service/i.test(feedback) && helpVisible && pdfAccessible && exactMessage === "Can't reach the model. Start Ollama, then check again." && !/Model ready/i.test(await session.page.locator('body').innerText()) && requests.length === 0;
+    record('R5-6', 'Check again is an outlined, honest prototype action with a useful help link and independent PDF viewing', '1440x900', pass, JSON.stringify({ style, href, feedback, helpVisible, pdfAccessible, exactMessage, externalRequests: requests }), 'shots/r5-model-unreachable-1440.png');
+    await session.context.close();
+  }
+
+  // R5-8: user-bubble clearance from the open desktop PDF sheet.
+  {
+    const session = await makePage(browser, 'answered-open', viewports[0]);
+    await session.page.waitForFunction(() => document.body.dataset.pdfOpen === 'true');
+    const metric = await session.page.evaluate(() => {
+      const bubble = document.querySelector('.user-turn')?.getBoundingClientRect();
+      const sheet = document.querySelector('#pdf-sheet')?.getBoundingClientRect();
+      return bubble && sheet ? { bubble: { left: bubble.left, right: bubble.right, top: bubble.top, bottom: bubble.bottom }, sheet: { left: sheet.left, right: sheet.right, top: sheet.top, bottom: sheet.bottom }, separationPx: sheet.left - bubble.right, horizontalOverflow: document.documentElement.scrollWidth > innerWidth } : null;
+    });
+    record('R5-8', 'Answered-open user bubble has at least 24px visible separation from the PDF sheet', '1440x900', !!metric && metric.separationPx >= 24 && !metric.horizontalOverflow, JSON.stringify(metric), 'shots/r5-citation-popover-1440.png');
+    await session.context.close();
+  }
+
+  // Verify the nine required R5 full-resolution screenshots without replacing the historical R4 captures.
+  const requiredR5Shots = [
+    ['r5-first-run-1440.png', 1440, 900], ['r5-first-run-390.png', 390, 844],
+    ['r5-citation-popover-1440.png', 1440, 900], ['r5-citation-popover-1024.png', 1024, 768],
+    ['r5-answer-shapes.png', 1440, 900, true], ['r5-mobile-sheet-30.png', 390, 844],
+    ['r5-mobile-sheet-55.png', 390, 844], ['r5-mobile-sheet-92.png', 390, 844],
+    ['r5-model-unreachable-1440.png', 1440, 900],
+  ];
+  const r5ScreenshotResults = [];
+  for (const [name, width, height, fullPage = false] of requiredR5Shots) {
+    try {
+      const stat = await fs.stat(path.join(root, 'shots', name));
+      const image = await fs.readFile(path.join(root, 'shots', name));
+      const pngSize = image.length >= 24 ? { width: image.readUInt32BE(16), height: image.readUInt32BE(20) } : { width: 0, height: 0 };
+      r5ScreenshotResults.push({ name, bytes: stat.size, ...pngSize, expected: { width, height, fullPage } });
+    } catch (error) { r5ScreenshotResults.push({ name, error: error.message }); }
+  }
+  const passR5Shots = r5ScreenshotResults.length === 9 && r5ScreenshotResults.every((item) => item.bytes > 0 && !item.error && item.width === item.expected.width && (item.expected.fullPage ? item.height >= item.expected.height : item.height === item.expected.height));
+  record('R5-SCREENSHOTS', 'Nine named R5 screenshots exist at the requested viewport dimensions', '1440x900, 1024x768, 390x844', passR5Shots, JSON.stringify(r5ScreenshotResults), 'shots/');
 
   // Verify exactly twelve R4 screenshots and their encoded viewport dimensions.
   const screenshotResults = [];
@@ -804,11 +1028,11 @@ try {
     `TOTAL: ${passed} PASS, ${failed} FAIL, ${notTested} NOT_TESTED; ${total} records.`,
     'Manual screenshot review is separate from DOM measurements. This static proof does not establish live retrieval, generation, ingestion, privacy behavior, or production pdf.js coordinate conversion.',
     '',
-    'SPEC CONFLICT | C33 requires the exact starting message “Getting the model ready. The first answer can take a minute.” and also bans the phrase “Model ready”. The required message contains the banned phrase. The required copy is preserved and the visible-wording check remains FAIL.',
+    'SUPERSEDED_BY_R5 | R4 starting-state copy | The owner removed the starting status requirement; normal state has no status text, and ?state=starting safely falls back to first-run. Not counted as a pass.',
     'SUPERSEDED_BY_R4 | Earlier permanent split-screen Reading Desk | Replaced by R4 4.1 conversation-first canvas with an optional PDF sheet; not counted as a pass.',
     'SUPERSEDED_BY_R4 | R3-F1 persistent model-ready header/status | Replaced by R4 4.2–4.3 no ready status in the header and attention-only states; not counted as a pass.',
-    'SUPERSEDED_BY_R4 | R3 mobile 2.5× citation default | Replaced by R4 4.10 source-focused zoom up to 200% with the original page fitting the sheet width by default; actual mobile citation zoom is 118%; not counted as a pass.',
-    'SUPERSEDED_BY_R4 | R3 logo candidates and screenshot set | Replaced by R4 4.13 three new concepts and the twelve named R4 captures; not counted as a pass.'
+    'SUPERSEDED_BY_R5 | R4 mobile fixed 118% zoom and pinned clearance | Replaced by measured source-width zoom and 27 passage checks across nine viewport-height/sheet-snap combinations; not counted as a pass.',
+    'SUPERSEDED_BY_R5 | R4 three-logo exploration | Candidate C and B monochrome study removed; only A and two-tone wordmark B remain. Not counted as a pass.'
   );
 } finally {
   await browser.close();

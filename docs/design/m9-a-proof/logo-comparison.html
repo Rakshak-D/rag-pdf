@@ -24,14 +24,13 @@
   </style>
 </head>
 <body>
-  <h1>Three mark directions</h1>
-  <p class="intro">A 24px-grid page mark, a type-only study, and an RP monogram. RAG-PDF remains the working name; no mark is selected.</p>
+  <h1>Two mark directions</h1>
+  <p class="intro">Two directions remain for owner review. RAG-PDF is the provisional name; no mark is selected.</p>
   <main id="studies"></main>
   <script>
     const candidates = [
-      { id: "r4-a-page-highlight", label: "A · Marked page", idea: "A portrait page shape crossed by one highlighter bar; no generic text lines.", kind: "icon" },
-      { id: "swipe-wordmark", label: "B · Swipe wordmark", idea: "RAG-PDF set in the reading serif with a restrained highlighter swipe; no separate icon.", kind: "word" },
-      { id: "r4-c-rp-monogram", label: "C · RP monogram", idea: "An independent letterform mark with a short shared joint.", kind: "icon" }
+      { id: "r4-a-page-highlight", label: "A · Marked page", idea: "A page silhouette crossed by one highlighter bar; provisional app icon.", kind: "icon" },
+      { id: "swipe-wordmark", label: "B · Swipe wordmark", idea: "A two-tone typographic study, shown only as a wordmark.", kind: "word" }
     ];
     const studies = document.getElementById("studies");
     const mark = (candidate, size) => {
@@ -46,11 +45,14 @@
       const idea = document.createElement("p"); idea.textContent = candidate.idea;
       info.append(title, idea);
       const variants = document.createElement("div"); variants.className = "variants";
-      [["Dark · mono", "dark mono"], ["Dark · two-tone", "dark two-tone"], ["Paper · mono", "paper mono"], ["Paper · two-tone", "paper two-tone"]].forEach((item) => {
+      const surfaceVariants = candidate.kind === "word"
+        ? [["Dark · two-tone", "dark two-tone"], ["Paper · two-tone", "paper two-tone"]]
+        : [["Dark · mono", "dark mono"], ["Dark · two-tone", "dark two-tone"], ["Paper · mono", "paper mono"], ["Paper · two-tone", "paper two-tone"]];
+      surfaceVariants.forEach((item) => {
         const surface = document.createElement("div"); surface.className = "surface " + item[1];
         const label = document.createElement("span"); label.className = "surface-label"; label.textContent = item[0];
         const sizes = document.createElement("div"); sizes.className = "sizes";
-        [16, 24, 48].forEach((size) => {
+        [16, 32, 64].forEach((size) => {
           const specimen = document.createElement("span"); specimen.className = "specimen";
           specimen.innerHTML = mark(candidate, size);
           const caption = document.createElement("span"); caption.textContent = size + "px";

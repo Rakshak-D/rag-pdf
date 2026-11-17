@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <symbol id="mark" viewBox="0 0 24 24">
-    <path fill="currentColor" d="M2.5 3h7.3c4.1 0 6.2 1.8 6.2 5.1 0 2.4-1.3 4-3.7 4.7l4.1 8.2h-4.2l-3.6-7.5H6.3V21H2.5V3zm3.8 3.3v4h3.1c1.9 0 2.8-.6 2.8-2s-.9-2-2.8-2H6.3z"/>
-    <path fill="currentColor" d="M14.5 3h4.1c3.3 0 5 1.8 5 4.8s-1.7 4.9-5 4.9h-2.2v-3h1.8c1.1 0 1.6-.6 1.6-1.8 0-1.1-.5-1.7-1.6-1.7h-1.8V21h-1.9V3z"/>
-    <path fill="var(--mark-accent,#d7ff3a)" d="M13 13.1h3.2v2.8H13z"/>
-  </symbol>
-</svg>
