@@ -83,8 +83,8 @@ inventory in the same review. Do not manually edit diagnostic records or
 weaken the configured scope/rules.
 
 A green lint check means **no new Ruff findings relative to the recorded
-baseline**. It does not mean the repository is lint-clean: the 177 existing
-findings remain visible debt until they are intentionally fixed and reconciled.
+baseline**; the 177 existing findings remain visible debt until they are
+intentionally fixed and reconciled.
 The initial CI suite also excludes the remaining 51 unit modules and 30
 integration modules described above; these exclusions are not covered by the
 green check. Authenticated browser end-to-end scenarios and the M9-A proof
