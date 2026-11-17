@@ -11,6 +11,13 @@ vi.mock("pdfjs-dist", () => ({
   AnnotationMode: { DISABLE: 0 },
   GlobalWorkerOptions: { workerSrc: "" },
   getDocument: vi.fn(),
+  TextLayer: class {
+    textDivs: HTMLElement[] = [];
+    textContentItemsStr: string[] = [];
+    constructor(_options: unknown) {}
+    async render() {}
+    cancel() {}
+  },
 }));
 
 const documentId = `doc_${"a".repeat(64)}`;
@@ -36,6 +43,7 @@ function pdfMocks(pageCount = 3) {
   const page = {
     getViewport: vi.fn(({ scale }: { scale: number }) => ({ width: 612 * scale, height: 792 * scale })),
     render: vi.fn(() => renderTask),
+    getTextContent: vi.fn(async () => ({ items: [] })),
     cleanup: vi.fn(),
   };
   const pdf = {
@@ -101,7 +109,7 @@ describe("DocumentViewerPage", () => {
     expect(screen.getByText(/%$/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Fit width" }));
     expect(screen.getByRole("button", { name: "Fit width" })).toHaveAttribute("aria-pressed", "true");
-    await user.click(screen.getByRole("button", { name: "Return to previous page" }));
+    await user.click(screen.getByRole("button", { name: "Close PDF viewer" }));
     expect(await screen.findByText("Returned to Documents")).toBeInTheDocument();
     expect(mocks.loadingTask.destroy).toHaveBeenCalled();
     expect(mocks.pdf.cleanup).toHaveBeenCalled();
@@ -215,6 +223,7 @@ describe("DocumentViewerPage", () => {
     const pageThree = {
       getViewport: mocks.page.getViewport,
       render: vi.fn(() => mocks.renderTask),
+      getTextContent: mocks.page.getTextContent,
       cleanup: vi.fn(),
     };
     vi.mocked(mocks.pdf.getPage).mockImplementation(async (pageNumber) => {
@@ -250,7 +259,7 @@ describe("DocumentViewerPage", () => {
     const user = userEvent.setup();
     route(`/documents/view/${documentId}?manifest_hash=${manifestHash}&page=2`, { returnTo: "/documents" });
     await waitFor(() => expect(mocks.pdf.getPage).toHaveBeenCalledWith(2));
-    await user.click(screen.getByRole("button", { name: "Return to previous page" }));
+    await user.click(screen.getByRole("button", { name: "Close PDF viewer" }));
     expect(await screen.findByText("Returned to Documents")).toBeInTheDocument();
     expect(mocks.pdf.cleanup).not.toHaveBeenCalled();
     loadingPage.resolve(mocks.page as never);
@@ -263,7 +272,7 @@ describe("DocumentViewerPage", () => {
     route(`/documents/view/${documentId}?manifest_hash=${manifestHash}`, { returnTo: "/documents", citation: { label: "T2", page: null } });
     expect(await screen.findByText("Citation page not identified")).toBeInTheDocument();
     expect(screen.getByText("Opened at the start of the PDF because no page was returned.")).toBeInTheDocument();
-    fireEvent.keyDown(screen.getByRole("main"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "PDF viewer" }), { key: "Escape" });
     expect(await screen.findByText("Returned to Documents")).toBeInTheDocument();
   });
 });

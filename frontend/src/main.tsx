@@ -6,6 +6,7 @@ import "./styles/global.css";
 import "./styles/chat-first.css";
 import "./styles/product-foundation.css";
 import "./features/chat/chat-workspace.css";
+import "./features/chat/reading-desk.css";
 import "./features/artifacts/results.css";
 
 const root = document.getElementById("root");

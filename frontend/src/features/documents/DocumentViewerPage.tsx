@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import type { CSSProperties } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { AnnotationMode, GlobalWorkerOptions, getDocument, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from "pdfjs-dist";
+import { AnnotationMode, GlobalWorkerOptions, getDocument, TextLayer, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { ApiError, BootstrapApiClient } from "../../api/client";
 import type { BootstrapDocumentContent } from "../../api/types";
+import { locatePassage, measureTextFragment } from "./passageLocation";
 import "./document-viewer.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -19,8 +21,13 @@ type RouteContext = {
   returnFocusId?: unknown;
   documentName?: unknown;
   citation?: unknown;
+  textEvidence?: unknown;
 };
 type ViewerState = { kind: "loading" } | { kind: "ready"; content: Omit<BootstrapDocumentContent, "bytes">; pdf: PDFDocumentProxy } | { kind: "error"; message: string };
+type RenderedTextLayer = { page: number; scale: number; rotation: number; layer: TextLayer };
+type EvidenceMark = { left: number; top: number; width: number; height: number; itemIndex: number };
+type CitedMatch = { label: string; documentId: string; manifestHash: string; page: number; passage: string };
+type EvidenceState = { status: "none" } | { status: "matched"; marks: EvidenceMark[] } | { status: "unresolved"; reason: string };
 
 class PageDisplayError extends Error {}
 
@@ -29,6 +36,10 @@ function clearCanvas(canvas: HTMLCanvasElement): void {
   canvas.height = 0;
   canvas.style.width = "";
   canvas.style.height = "";
+}
+
+function mediaQuery(query: string): MediaQueryList | null {
+  return typeof window.matchMedia === "function" ? window.matchMedia(query) : null;
 }
 
 function apiFailureMessage(error: unknown): string {
@@ -71,10 +82,23 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
   const [page, setPage] = useState(() => requestedPage(location.search).page);
   const [fitWidth, setFitWidth] = useState(true);
   const [zoom, setZoom] = useState(1);
+  const [smallViewport, setSmallViewport] = useState(() => mediaQuery("(max-width: 760px)")?.matches ?? false);
+  const [mobileSnap, setMobileSnap] = useState(() => {
+    const state = location.state && typeof location.state === "object" ? location.state as RouteContext : null;
+    return state?.citation ? 30 : 55;
+  });
   const [hostWidth, setHostWidth] = useState(0);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [renderedTextLayer, setRenderedTextLayer] = useState<RenderedTextLayer | null>(null);
+  const [evidenceState, setEvidenceState] = useState<EvidenceState>({ status: "none" });
+  const [showMatches, setShowMatches] = useState(false);
+  const [retrievedMarks, setRetrievedMarks] = useState<Array<{ label: string; marks: EvidenceMark[] }>>([]);
   const canvasHost = useRef<HTMLDivElement>(null);
+  const viewerCloseButton = useRef<HTMLButtonElement>(null);
+  const pageFrame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const textLayerHost = useRef<HTMLDivElement>(null);
+  const textLayerRef = useRef<TextLayer | null>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const pageOperationRef = useRef<Promise<void> | null>(null);
   const pageGenerationRef = useRef(0);
@@ -86,6 +110,27 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
   const citation = routeState.citation && typeof routeState.citation === "object" ? routeState.citation as Record<string, unknown> : null;
   const citationLabel = citation && typeof citation.label === "string" && /^(?:T|I)[1-9][0-9]{0,2}$/.test(citation.label) ? citation.label : null;
   const citedPage = citation && Number.isSafeInteger(citation.page) && Number(citation.page) > 0 ? Number(citation.page) : null;
+  const citedDocumentId = citation && typeof citation.documentId === "string" ? citation.documentId : "";
+  const citedManifestHash = citation && typeof citation.manifestHash === "string" ? citation.manifestHash : "";
+  const citedPassage = citation && typeof citation.passage === "string" ? citation.passage : "";
+  const citedMatches = useMemo(() => {
+    if (!Array.isArray(routeState.textEvidence)) return [];
+    return routeState.textEvidence.filter((item): item is CitedMatch => Boolean(item && typeof item === "object" &&
+      typeof (item as CitedMatch).label === "string" && /^(?:T)[1-9][0-9]{0,2}$/.test((item as CitedMatch).label) &&
+      typeof (item as CitedMatch).documentId === "string" && typeof (item as CitedMatch).manifestHash === "string" &&
+      Number.isSafeInteger((item as CitedMatch).page) && (item as CitedMatch).page > 0 &&
+      typeof (item as CitedMatch).passage === "string" && (item as CitedMatch).passage.length > 0));
+  }, [routeState.textEvidence]);
+  const modalViewer = smallViewport && mobileSnap >= 55;
+
+  useEffect(() => {
+    const media = mediaQuery("(max-width: 760px)");
+    if (!media) return;
+    const update = () => setSmallViewport(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   const close = useCallback(() => {
     const returnTo = safeReturnTarget(routeState.returnTo);
@@ -95,10 +140,25 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
   }, [navigate, routeState.returnFocusId, routeState.returnTo]);
 
   useEffect(() => {
+    const onEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    };
+    window.addEventListener("keydown", onEscape, true);
+    return () => window.removeEventListener("keydown", onEscape, true);
+  }, [close]);
+
+  useEffect(() => {
     const node = canvasHost.current;
     if (!node) return;
     const update = () => setHostWidth(node.clientWidth);
     update();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", update);
+      return () => window.removeEventListener("resize", update);
+    }
     const observer = new ResizeObserver(update);
     observer.observe(node);
     return () => observer.disconnect();
@@ -182,10 +242,18 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
     if (viewer.kind !== "ready") return;
     let active = true;
     let pageTask: RenderTask | null = null;
+    const textHost = textLayerHost.current;
+    const frame = pageFrame.current;
     const generation = ++pageGenerationRef.current;
     const isCurrent = () => active && pageGenerationRef.current === generation;
     const previousOperation = pageOperationRef.current;
     renderTaskRef.current?.cancel();
+    textLayerRef.current?.cancel();
+    textLayerRef.current = null;
+    setRenderedTextLayer(null);
+    setEvidenceState({ status: "none" });
+    setRetrievedMarks([]);
+    textHost?.replaceChildren();
 
     if (page < 1 || page > viewer.content.page_count) {
       setPageError(`Page ${page} is not in this PDF. It has ${viewer.content.page_count} pages.`);
@@ -205,7 +273,7 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
       return () => { active = false; };
     }
     const targetCanvas = canvas.current;
-    if (!targetCanvas || !hostWidth) return () => { active = false; };
+    if (!targetCanvas || !textHost || !frame || !hostWidth) return () => { active = false; };
 
     // Keep the canvas mounted through errors so a later valid page can render.
     let operation!: Promise<void>;
@@ -240,6 +308,14 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
         targetCanvas.height = Math.ceil(viewport.height * ratio);
         targetCanvas.style.width = `${Math.ceil(viewport.width)}px`;
         targetCanvas.style.height = `${Math.ceil(viewport.height)}px`;
+        frame.style.width = `${Math.ceil(viewport.width)}px`;
+        frame.style.height = `${Math.ceil(viewport.height)}px`;
+        frame.style.setProperty("--scale-factor", String(scale));
+        frame.style.setProperty("--total-scale-factor", String(scale));
+        frame.style.setProperty("--scale-round-x", "1px");
+        frame.style.setProperty("--scale-round-y", "1px");
+        textHost.style.width = `${Math.ceil(viewport.width)}px`;
+        textHost.style.height = `${Math.ceil(viewport.height)}px`;
         const context = targetCanvas.getContext("2d", { alpha: false });
         if (!context) throw new PageDisplayError("The browser could not create a PDF canvas.");
 
@@ -248,11 +324,21 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
           canvasContext: context,
           viewport,
           annotationMode: AnnotationMode.DISABLE,
+          background: "#eee8d9",
           ...(ratio === 1 ? {} : { transform: [ratio, 0, 0, ratio, 0, 0] }),
         });
         renderTaskRef.current = pageTask;
         await pageTask.promise;
-        if (isCurrent()) setRenderStatus("ready");
+        if (!isCurrent()) return;
+        const textContent = await pdfPage.getTextContent();
+        if (!isCurrent()) return;
+        const textLayer = new TextLayer({ textContentSource: textContent, container: textHost, viewport });
+        textLayerRef.current = textLayer;
+        await textLayer.render();
+        if (isCurrent()) {
+          setRenderedTextLayer({ page, scale, rotation: viewport.rotation, layer: textLayer });
+          setRenderStatus("ready");
+        }
       } catch (error: unknown) {
         const cancelled = error instanceof Error && error.name === "RenderingCancelledException";
         if (isCurrent() && !cancelled) {
@@ -277,12 +363,81 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
 
     return () => {
       active = false;
+      textLayerRef.current?.cancel();
+      textLayerRef.current = null;
       if (pageTask) {
         pageTask.cancel();
         if (renderTaskRef.current === pageTask) renderTaskRef.current = null;
       }
     };
   }, [viewer, page, fitWidth, zoom, hostWidth]);
+
+  useEffect(() => {
+    setEvidenceState({ status: "none" });
+    if (!citationLabel || citedPage === null || page !== citedPage || viewer.kind !== "ready" ||
+      renderedTextLayer?.page !== page || !pageFrame.current) return;
+
+    const result = locatePassage({
+      loadedDocumentId: viewer.content.document_id,
+      citedDocumentId,
+      loadedManifestHash: viewer.content.manifest_hash,
+      citedManifestHash,
+      pageNumber: citedPage,
+      loadedPageNumber: renderedTextLayer.page,
+      pageCount: viewer.content.page_count,
+      passage: citedPassage,
+      textItems: renderedTextLayer.layer.textContentItemsStr,
+    });
+    if (result.status === "unresolved") {
+      setEvidenceState({ status: "unresolved", reason: result.reason });
+      return;
+    }
+
+    const frameRect = pageFrame.current.getBoundingClientRect();
+    const marks = result.fragments.flatMap((fragment) => {
+      const textDiv = renderedTextLayer.layer.textDivs[fragment.itemIndex];
+      if (!textDiv) return [];
+      return measureTextFragment(textDiv, fragment, frameRect).map((rect) => ({
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+        itemIndex: fragment.itemIndex,
+      }));
+    });
+    const withinPage = marks.length > 0 && marks.every((mark) =>
+      mark.left >= 0 && mark.top >= 0 && mark.width > 0 && mark.height > 0 &&
+      mark.left + mark.width <= frameRect.width + 1 && mark.top + mark.height <= frameRect.height + 1);
+    setEvidenceState(withinPage ? { status: "matched", marks } : { status: "unresolved", reason: "geometry-unavailable" });
+    const nextRetrieved = showMatches ? citedMatches.flatMap((match) => {
+      if (match.label === citationLabel || match.documentId !== viewer.content.document_id ||
+        match.manifestHash !== viewer.content.manifest_hash || match.page !== page) return [];
+      const located = locatePassage({
+        loadedDocumentId: viewer.content.document_id,
+        citedDocumentId: match.documentId,
+        loadedManifestHash: viewer.content.manifest_hash,
+        citedManifestHash: match.manifestHash,
+        pageNumber: match.page,
+        loadedPageNumber: renderedTextLayer.page,
+        pageCount: viewer.content.page_count,
+        passage: match.passage,
+        textItems: renderedTextLayer.layer.textContentItemsStr,
+      });
+      if (located.status !== "matched") return [];
+      const matchMarks = located.fragments.flatMap((fragment) => {
+        const textDiv = renderedTextLayer.layer.textDivs[fragment.itemIndex];
+        if (!textDiv) return [];
+        return measureTextFragment(textDiv, fragment, frameRect).map((rect) => ({
+          left: rect.left, top: rect.top, width: rect.width, height: rect.height, itemIndex: fragment.itemIndex,
+        }));
+      });
+      return matchMarks.length && matchMarks.every((mark) => mark.left >= 0 && mark.top >= 0 && mark.width > 0 && mark.height > 0 &&
+        mark.left + mark.width <= frameRect.width + 1 && mark.top + mark.height <= frameRect.height + 1)
+        ? [{ label: match.label, marks: matchMarks }]
+        : [];
+    }) : [];
+    setRetrievedMarks(nextRetrieved);
+  }, [citationLabel, citedDocumentId, citedManifestHash, citedMatches, citedPage, citedPassage, page, renderedTextLayer, showMatches, viewer]);
 
   const changePage = (next: number) => {
     if (viewer.kind !== "ready" || next < 1 || next > viewer.content.page_count) return;
@@ -299,6 +454,15 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
 
   const onViewerKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") { event.preventDefault(); close(); return; }
+      if (event.key === "Tab" && modalViewer) {
+      const root = event.currentTarget;
+      const items = root.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])");
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (first && last && event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (first && last && !event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      return;
+    }
     if (event.target instanceof HTMLElement && /^(BUTTON|INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) return;
     if (event.key === "ArrowLeft") { event.preventDefault(); changePage(page - 1); }
     if (event.key === "ArrowRight") { event.preventDefault(); changePage(page + 1); }
@@ -306,17 +470,40 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
     if (event.key === "-") { event.preventDefault(); changeZoom(-0.1); }
   };
 
+  useEffect(() => { viewerCloseButton.current?.focus(); }, []);
+
   const sourceContext = routeState.citation && citationLabel
     ? <aside className="pdf-viewer-context" aria-label="Citation context">
         <strong>{citationLabel}</strong>
         <span>{citedPage ? `Citation · page ${citedPage}` : "Citation page not identified"}</span>
         {citedPage === null ? <small>Opened at the start of the PDF because no page was returned.</small> : null}
+        {page === citedPage && evidenceState.status === "unresolved" ? <small role="status">
+          {evidenceState.reason === "document-mismatch" || evidenceState.reason === "manifest-mismatch" || evidenceState.reason === "invalid-identity"
+            ? "This citation does not match the loaded PDF."
+            : citationLabel.startsWith("I") && !citedPassage ? `Figure on page ${citedPage}` : `Passage on page ${citedPage}`}
+        </small> : null}
       </aside>
     : null;
 
-  return <main className="pdf-viewer" onKeyDown={onViewerKeyDown}>
+  const cycleMobileSnap = () => setMobileSnap((current) => current === 30 ? 55 : current === 55 ? 92 : 30);
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("reading-desk:pdf-snap", { detail: mobileSnap }));
+  }, [mobileSnap]);
+  return <main
+    className="pdf-viewer"
+    role="dialog"
+    aria-modal={modalViewer || undefined}
+    aria-label="PDF viewer"
+    tabIndex={-1}
+    onKeyDown={onViewerKeyDown}
+    data-mobile-snap={mobileSnap}
+    style={{ "--pdf-sheet-height": `${mobileSnap}dvh` } as CSSProperties}
+  >
     <header className="pdf-viewer__header">
-      <button className="pdf-viewer__back" type="button" onClick={close} aria-label="Return to previous page">← <span>Back</span></button>
+      {smallViewport ? <button type="button" className="pdf-viewer__snap" onClick={cycleMobileSnap} aria-label={`PDF sheet ${mobileSnap} percent. Change sheet height`}>
+        <span aria-hidden="true" />{mobileSnap}%
+      </button> : null}
+      <button ref={viewerCloseButton} className="pdf-viewer__back" type="button" onClick={close} aria-label="Close PDF viewer">← <span>Back</span></button>
       <div className="pdf-viewer__identity">
         <span className="pdf-viewer__file-mark" aria-hidden="true">PDF</span>
         <div><h1>{viewer.kind === "ready" ? viewer.content.document_name : typeof routeState.documentName === "string" ? routeState.documentName : "PDF preview"}</h1>
@@ -333,8 +520,15 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
           <span>{fitWidth ? "Fit" : `${Math.round(zoom * 100)}%`}</span>
           <button type="button" aria-label="Zoom in" disabled={!fitWidth && zoom >= MAX_ZOOM} onClick={() => changeZoom(0.1)}>+</button>
           <button type="button" className={fitWidth ? "is-active" : ""} onClick={() => setFitWidth(true)} aria-pressed={fitWidth}>Fit width</button>
+          {citedMatches.length > 1 ? <button
+            type="button"
+            className="pdf-viewer__matches"
+            data-testid="show-matches"
+            aria-pressed={showMatches}
+            onClick={() => setShowMatches((value) => !value)}
+          >Show matches</button> : null}
         </div>
-      </nav> : <button className="pdf-viewer__close" type="button" onClick={close}>Close</button>}
+      </nav> : <button ref={viewerCloseButton} className="pdf-viewer__close" type="button" onClick={close}>Close</button>}
     </header>
     <div className="pdf-viewer__body">
       <section className="pdf-viewer__reading" aria-label="PDF reading area">
@@ -342,8 +536,39 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
         {viewer.kind === "loading" ? <p className="pdf-viewer__state" role="status">Loading the original PDF…</p> : null}
         {viewer.kind === "error" ? <div className="pdf-viewer__state pdf-viewer__state--error" role="alert"><p>{viewer.message}</p><button type="button" className="button button--secondary" onClick={close}>Return to Documents</button></div> : null}
         {viewer.kind === "ready" ? <div className="pdf-viewer__canvas-scroll" ref={canvasHost}>
-          <div className="pdf-viewer__canvas-wrap">
+          <div
+            className="pdf-viewer__canvas-wrap"
+            ref={pageFrame}
+            data-testid="pdf-page-frame"
+            data-document-id={viewer.content.document_id}
+            data-manifest-hash={viewer.content.manifest_hash}
+            data-page-number={page}
+            data-viewport-scale={renderedTextLayer?.page === page ? renderedTextLayer.scale : undefined}
+            data-rotation={renderedTextLayer?.page === page ? renderedTextLayer.rotation : undefined}
+          >
             <canvas ref={canvas} aria-label={`PDF page ${page} of ${viewer.content.page_count}`} aria-hidden={pageError ? true : undefined} />
+            <div className="textLayer pdf-viewer__text-layer" ref={textLayerHost} aria-hidden="true" />
+            {evidenceState.status === "matched" ? evidenceState.marks.map((mark, index) =>
+              <span
+                className="pdf-viewer__evidence-mark"
+                data-testid="pdf-evidence-mark"
+                data-source-label={citationLabel ?? ""}
+                data-item-index={mark.itemIndex}
+                key={`${mark.itemIndex}-${index}`}
+                style={{ left: mark.left, top: mark.top, width: mark.width, height: mark.height }}
+                aria-hidden="true"
+              />,
+            ) : null}
+            {retrievedMarks.flatMap(({ label, marks }) => marks.map((mark, index) =>
+              <span
+                className="pdf-viewer__retrieved-mark"
+                data-testid="pdf-retrieved-mark"
+                data-source-label={label}
+                key={`${label}-${mark.itemIndex}-${index}`}
+                style={{ left: mark.left, top: mark.top, width: mark.width, height: mark.height }}
+                aria-hidden="true"
+              />,
+            ))}
           </div>
           {renderStatus === "rendering" ? <p className="pdf-viewer__render-status" role="status">Rendering page {page}…</p> : null}
           {pageError ? <p className="pdf-viewer__page-error" role="alert">{pageError}</p> : null}

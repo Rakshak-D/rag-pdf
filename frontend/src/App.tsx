@@ -169,13 +169,15 @@ export default function App() {
   }, [client, connected, location.pathname, refreshVersion]);
 
   const conversations = useConversations();
-  const [documentsVisited, setDocumentsVisited] = useState(false);
+  const [documentsVisited, setDocumentsVisited] = useState(() => location.pathname === "/documents");
   useEffect(() => { if (location.pathname === "/documents") setDocumentsVisited(true); }, [location.pathname]);
+  const readingRoute = location.pathname === "/" || /^\/documents\/view\/doc_[0-9a-f]{64}$/.test(location.pathname);
+  const pdfViewerRoute = /^\/documents\/view\/doc_[0-9a-f]{64}$/.test(location.pathname);
 
-  return <AppShell>
+  return <AppShell readingMode={readingRoute} pdfViewerOpen={pdfViewerRoute}>
     {!localGateway && !location.pathname.startsWith("/index-builds") && !location.pathname.startsWith("/documents") ? <ConnectionPanel connected={connected} checking={connectionChecking} runtimeModels={runtimeModels} error={connectionError} onConnect={connect} onDisconnect={disconnect} /> : null}
-    <div hidden={location.pathname !== "/"}>
-      <ChatPage token={token} bootstrapToken={bootstrapToken} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onResetUnavailableModel={resetUnavailableChatModel} conversations={conversations} visible={location.pathname === "/"} />
+    <div hidden={!readingRoute}>
+      <ChatPage token={token} bootstrapToken={bootstrapToken} preferences={generalChatPreferences} preferenceLoadStatus={generalChatPreferenceState.status} onResetUnavailableModel={resetUnavailableChatModel} conversations={conversations} visible={readingRoute} />
     </div>
     {(documentsVisited || location.pathname === "/documents") ? <div hidden={location.pathname !== "/documents"}>
       <DocumentsPage token={bootstrapToken} status={bootstrapStatus} checking={bootstrapChecking} connectionError={bootstrapConnectionError} onConnect={connectBootstrap} onDisconnect={disconnectBootstrap} visible={location.pathname === "/documents"} />

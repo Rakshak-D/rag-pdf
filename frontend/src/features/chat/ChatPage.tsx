@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ApiError, BootstrapApiClient, WorkbenchApiClient } from "../../api/client";
-import type { AskResponse, BootstrapDocumentsResponse, ChatModelCatalog, IndexSelectionState } from "../../api/types";
+import type { AskResponse, BootstrapDocumentRecord, BootstrapDocumentsResponse, ChatModelCatalog, IndexSelectionState } from "../../api/types";
 import type { GeneralChatPreferences, PreferenceLoadStatus } from "../settings/preferences";
 import { resolveChatModel } from "../settings/preferences";
 import { boundedChatHistory } from "./history";
@@ -10,6 +10,7 @@ import { ChatPdfAttachment } from "./ChatPdfAttachment";
 import { ChatMessage } from "./ChatMessage";
 import { ConversationRail } from "./ConversationRail";
 import { EvidenceInspector, type SourceEvidence } from "./EvidenceInspector";
+import { SamplePdfPreview } from "./SamplePdfPreview";
 import { hasConversationExchangeCapacity, type Mode, type Message, type Conversation, type ConversationStore } from "./conversations";
 
 interface Props {
@@ -42,6 +43,13 @@ const errorText: Record<string, string> = {
   generation_failed: "The document answer model could not complete this response.",
 };
 
+const NASA_SAMPLE_SHA256 = "2baee40744fc1c35b3ad015f8672a45710ac6bd9124a4041cfc0d7bfba4e10f6";
+const SAMPLE_QUESTIONS = [
+  "What does the rock Link tell us about water on Mars?",
+  "How much power did the rover have at launch?",
+  "Which crater did it land in, and what did it drill first?",
+] as const;
+
 function messageFor(error: unknown): string {
   if (error instanceof ApiError) return errorText[error.code] ?? "The local service could not complete this request.";
   return "The local service could not complete this request.";
@@ -70,21 +78,27 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   const [catalog, setCatalog] = useState<ChatModelCatalog | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogChecking, setCatalogChecking] = useState(false);
+  const [ollamaUnavailable, setOllamaUnavailable] = useState(false);
   const [selection, setSelection] = useState<IndexSelectionState | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [sourceInventory, setSourceInventory] = useState<BootstrapDocumentsResponse | null>(null);
+  const [sampleDocument, setSampleDocument] = useState<BootstrapDocumentRecord | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [drawerMessage, setDrawerMessage] = useState<Message | null>(null);
   const [activeEvidence, setActiveEvidence] = useState<string | null>(null);
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [answerImageUrls, setAnswerImageUrls] = useState<Record<string, string>>({});
   const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({});
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const [unavailableModelNotice, setUnavailableModelNotice] = useState<string | null>(null);
   const [conversationsOpen, setConversationsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [pdfSnap, setPdfSnap] = useState(30);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const scrollRegion = useRef<HTMLDivElement>(null);
   const evidenceClose = useRef<HTMLButtonElement>(null);
   const evidenceTrigger = useRef<HTMLElement | null>(null);
+  const pendingPdfFocusId = useRef<string | null>(null);
   const requestSequence = useRef(0);
   const requestController = useRef<AbortController | null>(null);
   const catalogRequestSequence = useRef(0);
@@ -131,10 +145,17 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
     catalogRequestController.current = controller;
     setCatalogChecking(true);
     setCatalogError(null);
+    setOllamaUnavailable(false);
     void client.chatModels(controller.signal).then((value) => {
-      if (request === catalogRequestSequence.current) setCatalog(value);
+      if (request === catalogRequestSequence.current) {
+        setCatalog(value);
+        setOllamaUnavailable(value.availability === "unavailable" || value.error_code === "ollama_unavailable");
+      }
     }).catch((error: unknown) => {
-      if (request === catalogRequestSequence.current && !(error instanceof DOMException && error.name === "AbortError")) setCatalogError(messageFor(error));
+      if (request === catalogRequestSequence.current && !(error instanceof DOMException && error.name === "AbortError")) {
+        setCatalogError(messageFor(error));
+        setOllamaUnavailable(error instanceof ApiError && error.code === "ollama_unavailable");
+      }
     }).finally(() => {
       if (request === catalogRequestSequence.current) {
         setCatalogChecking(false);
@@ -148,6 +169,7 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   const hasIndex = Boolean(selectedManifestMatches);
   const busy = pendingConversationId !== null;
   const activePending = pendingConversationId === activeId;
+  const figureMessage = [...messages].reverse().find((message) => message.role === "assistant" && message.document?.image_evidence.length);
 
   useEffect(() => {
     if (!visible) return;
@@ -198,10 +220,25 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
       controller?.abort();
       controller = new AbortController();
       const current = controller;
-      void bootstrapClient.listDocuments({ limit: 1, offset: 0, signal: current.signal }).then((value) => {
-        if (active && controller === current) { setSourceInventory(value); setSourceError(null); }
-      }).catch((error: unknown) => {
-        if (active && controller === current && !current.signal.aborted) { setSourceInventory(null); setSourceError(messageFor(error)); }
+      void (async () => {
+        const first = await bootstrapClient.listDocuments({ limit: 100, offset: 0, signal: current.signal });
+        let match = first.documents.find((record) => record.sha256 === NASA_SAMPLE_SHA256) ?? null;
+        for (let offset = first.limit; !match && offset < first.total; offset += 100) {
+          const next = await bootstrapClient.listDocuments({ limit: 100, offset, signal: current.signal });
+          if (next.manifest_hash !== first.manifest_hash || next.total !== first.total) throw new Error("document_inventory_changed");
+          match = next.documents.find((record) => record.sha256 === NASA_SAMPLE_SHA256) ?? null;
+        }
+        if (active && controller === current) {
+          setSourceInventory(first);
+          setSampleDocument(match);
+          setSourceError(null);
+        }
+      })().catch((error: unknown) => {
+        if (active && controller === current && !current.signal.aborted) {
+          setSourceInventory(null);
+          setSampleDocument(null);
+          setSourceError(messageFor(error));
+        }
       });
     };
     refresh();
@@ -214,13 +251,37 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   useEffect(() => {
     if (location.pathname === "/") return;
     if (/^\/documents\/view\/doc_[0-9a-f]{64}$/.test(location.pathname)) {
-      releaseImages();
       return;
     }
     setDrawerMessage(null);
     setActiveEvidence(null);
     releaseImages();
   }, [location.pathname, releaseImages]);
+
+  useEffect(() => {
+    const viewerRoute = /^\/documents\/view\/doc_[0-9a-f]{64}$/.test(location.pathname);
+    if (!viewerRoute) { setPdfSnap(30); return; }
+    const state = location.state && typeof location.state === "object"
+      ? location.state as { citation?: unknown }
+      : null;
+    setPdfSnap(state?.citation ? 30 : 55);
+    const onSnap = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (detail === 30 || detail === 55 || detail === 92) setPdfSnap(detail);
+    };
+    window.addEventListener("reading-desk:pdf-snap", onSnap);
+    return () => window.removeEventListener("reading-desk:pdf-snap", onSnap);
+  }, [location.key, location.pathname, location.state]);
+
+  useEffect(() => {
+    const state = location.state && typeof location.state === "object"
+      ? location.state as { restoreFocusId?: unknown }
+      : null;
+    if (!isValidFocusId(state?.restoreFocusId)) return;
+    const focusId = state.restoreFocusId;
+    requestAnimationFrame(() => document.getElementById(focusId)?.focus());
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+  }, [location.key, location.pathname, location.search, location.state, navigate]);
 
   useEffect(() => {
     stickToBottom.current = true;
@@ -264,6 +325,34 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
     }
     return () => { active = false; for (const controller of imageControllers.current) controller.abort(); };
   }, [client, drawerMessage, visible]);
+
+  useEffect(() => {
+    if (!visible || !figureMessage?.document) return;
+    let active = true;
+    const controllers: AbortController[] = [];
+    const urls: string[] = [];
+    const keys = new Set(figureMessage.document.image_evidence.map((evidence) => `${figureMessage.id}:${evidence.label}`));
+    for (const evidence of figureMessage.document.image_evidence) {
+      if (!evidence.image_reference) continue;
+      const key = `${figureMessage.id}:${evidence.label}`;
+      const controller = new AbortController();
+      controllers.push(controller);
+      void client.getAskImage(evidence.image_reference, controller.signal).then((blob) => {
+        if (!active) return;
+        const url = URL.createObjectURL(blob);
+        urls.push(url);
+        setAnswerImageUrls((current) => ({ ...current, [key]: url }));
+      }).catch(() => {
+        if (active && !controller.signal.aborted) setImageErrors((current) => ({ ...current, [key]: true }));
+      });
+    }
+    return () => {
+      active = false;
+      for (const controller of controllers) controller.abort();
+      for (const url of urls) URL.revokeObjectURL(url);
+      setAnswerImageUrls((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !keys.has(key))));
+    };
+  }, [client, figureMessage, visible]);
 
   useEffect(() => {
     if (!drawerMessage || !visible) return;
@@ -322,11 +411,24 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
   }, [location.pathname, location.search, location.key, conversations.active.id, conversations.conversations, mode, navigate, setMode]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) { pendingPdfFocusId.current = null; return; }
+    if (/^\/documents\/view\/doc_[0-9a-f]{64}$/.test(location.pathname)) return;
     const state = location.state && typeof location.state === "object" ? location.state as { restoreFocusId?: unknown } : null;
-    if (isValidFocusId(state?.restoreFocusId)) {
-      const target = document.getElementById(state.restoreFocusId);
-      if (target instanceof HTMLElement) { target.focus(); return; }
+    const focusId = isValidFocusId(state?.restoreFocusId) ? state.restoreFocusId : pendingPdfFocusId.current;
+    if (focusId) {
+      const target = document.getElementById(focusId);
+      if (target instanceof HTMLElement) {
+        target.focus();
+        const pendingId = pendingPdfFocusId.current;
+        if (pendingId) {
+          const timeout = window.setTimeout(() => {
+            if (pendingPdfFocusId.current === pendingId) pendingPdfFocusId.current = null;
+          }, 250);
+          return () => window.clearTimeout(timeout);
+        }
+        return;
+      }
+      if (pendingPdfFocusId.current === focusId) pendingPdfFocusId.current = null;
     }
     if (location.pathname === "/" && location.key !== "default") focusComposer();
   }, [focusComposer, location.key, location.pathname, location.state, visible]);
@@ -355,18 +457,54 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
     });
   }
 
-  function openDocument(message: Message, evidence: SourceEvidence) {
+  function openDocument(message: Message, evidence: SourceEvidence, triggerId = `citation-${message.id}-${evidence.label}`) {
     const response = message.document as AskResponse | undefined;
     if (!response || message.evidenceExpired || !response.referenced_citations.includes(evidence.label) ||
       !/^doc_[0-9a-f]{64}$/.test(evidence.document_id) || !/^[0-9a-f]{64}$/.test(response.document_manifest_hash) ||
       (evidence.page_number !== null && (!Number.isSafeInteger(evidence.page_number) || evidence.page_number < 1))) return;
+    const trigger = document.getElementById(triggerId);
+    pendingPdfFocusId.current = triggerId;
+    const transcript = trigger?.closest<HTMLElement>(".chat-transcript");
+    if (trigger && transcript) {
+      const triggerRect = trigger.getBoundingClientRect();
+      const transcriptRect = transcript.getBoundingClientRect();
+      transcript.scrollTo({
+        top: Math.max(0, transcript.scrollTop + triggerRect.top - transcriptRect.top - 16),
+        behavior: "instant",
+      });
+    }
     const query = new URLSearchParams({ manifest_hash: response.document_manifest_hash });
     if (evidence.page_number !== null) query.set("page", String(evidence.page_number));
     navigate(`/documents/view/${evidence.document_id}?${query.toString()}`, {
       state: {
         returnTo: `${location.pathname}${location.search}`,
-        returnFocusId: `source-open-${message.id}-${evidence.label}`,
-        citation: { label: evidence.label, page: evidence.page_number },
+        returnFocusId: triggerId,
+        citation: {
+          label: evidence.label,
+          page: evidence.page_number,
+          documentId: evidence.document_id,
+          manifestHash: response.document_manifest_hash,
+          passage: "passage" in evidence ? evidence.passage : "",
+        },
+        textEvidence: response.text_evidence.map((item) => ({
+          label: item.label,
+          documentId: item.document_id,
+          manifestHash: response.document_manifest_hash,
+          page: item.page_number,
+          passage: item.passage,
+        })),
+      },
+    });
+  }
+
+  function openSampleDocument() {
+    if (!sampleDocument || !sourceInventory) return;
+    const query = new URLSearchParams({ manifest_hash: sourceInventory.manifest_hash, page: "1" });
+    navigate(`/documents/view/${sampleDocument.document_id}?${query.toString()}`, {
+      state: {
+        returnTo: `${location.pathname}${location.search}`,
+        returnFocusId: "sample-document-open",
+        documentName: sampleDocument.relative_path.split(/[\\/]/u).at(-1) ?? "NASA factsheet",
       },
     });
   }
@@ -376,7 +514,8 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
     const normalized = question.trim();
     if (!normalized || normalized.length > 4000 || !hasConversationExchangeCapacity(messages.length) || busy ||
       (mode === "general" && generalChatDisabledReason !== null) ||
-      (mode === "document" && !hasIndex)) return;
+      (mode === "document" && !hasIndex) ||
+      (mode === "document" && (SAMPLE_QUESTIONS as readonly string[]).includes(normalized) && !sampleDocument)) return;
     const currentMode = mode;
     const currentConversationId = activeId;
     const sequence = ++requestSequence.current;
@@ -448,125 +587,149 @@ export function ChatPage({ token, bootstrapToken, preferences, preferenceLoadSta
     }
   }
 
-  const modelStatus = catalogError ? "Model status unavailable" : catalogChecking ? "Checking model availability" : catalog?.availability === "unavailable" ? "Local model unavailable" :
-    !catalog || !modelIsVerified ? "Checking installed models" : `Local model · ${generalModel}`;
-  const pdfCountLabel = (count: number) => `${count} ${count === 1 ? "PDF" : "PDFs"}`;
   const documentsState = selectionError || sourceError ? "unavailable" : sourceInventory?.total === 0 ? "empty" :
     selection?.selection_status === "stale" || (selection?.selection_status === "selected" && !selectedManifestMatches && sourceInventory !== null) ? "stale" :
     selection?.selection_status === "invalid" ? "invalid" : hasIndex ? "selected" : sourceInventory ? "unselected" : "checking";
-  const indexState = mode !== "document" ? null : documentsState === "empty"
-    ? { title: "No PDFs imported", detail: "Add PDFs before starting a document conversation.", action: "Add PDFs", tone: "neutral" }
-    : documentsState === "checking"
-      ? { title: "Checking your PDF collection", detail: "The local source and index status are being checked.", action: null, tone: "neutral" }
-      : documentsState === "unavailable"
-        ? { title: "Document status is unavailable", detail: sourceError ?? selectionError ?? "The local service could not verify the current PDF collection.", action: "Open Documents", tone: "warning" }
-        : documentsState === "stale"
-          ? { title: "Your PDFs changed", detail: "Prepare an updated index before asking about the current collection.", action: "Prepare documents", tone: "warning" }
-          : documentsState === "invalid"
-            ? { title: "Index selection needs attention", detail: "Review Documents and choose a compatible completed report.", action: "Review Documents", tone: "warning" }
-            : documentsState === "selected"
-              ? { title: `${pdfCountLabel(sourceInventory?.total ?? 0)} · index selected`, detail: "Retrieval is checked when you ask; report selection alone does not verify runtime readiness.", action: null, tone: "selected" }
-              : { title: `${pdfCountLabel(sourceInventory?.total ?? 0)} uploaded`, detail: "Select a compatible index before asking questions.", action: "Prepare documents", tone: "neutral" };
+  const sampleQuestion = (SAMPLE_QUESTIONS as readonly string[]).includes(question.trim());
+  const sampleUnavailable = sourceError || selectionError
+    ? "The local document collection could not be checked."
+    : documentsState === "empty"
+      ? "No PDFs imported. Add the NASA sample PDF in Library to ask these questions."
+      : documentsState === "stale"
+        ? "Your PDFs changed. Prepare the updated collection in Library."
+        : documentsState === "invalid"
+          ? "The selected index could not be verified. Review Library before asking."
+          : sampleDocument === null
+            ? sourceInventory === null ? "Checking whether the sample is in Library."
+              : sourceInventory.total > 0
+                ? `${sourceInventory.total} PDF${sourceInventory.total === 1 ? "" : "s"} in Library. Add the NASA sample PDF to use these questions.`
+                : "Add the NASA sample PDF in Library to use these questions."
+      : !hasIndex ? "Select a prepared index in Library before asking these sample questions." : null;
   const disabledReason = activePending ? null : busy ? "Another conversation is finishing a response. You can keep a draft here." :
     !hasConversationExchangeCapacity(messages.length) ? "This conversation has no room for another complete exchange. Start a new chat to continue." :
     mode === "general" && generalChatDisabledReason !== null ? generalChatDisabledReason :
-    mode === "document" && !hasIndex ? (documentsState === "empty" ? "Add a PDF to start Chat with PDFs." : "Select a compatible index in Documents before sending.") : null;
+    mode === "document" && !hasIndex ? (documentsState === "empty" ? "Add a PDF in Library and select a prepared index before asking." : "Select a compatible index in Library before sending.") :
+    mode === "document" && sampleQuestion && !sampleDocument ? "Add the NASA sample PDF in Library to use these questions." : null;
 
   const evidenceResponse = drawerMessage?.document;
   const showPendingElsewhere = busy && !activePending;
+  const isViewerRoute = /^\/documents\/view\/doc_[0-9a-f]{64}$/.test(location.pathname);
+  const modelCannotBeReached = ollamaUnavailable || catalog?.availability === "unavailable" || catalog?.error_code === "ollama_unavailable";
 
-  return <div className={`chat-workspace${drawerMessage ? " chat-workspace--with-evidence" : ""}`}>
-    <ConversationRail
-      conversations={conversations.conversations}
-      activeId={activeId}
-      mode={mode}
-      notice={conversations.notice}
-      mobileOpen={conversationsOpen}
-      evidenceOpen={Boolean(drawerMessage)}
-      pendingConversationId={pendingConversationId}
-      onNew={createConversation}
-      onSelect={selectConversation}
-      onDelete={deleteConversation}
-      onDismiss={() => setConversationsOpen(false)}
-    />
+  const composer = <ChatComposer
+    question={question}
+    mode={mode}
+    pending={activePending}
+    disabledReason={disabledReason}
+    textareaRef={textarea}
+    onChange={setQuestion}
+    onSubmit={(event) => { void submit(event); }}
+    onKeyDown={handleKeyDown}
+    attachmentControl={<ChatPdfAttachment
+      client={bootstrapClient}
+      inventory={sourceInventory}
+      inventoryLoading={visible && sourceInventory === null && sourceError === null}
+      inventoryError={sourceError}
+      tokenAvailable={bootstrapToken !== null}
+      requestPending={busy}
+      onInventoryChange={(value) => { setSourceInventory(value); setSourceError(null); }}
+    />}
+  />;
 
-    <section className="chat-main" aria-label="Chat workspace" inert={Boolean(drawerMessage)}>
-      <header className="chat-heading">
-        <div className="chat-heading__title">
-          <h1>Chat</h1>
-          <p>{mode === "general" ? "General Chat · A conversation with your local language model." : "Chat with PDFs · Ask about the selected collection."}</p>
-        </div>
-        <div className="chat-heading__actions">
-          <button type="button" className="chat-mobile-conversations" aria-expanded={conversationsOpen} onClick={() => setConversationsOpen(true)}>Conversations</button>
-          <button type="button" className="chat-new" onClick={createConversation} aria-label="New chat"><span aria-hidden="true">＋</span> New chat</button>
-        </div>
-      </header>
-
-      <div className="chat-mode-row">
-        <div className="chat-mode-control" role="group" aria-label="Chat mode">
-          <button type="button" aria-pressed={mode === "general"} className={mode === "general" ? "is-active" : ""} onClick={() => selectMode("general")}>General Chat</button>
-          <button type="button" aria-pressed={mode === "document"} className={mode === "document" ? "is-active" : ""} onClick={() => selectMode("document")}>Chat with PDFs</button>
-        </div>
-        <div className={`chat-context-label${mode === "general" ? (modelIsVerified ? " is-available" : " is-unavailable") : hasIndex ? " is-selected" : ""}`} aria-live="polite">
-          {mode === "general" ? modelIsVerified ? `Local model · ${generalModel}` : catalog?.availability === "unavailable" ? "Local model unavailable" : "Checking model" : hasIndex ? "Index selected" : "Index needed"}
-        </div>
+  return <div
+    className={`reading-desk${isViewerRoute ? " reading-desk--viewer-open" : ""}`}
+    style={isViewerRoute ? { "--pdf-mobile-snap": `${pdfSnap}dvh` } as CSSProperties : undefined}
+  >
+    <header className="reading-header">
+      <Link className="reading-brand" to="/" aria-label="RAG-PDF home">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" fillRule="evenodd" d="M4 2h11l5 5v15H4V2zm2.5 2.5v15h11V8.2h-4.8V4.5H6.5z" /><path fill="var(--evidence)" d="M8 12h8v3H8z" /></svg>
+        <span>RAG-PDF</span>
+      </Link>
+      <div className="reading-header__actions">
+        <button type="button" className="reading-ghost" onClick={createConversation}>New chat</button>
+        <button type="button" className="reading-ghost" aria-expanded={menuOpen} aria-controls="reading-menu" onClick={() => setMenuOpen((open) => !open)}>Menu</button>
       </div>
+      {menuOpen ? <nav id="reading-menu" className="reading-menu" aria-label="Reading Desk menu">
+        <button type="button" aria-pressed={mode === "general"} onClick={() => { setMenuOpen(false); selectMode("general"); }}>General Chat</button>
+        <button type="button" aria-pressed={mode === "document"} onClick={() => { setMenuOpen(false); selectMode("document"); }}>Chat with PDFs</button>
+        <Link to="/documents" onClick={() => setMenuOpen(false)}>Library</Link>
+        <Link to="/settings" onClick={() => setMenuOpen(false)}>Settings</Link>
+        <button type="button" onClick={() => { setMenuOpen(false); setConversationsOpen(true); }}>Conversations</button>
+      </nav> : null}
+    </header>
 
-      {mode === "general" && unavailableModelNotice ? <p className="chat-inline-notice" role="status">{unavailableModelNotice}</p> : null}
-      {mode === "general" && preferenceLoadStatus === "invalid" ? <p className="chat-inline-notice" role="status">Invalid saved preferences were reset to safe defaults.</p> : null}
-      {mode === "general" && (catalog?.availability === "unavailable" || catalogError) ? <div className="chat-model-recovery" role={catalogError ? "alert" : "status"}>
-        <div><strong>{catalogError ? "Model availability could not be checked" : "Ollama is unavailable"}</strong><p>{catalogError ?? "Start the configured local Ollama service, then check its availability again."}</p></div>
-        <button type="button" className="button button--quiet button--small" onClick={checkModelAvailability} disabled={catalogChecking}>{catalogChecking ? "Checking…" : "Check again"}</button>
-      </div> : null}
-      {mode === "document" && indexState ? <div className={`chat-index-state chat-index-state--${indexState.tone}`} role={indexState.tone === "warning" ? "alert" : "status"}>
-        <div><strong>{indexState.title}</strong><p>{indexState.detail}</p></div>
-        {indexState.action ? <Link to="/documents" className="chat-index-action">{indexState.action}</Link> : null}
-      </div> : null}
-      {showPendingElsewhere ? <p className="chat-inline-notice" role="status">A response is still finishing in another conversation. It will stay with that conversation.</p> : null}
+    {modelCannotBeReached ? <p className="reading-model-error" role="status">
+      <span className="reading-model-error__dot" aria-hidden="true" />
+      <span>Can't reach the model. Start Ollama, then check again.</span>
+      <button type="button" onClick={checkModelAvailability} disabled={catalogChecking}>{catalogChecking ? "Checking…" : "Check again"}</button>
+      <Link to="/settings">How to start it</Link>
+    </p> : catalogError ? <p className="reading-service-error" role="status">Model availability could not be checked. {catalogError}</p> : null}
 
+    {preferenceLoadStatus === "invalid" ? <p className="reading-service-error" role="status">Saved model preferences were reset to safe defaults.</p> : null}
+    {unavailableModelNotice ? <p className="reading-service-error" role="status">{unavailableModelNotice}</p> : null}
+    {conversations.notice ? <p className="reading-service-error" role="status">{conversations.notice}</p> : null}
+    {showPendingElsewhere ? <p className="reading-service-error" role="status">A response is still finishing in another conversation.</p> : null}
+
+    {!messages.length && mode === "document" ? <section className="reading-first-run" aria-label="Start reading">
+      <section className="reading-first-run__controls">
+        <p className="reading-first-run__library-status" role="status" aria-live="polite">{sampleUnavailable}</p>
+        <div className="reading-suggestions" role="group" aria-label="Sample questions">
+          {SAMPLE_QUESTIONS.map((suggestion) => <button type="button" key={suggestion} onClick={() => {
+            if (mode !== "document") selectMode("document");
+            setQuestion(suggestion);
+            textarea.current?.focus();
+          }}>{suggestion}</button>)}
+        </div>
+        <div className="reading-sample-identity">
+          <span className="reading-sample-identity__icon" aria-hidden="true">PDF</span>
+          <span><strong>{sampleDocument?.relative_path.split(/[\\/]/u).at(-1) ?? "Mars Science Laboratory factsheet"}</strong><small>NASA sample · separate from your Library</small></span>
+          {sampleDocument ? <button id="sample-document-open" type="button" onClick={openSampleDocument}>Open PDF</button> : <Link to="/documents">Library</Link>}
+        </div>
+        {composer}
+      </section>
+      <figure className="reading-first-run__preview">
+        {visible && !isViewerRoute ? <SamplePdfPreview /> : null}
+      </figure>
+    </section> : <section className="reading-conversation" aria-label="Conversation">
       <div
         className={`chat-transcript${messages.length ? " chat-transcript--active" : ""}`}
         ref={scrollRegion}
         role="log"
-        aria-label={`${mode === "general" ? "General Chat" : "Chat with PDFs"} messages`}
+        aria-label={mode === "general" ? "General Chat messages" : "PDF conversation messages"}
         aria-live="polite"
         aria-relevant="additions"
         onScroll={(event) => { const node = event.currentTarget; stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 96; }}
       >
-        {!messages.length ? <div className="chat-empty">
-          <div className="chat-empty__glyph" aria-hidden="true"><span /><span /><span /></div>
-          <h2>{mode === "general" ? "What would you like to explore?" : "Ask a question about your PDFs"}</h2>
-          <p>{mode === "general" ? "Your conversation uses the selected local model, without document retrieval." : hasIndex ? "Questions are sent to the selected index and document answer model." : "Prepare or select an index in Documents to begin."}</p>
-          {mode === "general" && !catalogError && catalog?.availability !== "unavailable" ? <p className={`chat-model-status${modelIsVerified ? " is-available" : " is-unavailable"}`} role="status">
-            {modelResolution.status === "configured-default-unavailable" ? `Configured model ${catalog?.configured_model ?? ""} is not installed. Choose an installed model in Settings.` : modelResolution.status === "checking" || catalogChecking ? "Checking installed models…" : modelIsVerified ? `Using ${generalModel}.` : "Choose an installed model in Settings to begin."}
-          </p> : null}
-        </div> : messages.map((message) => <ChatMessage key={message.id} message={message} selectedFingerprint={selectedFingerprint} onOpenEvidence={openEvidence} onCopy={(text) => void copyAnswer(text)} />)}
+        {messages.map((message) => <ChatMessage
+          key={message.id}
+          message={message}
+          selectedFingerprint={selectedFingerprint}
+          imageUrls={{ ...imageUrls, ...answerImageUrls }}
+          onOpenEvidence={openEvidence}
+          onOpenDocument={openDocument}
+          onCopy={(text) => void copyAnswer(text)}
+        />)}
         {activePending ? <div className="chat-thinking" role="status"><span className="chat-thinking__dots" aria-hidden="true"><i /><i /><i /></span><span>{mode === "general" ? "Waiting for the local model…" : "Retrieving evidence and preparing an answer…"}</span></div> : null}
       </div>
-
       {copyNotice ? <p className="chat-copy-notice" role="status">{copyNotice}</p> : null}
-      <ChatComposer
-        question={question}
+      {composer}
+    </section>}
+
+    {conversationsOpen ? <>
+      <ConversationRail
+        conversations={conversations.conversations}
+        activeId={activeId}
         mode={mode}
-        modelStatus={mode === "general" ? modelStatus : hasIndex ? "PDF collection selected · retrieval checked on send" : "Document index required"}
-        pending={activePending}
-        disabledReason={disabledReason}
-        textareaRef={textarea}
-        onChange={setQuestion}
-        onSubmit={(event) => { void submit(event); }}
-        onKeyDown={handleKeyDown}
-        attachmentControl={<ChatPdfAttachment
-          client={bootstrapClient}
-          inventory={sourceInventory}
-          inventoryLoading={visible && sourceInventory === null && sourceError === null}
-          inventoryError={sourceError}
-          tokenAvailable={bootstrapToken !== null}
-          requestPending={busy}
-          onInventoryChange={(value) => { setSourceInventory(value); setSourceError(null); }}
-        />}
+        notice={conversations.notice}
+        mobileOpen
+        evidenceOpen={Boolean(drawerMessage)}
+        pendingConversationId={pendingConversationId}
+        onNew={createConversation}
+        onSelect={selectConversation}
+        onDelete={deleteConversation}
+        onDismiss={() => setConversationsOpen(false)}
       />
-      <p className="chat-footnote">{mode === "general" ? "General Chat is not document-grounded. " : ""}Chats are kept in this browser tab session. Reloaded document evidence expires; ask again to retrieve current sources.</p>
-    </section>
+    </> : null}
 
     {drawerMessage && evidenceResponse ? <EvidenceInspector
       message={drawerMessage}
