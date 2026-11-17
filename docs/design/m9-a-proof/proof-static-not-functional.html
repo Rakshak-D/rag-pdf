@@ -1,0 +1,996 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="A local static reading-interface proof using a credited NASA factsheet.">
+  <title>RAG-PDF · NASA Curiosity fact sheet</title>
+  <link rel="preload" href="assets/fonts/Newsreader-Variable.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="assets/fonts/InstrumentSans-Variable.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="preload" href="assets/fonts/IBM-Plex-Mono-Regular.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="assets/reading-desk.css">
+</head>
+<body data-state="first-run" data-pdf-open="false">
+  <a class="skip-link" href="#thread">Skip to conversation</a>
+  <header class="topbar">
+    <a class="brand" href="?state=first-run" aria-label="RAG-PDF home">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><use href="assets/marks/r4-a-page-highlight.svg#mark"></use></svg>
+      <span class="brand-name">RAG-PDF</span>
+    </a>
+    <nav class="top-actions" aria-label="Conversation controls">
+      <button id="new-chat" class="icon-button" type="button" aria-label="New chat" title="New chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v12H10l-5 3v-3H4zM12 8.5v6M9 11.5h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="menu-wrap">
+        <button id="menu-toggle" class="icon-button" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="menu-panel">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        </button>
+        <div id="menu-panel" class="menu-panel" hidden>
+          <button id="settings-open" type="button">Settings</button>
+        </div>
+      </div>
+    </nav>
+  </header>
+  <div id="help-panel" class="help-panel" hidden>
+    <p>Open the local model app from the Start menu, then select Check again.</p>
+    <button id="model-help-close" class="quiet-button" type="button">Close</button>
+  </div>
+  <section id="settings-panel" class="settings-panel" aria-labelledby="settings-title" hidden>
+    <h2 id="settings-title">Settings</h2>
+    <p>Model checks run on this computer. This proof does not check a live service.</p>
+    <button id="settings-close" type="button">Close settings</button>
+  </section>
+
+  <main id="app" class="app-shell">
+    <section id="thread" class="thread" aria-label="Conversation" aria-live="off">
+      <section id="attention" class="attention" aria-label="Model connection" hidden>
+        <p class="attention-copy" aria-live="polite"></p>
+        <div class="attention-actions">
+          <button id="check-model" class="outline-button" type="button">Check again</button>
+          <a id="model-help-open" class="inline-link" href="#help-panel" aria-expanded="false">How to start it</a>
+        </div>
+        <span id="attention-feedback" class="attention-feedback" role="status" aria-live="polite"></span>
+      </section>
+    </section>
+  </main>
+
+  <form id="composer" class="composer" aria-label="Question composer">
+    <div id="document-pill" class="document-pill"></div>
+    <div class="composer-row">
+      <button id="attach-button" class="composer-action" type="button" aria-label="Add a PDF" title="Add a PDF">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      </button>
+      <input id="pdf-input" class="file-input" type="file" accept="application/pdf,.pdf" aria-label="Choose a PDF">
+      <label class="sr-only" for="question-input">Ask a question</label>
+      <textarea id="question-input" rows="1" placeholder="Ask a question" autocomplete="off"></textarea>
+      <button id="send-button" class="composer-action" type="submit" aria-label="Send question">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13m-5-5 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <p id="composer-feedback" class="composer-feedback" role="status" aria-live="polite"></p>
+  </form>
+
+  <aside id="pdf-sheet" class="pdf-sheet" role="dialog" aria-modal="false" aria-labelledby="sheet-title" aria-hidden="true" hidden>
+    <div class="sheet-topline">
+      <button id="sheet-grip" class="sheet-grip" type="button" role="slider" aria-label="PDF viewer height" aria-valuemin="30" aria-valuemax="92" aria-valuenow="55" aria-valuetext="55 percent"></button>
+      <div class="sheet-top-title">
+        <span id="sheet-title" class="sheet-title sr-only">NASA Curiosity fact sheet</span>
+      </div>
+      <div class="sheet-top-actions">
+        <button id="close-sheet" class="sheet-close" type="button" aria-label="Close PDF" title="Close PDF">×</button>
+      </div>
+    </div>
+    <div class="sheet-tools" role="toolbar" aria-label="PDF controls">
+      <button id="previous-page" class="sheet-tool" type="button" aria-label="Previous page" title="Previous page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span id="toolbar-page" class="page-ref" data-role="page-ref" aria-label="Current page">2 / 4</span>
+      <button id="next-page" class="sheet-tool" type="button" aria-label="Next page" title="Next page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="zoom-out" class="sheet-tool" type="button" aria-label="Zoom out" title="Zoom out">−</button>
+      <button id="zoom-in" class="sheet-tool" type="button" aria-label="Zoom in" title="Zoom in">+</button>
+      <button id="matches-toggle" class="sheet-tool matches-toggle" type="button" aria-pressed="false">Show matches</button>
+    </div>
+    <div id="match-mobile" class="match-mobile" aria-label="Match types"></div>
+    <div id="match-legend" class="match-legend" aria-label="Passage marks" hidden>
+      <span class="legend-key"><i class="legend-mark" aria-hidden="true"></i>Cited</span>
+      <span class="legend-key"><i class="legend-mark dotted" aria-hidden="true"></i>Uncited</span>
+    </div>
+    <div id="page-viewport" class="page-viewport" tabindex="0" aria-label="PDF page">
+      <div class="page-stage">
+        <div id="page-frame" class="page-frame">
+          <img id="page-image" src="assets/pages/page-02.png" alt="Page 2 of the NASA Curiosity fact sheet" width="1105" height="1430">
+          <div id="evidence-layer" class="evidence-layer" aria-label="Source passages on this page"></div>
+        </div>
+        <div id="match-rail" class="match-rail" aria-label="Source methods"></div>
+      </div>
+    </div>
+    <div id="match-popover" class="match-popover" role="status" aria-live="polite" hidden></div>
+    <div class="page-strip" aria-label="Pages in this PDF">
+      <button class="page-thumb" data-page="1" type="button" aria-label="Go to page 1"><img src="assets/pages/contact-1.png" alt=""><span class="page-ref" data-role="page-ref">1</span></button>
+      <button class="page-thumb" data-page="2" type="button" aria-label="Go to page 2"><img src="assets/pages/contact-2.png" alt=""><span class="page-ref" data-role="page-ref">2</span></button>
+      <button class="page-thumb" data-page="3" type="button" aria-label="Go to page 3"><img src="assets/pages/contact-3.png" alt=""><span class="page-ref" data-role="page-ref">3</span></button>
+      <button class="page-thumb" data-page="4" type="button" aria-label="Go to page 4"><img src="assets/pages/contact-4.png" alt=""><span class="page-ref" data-role="page-ref">4</span></button>
+    </div>
+  </aside>
+  <div id="citation-popover-layer" aria-live="off"></div>
+  <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const pageSize = { width: 612, height: 792 };
+      const documentKey = "sample-curiosity-factsheet";
+      const sampleFileIdentity = { name: "mars-science-laboratory.pdf", bytes: 1512372, sha256: "2baee40744fc1c35b3ad015f8672a45710ac6bd9124a4041cfc0d7bfba4e10f6" };
+      const sourceList = [
+        { id: "link-caption", page: 2, method: "Figure", cited: true, quote: "A rock outcrop called Link shows signs of being formed by the deposition of water.", boxes: [[46.08,217.376,282.285,227.6],[46.08,229.376,74.692,239.6]] },
+        { id: "stream-flow", page: 2, method: "Exact words", cited: true, quote: "The evidence for stream flow was in rounded pebbles mixed with hardened sand in conglomerate rocks at and near the landing site.", boxes: [[44.5,584.66,274.202,596.48],[44.5,600.16,286.421,611.98],[44.5,615.66,133.78,627.48]] },
+        { id: "john-klein-first", page: 2, method: "Exact words", cited: true, quote: "first drilled sample, from a rock target called “John Klein,”", boxes: [[314.64,139.4,559.882,151.22]] },
+        { id: "john-klein-water", page: 2, method: "Meaning", cited: true, quote: "geological and mineralogical evidence for sustained liquid water", boxes: [[398.36,170.4,560.84,182.22],[314.64,185.9,423.73,197.72]] },
+        { id: "touchdown-water", page: 2, method: "Meaning", cited: false, quote: "Curiosity touched down right in an area where water once coursed vigorously over the surface.", boxes: [[44.5,538.16,289.75,549.98],[44.5,553.66,269.189,565.48],[44.5,569.16,279.422,580.98]] },
+        { id: "gale-site", page: 1, method: "Exact words", cited: true, quote: "at Gale Crater, using precision landing technology that made one of Mars’ most intriguing regions a viable destination", boxes: [[45.36,201.22,227.082,213.04],[45.36,216.72,229.67,228.54],[45.36,232.22,241.691,244.04]] },
+        { id: "power-launch", page: 3, method: "Exact words", cited: true, quote: "At launch, the generator provided about 110 watts of electrical power", boxes: [[156.411,585.68,280.721,597.5],[44.5,601.18,221.97,613]] },
+        { id: "landing-sequence", page: 1, method: "Meaning", cited: true, quote: "During the three minutes before touchdown, the spacecraft slowed its descent with a parachute", boxes: [[262.8,551.054,468.2,562.874],[262.8,566.554,457.28,578.374],[262.8,582.054,457.873,593.874],[262.8,597.554,452.282,609.374],[262.8,613.054,467.68,624.874],[262.8,628.554,467.32,640.374],[262.8,644.054,307.8,655.874]] }
+      ];
+      const sources = new Map(sourceList.map((source) => [source.id, source]));
+      const prompts = [
+        "What does the rock Link tell us about water on Mars?",
+        "How much power did the rover have at launch?",
+        "Which crater did it land in, and what did it drill first?"
+      ];
+      const stateFromUrl = new URLSearchParams(location.search).get("state") || "first-run";
+      const supportedStates = new Set(["first-run", "answered-closed", "answered-open", "answered-matches", "model-unreachable", "reading-progress", "answer-shapes"]);
+      const initialState = supportedStates.has(stateFromUrl) ? stateFromUrl : "first-run";
+      const thread = document.getElementById("thread");
+      const sheet = document.getElementById("pdf-sheet");
+      const pageFrame = document.getElementById("page-frame");
+      const pageImage = document.getElementById("page-image");
+      const pageViewport = document.getElementById("page-viewport");
+      const evidenceLayer = document.getElementById("evidence-layer");
+      const toolbarPage = document.getElementById("toolbar-page");
+      const matchRail = document.getElementById("match-rail");
+      const matchMobile = document.getElementById("match-mobile");
+      const matchLegend = document.getElementById("match-legend");
+      const matchPopover = document.getElementById("match-popover");
+      const matchesToggle = document.getElementById("matches-toggle");
+      const composer = document.getElementById("composer");
+      const questionInput = document.getElementById("question-input");
+      const composerFeedback = document.getElementById("composer-feedback");
+      const documentPill = document.getElementById("document-pill");
+      const pdfInput = document.getElementById("pdf-input");
+      const attentionFeedback = document.getElementById("attention-feedback");
+      const citationPopoverLayer = document.getElementById("citation-popover-layer");
+      let activePage = 2;
+      let activeSource = null;
+      let matchState = false;
+      let zoom = "fit";
+      let fitWidth = 0;
+      let hasDocument = true;
+      let selectedFile = null;
+      let selectedIsSample = true;
+      let focusReturn = null;
+      let activePopover = null;
+      let matchPopoverSource = null;
+      let closeTimer = 0;
+      let sheetSnap = 55;
+
+      const make = (tag, className, text) => {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        if (text !== undefined) element.textContent = text;
+        return element;
+      };
+      const quoteWords = (quote) => (quote.match(/[\p{L}\p{N}]+/gu) || []).length;
+      const pageImagePath = (page) => "assets/pages/page-0" + page + ".png";
+      const pageThumbPath = (page) => "assets/pages/contact-" + page + ".png";
+      const announce = (message) => { document.getElementById("announcement").textContent = message; };
+
+      const getSource = (id) => sources.get(id);
+      const citationZoomPercent = (sourceId) => {
+        const source = getSource(sourceId);
+        if (!source || !source.boxes.length) return 100;
+        const viewportWidth = pageViewport.clientWidth || Math.max(0, Math.min(900, window.innerWidth * .55) - 24);
+        const mobile = window.matchMedia("(max-width: 760px)").matches;
+        const horizontalClearance = mobile ? 16 : 40;
+        const minX = Math.min(...source.boxes.map((box) => box[0]));
+        const maxX = Math.max(...source.boxes.map((box) => box[2]));
+        const targetWidthAt100 = (maxX - minX) * (96 / 72);
+        if (mobile) {
+          const fitWithClearance = Math.floor(Math.max(100, viewportWidth - horizontalClearance) / targetWidthAt100 * 100 / 5) * 5;
+          return Math.max(100, Math.min(200, fitWithClearance));
+        }
+        const paddingLeft = parseFloat(getComputedStyle(pageViewport).paddingLeft) || 0;
+        const targetCenterAt100 = ((minX + maxX) / 2) * (96 / 72);
+        const centerFromPageLeft = Math.max(0, viewportWidth / 2 - paddingLeft);
+        const required = Math.max(100, centerFromPageLeft / targetCenterAt100 * 100);
+        const fitWithClearance = Math.floor(Math.max(100, viewportWidth - horizontalClearance) / targetWidthAt100 * 100 / 25) * 25;
+        const centered = Math.ceil(required / 25) * 25;
+        return Math.max(100, Math.min(200, centered, fitWithClearance));
+      };
+      const makeCitation = (sourceId, number) => {
+        const source = getSource(sourceId);
+        const button = make("button", "citation");
+        button.type = "button";
+        button.dataset.sourceId = sourceId;
+        button.dataset.number = String(number);
+        button.setAttribute("aria-label", "Source " + number + ", page " + source.page + ". Open citation.");
+        button.setAttribute("aria-expanded", "false");
+        const mark = make("span", "citation-mark", String(number));
+        button.append(mark);
+        button.addEventListener("pointerenter", () => showCitationPopover(button, source));
+        button.addEventListener("pointerleave", () => hideCitationPopover(button));
+        button.addEventListener("focus", () => showCitationPopover(button, source));
+        button.addEventListener("blur", () => hideCitationPopover(button));
+        button.addEventListener("click", () => openSource(sourceId, button));
+        return button;
+      };
+      const appendCitedText = (parent, text, sourceId, number) => {
+        const match = /(\S+)$/.exec(text);
+        const sentence = make("span", "evidence-sentence");
+        sentence.dataset.sourceId = sourceId;
+        sentence.dataset.evidence = sourceId;
+        if (!match) { sentence.append(document.createTextNode(text), makeCitation(sourceId, number)); parent.append(sentence); return; }
+        const prefix = text.slice(0, match.index);
+        sentence.append(document.createTextNode(prefix));
+        const pair = make("span", "citation-pair");
+        pair.append(document.createTextNode(match[1]), makeCitation(sourceId, number));
+        sentence.append(pair);
+        parent.append(sentence);
+      };
+
+      const showCitationPopover = (button, source) => {
+        if (activePopover?.button === button) return;
+        if (activePopover && activePopover.button !== button) {
+          activePopover.element.remove();
+          activePopover.button.setAttribute("aria-expanded", "false");
+          activePopover.button.removeAttribute("aria-describedby");
+        }
+        const popover = make("div", "citation-popover");
+        popover.id = "citation-popover-" + source.id + "-" + button.dataset.number;
+        popover.dataset.sourceId = source.id;
+        popover.setAttribute("role", "tooltip");
+        const thumb = document.createElement("img");
+        thumb.src = pageThumbPath(source.page);
+        thumb.alt = "";
+        thumb.width = 48;
+        thumb.height = 62;
+        const copy = make("div", "popover-content");
+        copy.append(make("span", "popover-page", "Page " + source.page));
+        copy.append(make("span", "popover-quote", "“" + source.quote + "”"));
+        popover.append(thumb, copy);
+        citationPopoverLayer.replaceChildren();
+        const list = button.closest("ol, ul");
+        const anchor = list || button.closest("p, li") || button.closest(".assistant-answer");
+        if (anchor?.parentElement) anchor.insertAdjacentElement("afterend", popover);
+        else citationPopoverLayer.append(popover);
+        requestAnimationFrame(() => popover.classList.add("is-visible"));
+        button.setAttribute("aria-expanded", "true");
+        button.setAttribute("aria-describedby", popover.id);
+        activePopover = { button, element: popover };
+      };
+      const hideCitationPopover = (button) => {
+        if (!activePopover || activePopover.button !== button) return;
+        const pendingPopover = activePopover;
+        window.setTimeout(() => {
+          if (activePopover !== pendingPopover) return;
+          if (button.matches(":hover") || document.activeElement === button) return;
+          pendingPopover.element.remove();
+          button.removeAttribute("aria-describedby");
+          button.setAttribute("aria-expanded", "false");
+          activePopover = null;
+        }, 0);
+      };
+      const closeCitationPopover = () => {
+        if (!activePopover) return;
+        const button = activePopover.button;
+        activePopover.element.remove();
+        button.removeAttribute("aria-describedby");
+        button.setAttribute("aria-expanded", "false");
+        activePopover = null;
+        button.focus({ preventScroll: true });
+      };
+
+      const addParagraph = (parent, parts, className) => {
+        const paragraph = make("p", className || "answer-paragraph");
+        parts.forEach((part) => {
+          if (part.source) appendCitedText(paragraph, part.text, part.source, part.number);
+          else paragraph.append(document.createTextNode(part.text));
+        });
+        parent.append(paragraph);
+        return paragraph;
+      };
+      const addFigure = (parent) => {
+        const figure = make("figure", "inline-figure");
+        const image = document.createElement("img");
+        image.src = "assets/figures/link-outcrop.png";
+        image.alt = "NASA’s Mastcam photograph of the Link rock outcrop on Mars, with rounded pebbles and a one-centimeter scale marker.";
+        image.width = 1563;
+        image.height = 1011;
+        const caption = make("figcaption", "figure-caption");
+        caption.append(make("span", "caption-text", "A rock outcrop called Link shows signs of being formed by the deposition of water."));
+        caption.append(make("span", "figure-credit", "NASA/JPL-Caltech/MSSS"));
+        figure.append(image, caption);
+        parent.append(figure);
+      };
+
+      const fixtures = {
+        A: {
+          question: "What does the rock Link tell us about water on Mars?",
+          render(answer) {
+            addParagraph(answer, [
+              { text: "The Link outcrop shows signs of having formed through water deposition.", source: "link-caption", number: 1 },
+              { text: " Rounded pebbles in hardened sand near the landing site are evidence of stream flow.", source: "stream-flow", number: 2 },
+              { text: " The passage also describes geological and mineralogical evidence for sustained liquid water.", source: "john-klein-water", number: 3 }
+            ], "answer-lead");
+          }
+        },
+        B: {
+          question: "Which crater did Curiosity land in, and what did it drill first?",
+          render(answer) {
+            const list = make("ol", "answer-list");
+            const rows = [
+              ["Curiosity landed in Gale Crater.", "gale-site"],
+              ["Its first drilled rock sample came from a target called John Klein.", "john-klein-first"],
+              ["That sample showed evidence of sustained liquid water.", "john-klein-water"]
+            ];
+            rows.forEach((row, index) => {
+              const item = make("li", "");
+              appendCitedText(item, row[0], row[1], index + 1);
+              list.append(item);
+            });
+            answer.append(list);
+          }
+        },
+        C: {
+          question: "What did the mission establish about landing, water and rover power?",
+          render(answer) {
+            const paragraphs = [
+              ["Curiosity landed at Gale Crater using precision landing technology.", "gale-site"],
+              ["A parachute slowed the spacecraft before retrorockets and a sky crane lowered the rover.", "landing-sequence"],
+              ["At launch, its generator provided about 110 watts of electrical power.", "power-launch"],
+              ["The first drilled sample came from John Klein and showed evidence of sustained liquid water.", "john-klein-water"]
+            ];
+            paragraphs.forEach((row, index) => addParagraph(answer, [{ text: row[0], source: row[1], number: index + 1 }], "answer-paragraph"));
+          }
+        },
+        D: {
+          question: prompts[0],
+          render(answer) {
+            const lead = addParagraph(answer, [{ text: "The factsheet says the Link outcrop shows signs of being formed by the deposition of water.", source: "link-caption", number: 1 }], "answer-lead");
+            lead.classList.add("answer-lead");
+            addFigure(answer);
+            const rest = make("div", "answer-rest");
+            addParagraph(rest, [{ text: "Rounded pebbles mixed with hardened sand in nearby conglomerate rocks were evidence of stream flow.", source: "stream-flow", number: 2 }], "answer-paragraph");
+            addParagraph(rest, [{ text: "The page also notes geological and mineralogical evidence for sustained liquid water.", source: "john-klein-water", number: 3 }], "answer-paragraph");
+            answer.append(rest);
+          }
+        },
+        E: {
+          question: "What was Curiosity's exact speed during landing?",
+          render(answer) {
+            const paragraph = make("p", "no-answer", "I couldn't find this in the PDF. The factsheet describes the descent sequence, but it gives no single exact speed.");
+            appendCitedText(paragraph, " It says the spacecraft slowed its descent with a parachute.", "landing-sequence", 1);
+            answer.append(paragraph);
+          }
+        },
+        F: {
+          question: prompts[1],
+          render(answer) {
+            addParagraph(answer, [{ text: "At launch, the generator provided about 110 watts of electrical power.", source: "power-launch", number: 1 }], "answer-lead");
+          }
+        }
+      };
+      const makeAnswer = (fixtureId, questionOverride) => {
+        const fixture = fixtures[fixtureId];
+        const stack = make("div", "answer-stack");
+        const turn = make("section", "turn");
+        const question = make("p", "user-turn", questionOverride || fixture.question);
+        const answer = make("article", "assistant-answer");
+        answer.setAttribute("aria-label", "Answer");
+        if (fixtureId === "D") {
+          const layout = make("div", "answer-layout");
+          fixture.render(layout);
+          answer.append(layout);
+          turn.append(question, answer);
+        } else {
+          fixture.render(answer);
+          turn.append(question, answer);
+        }
+        stack.append(turn);
+        return stack;
+      };
+
+      const renderFirstRun = () => {
+        const content = make("div", "first-run-content");
+        const left = make("div", "first-run-left");
+        const suggestions = make("div", "suggested-questions");
+        suggestions.setAttribute("aria-label", "Suggested questions");
+        prompts.forEach((prompt) => {
+          const button = make("button", "suggestion", prompt);
+          button.type = "button";
+          button.addEventListener("click", () => {
+            questionInput.value = prompt;
+            composerFeedback.textContent = "";
+            questionInput.focus();
+            resizeComposer();
+          });
+          suggestions.append(button);
+        });
+        left.append(suggestions);
+        const page = make("figure", "first-run-page");
+        const pagePreview = document.createElement("img");
+        pagePreview.src = "assets/pages/page-01.png";
+        pagePreview.alt = "NASA factsheet, page 1, showing Gale Crater";
+        pagePreview.width = 1105;
+        pagePreview.height = 1430;
+        const highlight = make("span", "hero-evidence-mark");
+        highlight.setAttribute("aria-hidden", "true");
+        page.append(pagePreview, highlight);
+        content.append(left, page);
+        const state = document.body.dataset.state;
+        content.hidden = state !== "first-run";
+        const status = document.getElementById("attention");
+        status.hidden = state !== "model-unreachable";
+        const checkButton = document.getElementById("check-model");
+        const helpButton = document.getElementById("model-help-open");
+        if (state === "model-unreachable") {
+          status.querySelector(".attention-copy").textContent = "Can't reach the model. Start Ollama, then check again.";
+          checkButton.hidden = false;
+          helpButton.hidden = false;
+          questionInput.disabled = true;
+          document.getElementById("send-button").disabled = true;
+          document.getElementById("send-button").setAttribute("aria-label", "Model unavailable");
+        } else {
+          questionInput.disabled = false;
+          document.getElementById("send-button").disabled = false;
+          document.getElementById("send-button").setAttribute("aria-label", "Send question");
+        }
+        const children = [];
+        if (!status.hidden) children.push(status);
+        children.push(content);
+        thread.replaceChildren(...children);
+      };
+      const renderAnswerState = (fixtureId, question) => {
+        thread.replaceChildren(makeAnswer(fixtureId || "D", question));
+        document.body.dataset.state = "answered-closed";
+        document.getElementById("app").scrollTop = 0;
+      };
+      const renderGallery = () => {
+        const gallery = make("div", "answer-gallery");
+        gallery.append(make("h1", "", "Answer shapes"));
+        ["A", "B", "C", "D", "E"].forEach((id) => {
+          const section = make("section", "fixture");
+          section.append(make("h2", "fixture-label", "Fixture " + id));
+          section.append(makeAnswer(id));
+          gallery.append(section);
+        });
+        thread.replaceChildren(gallery);
+      };
+
+      const renderState = (state) => {
+        document.body.dataset.state = state;
+        document.getElementById("attention-feedback").textContent = "";
+        if (["first-run", "model-unreachable"].includes(state)) renderFirstRun();
+        else if (state === "answer-shapes") renderGallery();
+        else if (state === "reading-progress") renderAnswerState("D", prompts[0]);
+        else renderAnswerState("D", prompts[0]);
+      };
+
+      const renderDocumentPill = () => {
+        documentPill.replaceChildren();
+        if (!hasDocument) return;
+        const open = make("button", "document-open");
+        open.type = "button";
+        const canOpen = !selectedFile || selectedIsSample;
+        open.disabled = !canOpen;
+        open.setAttribute("aria-label", canOpen ? "Open or close Mars Science Laboratory/Curiosity factsheet, 4 pages" : "Page viewing is unavailable for this selected PDF");
+        const image = document.createElement("img");
+        image.className = "document-thumb";
+        image.src = pageThumbPath(1);
+        image.alt = "";
+        const thumbFrame = make("span", "document-thumb-frame");
+        thumbFrame.append(image, make("span", "document-thumb-highlight"));
+        const copy = make("span", "document-copy");
+        copy.append(make("span", "document-name", selectedFile && !selectedIsSample ? selectedFile.name : "Mars Science Laboratory/Curiosity factsheet"));
+        copy.append(make("span", "document-meta", selectedFile && !selectedIsSample ? "Selected PDF" : "4 pages"));
+        open.append(thumbFrame, copy);
+        open.addEventListener("click", () => {
+          if (!canOpen) return;
+          if (document.body.dataset.pdfOpen === "true") closeSheet(true);
+          else openDocumentPage(1, open);
+        });
+        const menuWrap = make("div", "document-menu-wrap");
+        const menuToggle = make("button", "document-menu-toggle");
+        menuToggle.type = "button";
+        menuToggle.setAttribute("aria-label", "Show recent PDFs");
+        menuToggle.setAttribute("aria-expanded", "false");
+        menuToggle.setAttribute("aria-controls", "document-menu");
+        menuToggle.textContent = "⋯";
+        const recentMenu = make("div", "document-menu");
+        recentMenu.id = "document-menu";
+        recentMenu.hidden = true;
+        recentMenu.append(make("h2", "", "Recent PDFs"));
+        const recentSample = make("button", "recent-sample");
+        recentSample.type = "button";
+        const recentThumb = document.createElement("img");
+        recentThumb.className = "menu-thumb";
+        recentThumb.src = pageThumbPath(1);
+        recentThumb.alt = "";
+        recentSample.append(recentThumb, make("span", "", "Mars Science Laboratory/Curiosity factsheet"));
+        recentSample.addEventListener("click", () => {
+          hasDocument = true;
+          selectedFile = null;
+          selectedIsSample = true;
+          recentMenu.hidden = true;
+          renderDocumentPill();
+          document.querySelector(".document-open")?.focus({ preventScroll: true });
+          announce("Mars Science Laboratory/Curiosity factsheet selected.");
+        });
+        recentMenu.append(recentSample);
+        menuToggle.addEventListener("click", () => {
+          recentMenu.hidden = !recentMenu.hidden;
+          menuToggle.setAttribute("aria-expanded", String(!recentMenu.hidden));
+          if (!recentMenu.hidden) recentSample.focus();
+        });
+        menuWrap.append(menuToggle, recentMenu);
+        const remove = make("button", "remove-document", "×");
+        remove.type = "button";
+        remove.setAttribute("aria-label", "Remove PDF from this conversation");
+        remove.addEventListener("click", () => {
+          if (document.body.dataset.pdfOpen === "true") closeSheet(true);
+          hasDocument = false;
+          selectedFile = null;
+          selectedIsSample = false;
+          renderDocumentPill();
+          announce("PDF removed from this conversation. The original file remains available.");
+          document.getElementById("attach-button").focus();
+        });
+        recentMenu.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape") return;
+          event.stopPropagation();
+          recentMenu.hidden = true;
+          menuToggle.setAttribute("aria-expanded", "false");
+          menuToggle.focus();
+        });
+        const progress = make("div", "document-progress");
+        progress.id = "document-progress";
+        progress.hidden = true;
+        progress.append(make("span", "progress-copy", ""), make("span", "progress-track"));
+        documentPill.append(open, menuWrap, remove, progress);
+        updateDocumentProgress();
+      };
+
+      const updateDocumentProgress = () => {
+        const progress = document.getElementById("document-progress");
+        if (!progress) return;
+        progress.hidden = document.body.dataset.pdfOpen !== "true" || !hasDocument || Boolean(selectedFile && !selectedIsSample);
+        progress.setAttribute("aria-label", "Reading page " + activePage + " of 4");
+        progress.querySelector(".progress-copy").textContent = "Page " + activePage + "/4";
+      };
+
+      const readOpenPreference = () => {
+        try { return localStorage.getItem("rag-pdf:pdf-open:" + documentKey); }
+        catch { return null; }
+      };
+      const writeOpenPreference = (open) => {
+        try { localStorage.setItem("rag-pdf:pdf-open:" + documentKey, open ? "open" : "closed"); }
+        catch { /* The static proof continues without browser storage. */ }
+      };
+      const setSheetSnap = (value) => {
+        const allowed = [30, 55, 92];
+        sheetSnap = allowed.reduce((best, candidate) => Math.abs(candidate - value) < Math.abs(best - value) ? candidate : best, 55);
+        document.body.dataset.sheetSnap = String(sheetSnap);
+        const grip = document.getElementById("sheet-grip");
+        grip.setAttribute("aria-label", "Change PDF viewer height, " + sheetSnap + " percent");
+        grip.setAttribute("aria-valuetext", sheetSnap + " percent");
+        grip.setAttribute("aria-valuenow", String(sheetSnap));
+        document.body.style.setProperty("--sheet-height", sheetSnap + "svh");
+        requestAnimationFrame(() => {
+          updatePageScale();
+          if (activeSource) positionSource(activeSource);
+        });
+      };
+      const syncSourceMarks = () => {
+        evidenceLayer.replaceChildren();
+        const visible = sourceList.filter((source) => source.page === activePage && (matchState || source.id === activeSource));
+        visible.forEach((source) => {
+          const target = make("div", "evidence-target");
+          target.dataset.evidenceTarget = source.id;
+          target.dataset.cited = String(source.cited);
+          target.classList.toggle("is-active", source.id === activeSource);
+          source.boxes.forEach((box, index) => {
+            const mark = make("i", "evidence-mark");
+            mark.dataset.boxIndex = String(index);
+            mark.dataset.pdfBox = box.join(",");
+            mark.style.left = (box[0] / pageSize.width * 100) + "%";
+            mark.style.top = (box[1] / pageSize.height * 100) + "%";
+            mark.style.width = ((box[2] - box[0]) / pageSize.width * 100) + "%";
+            mark.style.height = ((box[3] - box[1]) / pageSize.height * 100) + "%";
+            target.append(mark);
+          });
+          evidenceLayer.append(target);
+        });
+        evidenceLayer.dataset.activeTarget = activeSource || "";
+        evidenceLayer.dataset.showMatches = String(matchState);
+        document.querySelectorAll(".citation").forEach((button) => button.dataset.active = String(button.dataset.sourceId === activeSource));
+        renderMatchLabels();
+      };
+      const renderMatchLabels = () => {
+        matchRail.replaceChildren();
+        matchMobile.replaceChildren();
+        const matches = matchState ? sourceList.filter((source) => source.page === activePage) : [];
+        matches.forEach((source) => {
+          const first = source.boxes[0];
+          const tag = make("button", "match-tag", source.method);
+          tag.type = "button";
+          tag.dataset.sourceId = source.id;
+          tag.setAttribute("aria-pressed", String(source.id === activeSource));
+          tag.style.top = Math.max(0, (first[1] / pageSize.height * 100) - 2) + "%";
+          tag.addEventListener("click", () => selectMatchMethod(source, tag));
+          matchRail.append(tag);
+          const mobileTag = make("button", "", source.method);
+          mobileTag.type = "button";
+          mobileTag.dataset.sourceId = source.id;
+          mobileTag.setAttribute("aria-label", "Show " + source.method + " passage");
+          mobileTag.setAttribute("aria-pressed", String(source.id === activeSource));
+          mobileTag.addEventListener("click", () => selectMatchMethod(source, mobileTag));
+          matchMobile.append(mobileTag);
+        });
+        matchMobile.classList.toggle("is-visible", matchState && window.matchMedia("(max-width: 760px)").matches);
+        matchLegend.hidden = !matchState;
+        matchLegend.classList.toggle("is-visible", matchState);
+      };
+      const selectMatchMethod = (source, trigger) => {
+        activeSource = source.id;
+        syncSourceMarks();
+        matchPopover.replaceChildren(make("strong", "", source.method), make("span", "", source.quote));
+        matchPopover.hidden = false;
+        matchPopoverSource = source.id;
+        positionSource(source.id);
+        if (window.matchMedia("(max-width: 760px)").matches) {
+          const replacement = matchMobile.querySelector('[data-source-id="' + source.id + '"]');
+          if (replacement) replacement.focus({ preventScroll: true });
+        }
+      };
+      const setPage = (page) => {
+        activePage = Math.max(1, Math.min(4, Number(page)));
+        pageImage.src = pageImagePath(activePage);
+        pageImage.alt = "Page " + activePage + " of the NASA Curiosity fact sheet";
+        toolbarPage.textContent = activePage + " / 4";
+        toolbarPage.setAttribute("aria-label", "Page " + activePage + " of 4");
+        updateDocumentProgress();
+        document.querySelectorAll(".page-thumb").forEach((button) => {
+          if (Number(button.dataset.page) === activePage) button.setAttribute("aria-current", "page");
+          else button.removeAttribute("aria-current");
+        });
+        matchesToggle.disabled = !sourceList.some((source) => source.page === activePage);
+        document.getElementById("previous-page").disabled = activePage <= 1;
+        document.getElementById("next-page").disabled = activePage >= 4;
+        if (activeSource && getSource(activeSource).page !== activePage) activeSource = null;
+        matchPopover.hidden = true;
+        updatePageScale();
+        syncSourceMarks();
+      };
+      const updatePageScale = () => {
+        if (!pageViewport || pageViewport.clientWidth < 1) return;
+        const rail = matchState && !window.matchMedia("(max-width: 760px)").matches ? (matchRail.offsetWidth || 142) + 16 : 0;
+        const available = Math.max(180, pageViewport.clientWidth - 16 - rail);
+        fitWidth = available;
+        const width = zoom === "fit" ? fitWidth : (pageSize.width * 96 / 72 * zoom / 100);
+        pageFrame.style.width = Math.round(width) + "px";
+        pageFrame.closest(".page-stage").classList.toggle("is-overflowing", pageFrame.clientWidth > pageViewport.clientWidth - 24);
+        document.getElementById("zoom-out").disabled = zoom === "fit";
+        document.getElementById("zoom-in").disabled = zoom === 200;
+      };
+      const effectivePageRect = () => {
+        const rect = pageViewport.getBoundingClientRect();
+        const visible = {
+          left: rect.left + pageViewport.clientLeft,
+          top: rect.top + pageViewport.clientTop,
+          right: rect.left + pageViewport.clientLeft + pageViewport.clientWidth,
+          bottom: rect.top + pageViewport.clientTop + pageViewport.clientHeight
+        };
+        for (let node = pageViewport.parentElement; node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          const clip = node.getBoundingClientRect();
+          if (["hidden", "clip", "auto", "scroll"].includes(style.overflowX)) {
+            visible.left = Math.max(visible.left, clip.left);
+            visible.right = Math.min(visible.right, clip.right);
+          }
+          if (["hidden", "clip", "auto", "scroll"].includes(style.overflowY)) {
+            visible.top = Math.max(visible.top, clip.top);
+            visible.bottom = Math.min(visible.bottom, clip.bottom);
+          }
+        }
+        const toolbarRect = sheet.querySelector(".sheet-tools")?.getBoundingClientRect();
+        if (toolbarRect && toolbarRect.width > 0 && toolbarRect.top < visible.bottom && toolbarRect.bottom > visible.top) {
+          visible.bottom = Math.min(visible.bottom, toolbarRect.top);
+        }
+        return visible;
+      };
+      const positionSource = (sourceId) => {
+        const source = getSource(sourceId);
+        if (!source || source.page !== activePage) return;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const target = evidenceLayer.querySelector('[data-evidence-target="' + sourceId + '"]');
+          const marks = Array.from(target ? target.querySelectorAll(".evidence-mark") : []);
+          if (!marks.length) return;
+          const rects = marks.map((mark) => mark.getBoundingClientRect());
+          const union = {
+            left: Math.min(...rects.map((rect) => rect.left)), right: Math.max(...rects.map((rect) => rect.right)),
+            top: Math.min(...rects.map((rect) => rect.top)), bottom: Math.max(...rects.map((rect) => rect.bottom))
+          };
+          const visible = effectivePageRect();
+          pageViewport.scrollTop += (union.top + union.bottom) / 2 - (visible.top + visible.bottom) / 2;
+          pageViewport.scrollLeft += (union.left + union.right) / 2 - (visible.left + visible.right) / 2;
+        }));
+      };
+      const positionMatches = () => {
+        requestAnimationFrame(() => {
+          const tags = Array.from(matchRail.querySelectorAll('.match-tag'));
+          if (!tags.length) return;
+          const rects = tags.map((tag) => tag.getBoundingClientRect());
+          const viewport = pageViewport.getBoundingClientRect();
+          const top = Math.min(...rects.map((rect) => rect.top));
+          const bottom = Math.max(...rects.map((rect) => rect.bottom));
+          pageViewport.scrollTop += (top + bottom) / 2 - (viewport.top + viewport.bottom) / 2;
+        });
+      };
+      const setMatches = (enabled) => {
+        matchState = Boolean(enabled);
+        matchesToggle.setAttribute("aria-pressed", String(matchState));
+        matchesToggle.textContent = matchState ? "Hide matches" : "Show matches";
+        if (!window.matchMedia("(max-width: 760px)").matches) zoom = matchState ? "fit" : activeSource ? citationZoomPercent(activeSource) : "fit";
+        syncSourceMarks();
+        updatePageScale();
+        if (matchState) positionMatches();
+        else if (activeSource) positionSource(activeSource);
+      };
+      const openSheet = (returnFocus, page, sourceId) => {
+        focusReturn = returnFocus || document.activeElement;
+        activeSource = sourceId || null;
+        zoom = sourceId && !matchState ? 100 : "fit";
+        setPage(page || 1);
+        sheet.hidden = false;
+        sheet.setAttribute("aria-hidden", "false");
+        document.body.dataset.pdfOpen = "true";
+        updateDocumentProgress();
+        if (window.matchMedia("(max-width: 760px)").matches) setSheetSnap(sourceId ? 92 : 55);
+        window.clearTimeout(closeTimer);
+        requestAnimationFrame(() => {
+          sheet.classList.add("is-open");
+          zoom = sourceId && !matchState ? citationZoomPercent(sourceId) : "fit";
+          updatePageScale();
+          if (matchState) positionMatches();
+          else if (sourceId) positionSource(sourceId);
+          document.getElementById("close-sheet").focus({ preventScroll: true });
+        });
+        writeOpenPreference(true);
+        if (sourceId) {
+          const target = evidenceLayer.querySelector('[data-evidence-target="' + sourceId + '"]');
+          if (target) { target.classList.remove("pulse-once"); void target.offsetWidth; target.classList.add("pulse-once"); }
+        }
+      };
+      const openSource = (sourceId, trigger) => {
+        const source = getSource(sourceId);
+        if (!source) return;
+        if (activePopover) { activePopover.element.remove(); activePopover.button.removeAttribute("aria-describedby"); activePopover.button.setAttribute("aria-expanded", "false"); activePopover = null; }
+        openSheet(trigger, source.page, sourceId);
+        announce("Page " + source.page + " opened with the cited passage highlighted.");
+      };
+      const openDocumentPage = (page, trigger) => openSheet(trigger || document.querySelector(".document-open"), page, null);
+      const closeSheet = (explicit) => {
+        if (sheet.hidden) return;
+        sheet.classList.remove("is-open");
+        sheet.setAttribute("aria-hidden", "true");
+        document.body.dataset.pdfOpen = "false";
+        updateDocumentProgress();
+        delete document.body.dataset.sheetSnap;
+        if (explicit !== false) writeOpenPreference(false);
+        window.clearTimeout(closeTimer);
+        closeTimer = window.setTimeout(() => { sheet.hidden = true; }, 220);
+        if (focusReturn && focusReturn.isConnected) requestAnimationFrame(() => focusReturn.focus({ preventScroll: true }));
+      };
+
+      const renderMenu = (open) => {
+        const panel = document.getElementById("menu-panel");
+        panel.hidden = !open;
+        document.getElementById("menu-toggle").setAttribute("aria-expanded", String(open));
+      };
+      const openSettings = () => {
+        renderMenu(false);
+        document.getElementById("settings-panel").hidden = false;
+        document.getElementById("settings-close").focus();
+      };
+      const resetConversation = () => {
+        renderMenu(false);
+        document.getElementById("settings-panel").hidden = true;
+        questionInput.disabled = false;
+        document.getElementById("send-button").disabled = false;
+        document.getElementById("send-button").setAttribute("aria-label", "Send question");
+        closeSheet(false);
+        questionInput.value = "";
+        composerFeedback.textContent = "";
+        attentionFeedback.textContent = "";
+        renderState("first-run");
+        document.body.dataset.pdfOpen = "false";
+        history.replaceState({}, "", "?state=first-run");
+        document.getElementById("new-chat").focus();
+      };
+
+      const fileHash = async (file) => {
+        if (!globalThis.crypto || !crypto.subtle) return "";
+        const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+        return Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
+      };
+      const selectFile = async (file) => {
+        if (!file) return;
+        if (!file.name.toLowerCase().endsWith(".pdf") || (file.type && file.type !== "application/pdf")) {
+          composerFeedback.textContent = "Choose a PDF file.";
+          return;
+        }
+        selectedFile = file;
+        hasDocument = true;
+        selectedIsSample = false;
+        composerFeedback.textContent = "This proof displays the file name but does not read the PDF.";
+        if (file.name === sampleFileIdentity.name && file.size === sampleFileIdentity.bytes) {
+          try {
+            if ((await fileHash(file)) === sampleFileIdentity.sha256) {
+              selectedIsSample = true;
+              composerFeedback.textContent = "";
+            }
+          } catch { /* A file without verifiable sample identity remains name-only. */ }
+        }
+        renderDocumentPill();
+        announce("Selected PDF: " + file.name);
+      };
+      const resizeComposer = () => {
+        questionInput.style.height = "auto";
+        questionInput.style.height = Math.min(questionInput.scrollHeight, 112) + "px";
+      };
+      const submitQuestion = (event) => {
+        event.preventDefault();
+        if (document.body.dataset.state === "model-unreachable") return;
+        const question = questionInput.value.trim();
+        if (!question) return;
+        const fixtureByQuestion = new Map([[prompts[0], "D"], [prompts[1], "F"], [prompts[2], "B"]]);
+        const fixtureId = fixtureByQuestion.get(question);
+        if (fixtureId && hasDocument && selectedIsSample) {
+          renderAnswerState(fixtureId, question);
+          questionInput.value = "";
+          composerFeedback.textContent = "";
+          resizeComposer();
+          history.replaceState({}, "", "?state=answered-closed");
+          announce("Answer shown with three source citations.");
+          return;
+        }
+        composerFeedback.textContent = "This proof has no saved answer for that question.";
+      };
+
+      document.getElementById("menu-toggle").addEventListener("click", (event) => renderMenu(document.getElementById("menu-panel").hidden));
+      document.getElementById("new-chat").addEventListener("click", resetConversation);
+      document.getElementById("settings-open").addEventListener("click", openSettings);
+      document.getElementById("settings-close").addEventListener("click", () => {
+        document.getElementById("settings-panel").hidden = true;
+        document.getElementById("menu-toggle").focus();
+      });
+      document.getElementById("check-model").addEventListener("click", () => {
+        attentionFeedback.textContent = "This proof does not check the local service.";
+      });
+      document.getElementById("model-help-open").addEventListener("click", (event) => {
+        event.preventDefault();
+        document.getElementById("help-panel").hidden = false;
+        document.getElementById("model-help-open").setAttribute("aria-expanded", "true");
+        document.getElementById("model-help-close").focus();
+      });
+      document.getElementById("model-help-close").addEventListener("click", () => {
+        document.getElementById("help-panel").hidden = true;
+        document.getElementById("model-help-open").setAttribute("aria-expanded", "false");
+        document.getElementById("model-help-open").focus();
+      });
+      document.getElementById("attach-button").addEventListener("click", () => pdfInput.click());
+      pdfInput.addEventListener("change", () => selectFile(pdfInput.files && pdfInput.files[0]));
+      document.addEventListener("dragover", (event) => { if (event.dataTransfer && event.dataTransfer.types.includes("Files")) event.preventDefault(); });
+      document.addEventListener("drop", (event) => {
+        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+        if (!file) return;
+        event.preventDefault();
+        selectFile(file);
+      });
+      questionInput.addEventListener("input", () => { composerFeedback.textContent = ""; resizeComposer(); });
+      questionInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); composer.requestSubmit(); }
+      });
+      composer.addEventListener("submit", submitQuestion);
+      document.getElementById("close-sheet").addEventListener("click", () => closeSheet(true));
+      document.getElementById("previous-page").addEventListener("click", () => setPage(activePage - 1));
+      document.getElementById("next-page").addEventListener("click", () => setPage(activePage + 1));
+      document.querySelectorAll(".page-thumb").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page)));
+      document.getElementById("zoom-in").addEventListener("click", () => { zoom = zoom === "fit" ? 100 : Math.min(200, zoom + 25); updatePageScale(); if (activeSource) positionSource(activeSource); });
+      document.getElementById("zoom-out").addEventListener("click", () => { zoom = zoom === 100 ? "fit" : (zoom === "fit" ? "fit" : Math.max(100, zoom - 25)); updatePageScale(); if (activeSource) positionSource(activeSource); });
+      matchesToggle.addEventListener("click", () => setMatches(!matchState));
+      document.getElementById("sheet-grip").addEventListener("click", () => {
+        const values = [30, 55, 92];
+        setSheetSnap(values[(values.indexOf(sheetSnap) + 1) % values.length]);
+      });
+      const grip = document.getElementById("sheet-grip");
+      let dragStart = null;
+      grip.addEventListener("pointerdown", (event) => { dragStart = { y: event.clientY, pointerId: event.pointerId }; grip.setPointerCapture(event.pointerId); });
+      grip.addEventListener("pointerup", (event) => {
+        if (!dragStart) return;
+        const y = event.clientY;
+        if (Math.abs(y - dragStart.y) > 18) setSheetSnap(100 - y / innerHeight * 100);
+        dragStart = null;
+      });
+      grip.addEventListener("keydown", (event) => {
+        if (["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
+          event.preventDefault();
+          if (event.key === "Home") setSheetSnap(92);
+          else if (event.key === "End") setSheetSnap(30);
+          else setSheetSnap(sheetSnap + (event.key === "ArrowUp" ? 20 : -20));
+        }
+      });
+      window.addEventListener("resize", () => { updatePageScale(); renderMatchLabels(); if (activeSource) positionSource(activeSource); }, { passive: true });
+      window.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        if (!document.getElementById("help-panel").hidden) { document.getElementById("model-help-close").click(); return; }
+        if (!document.getElementById("settings-panel").hidden) { document.getElementById("settings-close").click(); return; }
+        if (!document.getElementById("menu-panel").hidden) { renderMenu(false); document.getElementById("menu-toggle").focus(); return; }
+        const documentMenu = document.getElementById("document-menu");
+        if (documentMenu && !documentMenu.hidden) {
+          documentMenu.hidden = true;
+          document.querySelector(".document-menu-toggle")?.setAttribute("aria-expanded", "false");
+          document.querySelector(".document-menu-toggle")?.focus();
+          return;
+        }
+        if (activePopover) { closeCitationPopover(); return; }
+        if (!sheet.hidden) { event.preventDefault(); closeSheet(true); return; }
+        if (!matchPopover.hidden) { matchPopover.hidden = true; }
+      });
+      window.addEventListener("pointerdown", (event) => {
+        if (!event.target.closest(".menu-wrap") && !document.getElementById("menu-panel").hidden) renderMenu(false);
+        const documentMenu = document.getElementById("document-menu");
+        if (documentMenu && !event.target.closest(".document-menu-wrap") && !documentMenu.hidden) {
+          documentMenu.hidden = true;
+          document.querySelector(".document-menu-toggle")?.setAttribute("aria-expanded", "false");
+        }
+      });
+      window.addEventListener("resize", updatePageScale, { passive: true });
+
+      renderDocumentPill();
+      renderState(initialState);
+      if (initialState === "answered-matches") { activeSource = "link-caption"; matchState = true; }
+      else if (initialState === "answered-open") activeSource = "link-caption";
+      else if (initialState === "reading-progress") activePage = 3;
+      setMatches(matchState);
+      setPage(activePage);
+      const params = new URLSearchParams(location.search);
+      const preferred = params.has("state") ? null : readOpenPreference();
+      const openByState = ["answered-open", "answered-matches", "reading-progress"].includes(initialState) || (initialState === "model-unreachable" && params.get("open") === "1");
+      if (openByState || preferred === "open") {
+        const openPage = initialState === "reading-progress" ? 3 : (activeSource ? getSource(activeSource).page : 1);
+        requestAnimationFrame(() => openSheet(document.querySelector(".document-open"), openPage, activeSource));
+      }
+      if (params.has("state") && initialState === "first-run") writeOpenPreference(false);
+      window.__setProofState = (state) => {
+        if (!supportedStates.has(state)) throw new Error("Unsupported static state");
+        closeSheet(false);
+        activeSource = null;
+        matchState = false;
+        activePage = state === "reading-progress" ? 3 : 2;
+        renderState(state);
+        setMatches(state === "answered-matches");
+        if (state === "answered-open" || state === "answered-matches") activeSource = "link-caption";
+        syncSourceMarks();
+        if (["answered-open", "answered-matches", "reading-progress"].includes(state)) openSheet(document.querySelector(".document-open"), activePage, activeSource);
+        return state;
+      };
+      window.__sources = sourceList.map((source) => ({ id: source.id, page: source.page, method: source.method, cited: source.cited, quote: source.quote, boxes: source.boxes }));
+      window.__fixtures = Object.keys(fixtures);
+      window.__proofFonts = { answer: "Newsreader", interface: "Instrument Sans", pageReference: "IBM Plex Mono" };
+      window.__zoomInfo = () => ({ nativePdfPercent: zoom === "fit" ? null : zoom, fitRelativeFactor: Number((pageFrame.clientWidth / Math.max(1, fitWidth)).toFixed(3)), fitWidth: Math.round(fitWidth), pageWidth: pageFrame.clientWidth });
+    })();
+  </script>
+</body>
+</html>

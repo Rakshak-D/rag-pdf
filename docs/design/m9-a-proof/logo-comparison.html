@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG-PDF mark studies</title>
+  <style>
+    @font-face{font-family:Instrument;src:url("assets/fonts/InstrumentSans-Variable.ttf") format("truetype");font-weight:400 700;font-display:swap}
+    @font-face{font-family:Newsreader;src:url("assets/fonts/Newsreader-Variable.ttf") format("truetype");font-weight:200 800;font-display:swap}
+    *{box-sizing:border-box}body{margin:0;padding:25px 34px 34px;background:#16140f;color:#f0ebdd;font:15px/1.4 Instrument,sans-serif}
+    h1{margin:0;font-size:23px;font-weight:600;letter-spacing:-.025em}.intro{margin:5px 0 15px;color:#c2bcaf}
+    .candidate{display:grid;grid-template-columns:174px minmax(0,1fr) 228px;gap:14px;align-items:center;min-height:235px;padding:12px 0}
+    .candidate + .candidate{border-top:1px solid #4a463b}.candidate h2{margin:0 0 5px;font-size:16px;font-weight:600}.candidate p{margin:0;color:#c2bcaf;font-size:14px}
+    .variants{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.surface{min-height:154px;padding:8px 7px;display:flex;flex-direction:column;justify-content:space-between}
+    .dark{background:#211f19;color:#f0ebdd}.paper{background:#f4f1e8;color:#211f19}.surface-label{font-size:12px;line-height:1.2;color:inherit;opacity:.88}
+    .sizes{display:flex;align-items:flex-end;justify-content:center;gap:9px}.specimen{min-width:32px;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:5px;color:inherit;font-size:12px;line-height:1.1}
+    .candidate-word .variants{grid-template-columns:repeat(2,minmax(0,1fr))}.candidate-word .surface{min-height:192px}.candidate-word .sizes{flex-direction:column;align-items:flex-start;gap:3px}.candidate-word .specimen{width:100%;min-width:0;flex-direction:row;align-items:center;justify-content:flex-start;gap:12px}.candidate-word .specimen .word-sample{display:block}
+    svg.mark{display:block;width:var(--size);height:var(--size);flex:none;color:inherit;--mark-accent:currentColor}.two-tone svg.mark{--mark-accent:#d7ff3a}
+    .word-sample,.type-lockup{font-family:Newsreader,serif;font-weight:500;line-height:.9;letter-spacing:-.055em;white-space:nowrap}.swipe-mark{position:relative;isolation:isolate}.swipe-mark::after{position:absolute;z-index:-1;right:-1px;bottom:0;left:-1px;height:38%;background:#d7ff3a;content:""}.mono .swipe-mark::after{background:currentColor}
+    .lockups{display:grid;grid-template-rows:1fr 1fr;gap:8px}.lockup{display:flex;min-height:62px;align-items:center;gap:10px;padding:8px 11px}.lockup.dark{background:#211f19;color:#f0ebdd}.lockup.paper{background:#f4f1e8;color:#211f19}
+    .lockup svg{width:28px;height:28px;flex:none;color:inherit;--mark-accent:#d7ff3a}.lockup .word-lockup{font-size:16px;font-weight:600;letter-spacing:-.025em}.lockup .type-lockup{font:500 21px/.9 Newsreader,serif;letter-spacing:-.04em}
+    @media(max-width:1100px){body{padding:20px}.candidate{grid-template-columns:150px 1fr}.lockups{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto}.lockup{min-height:50px}.variants{gap:5px}}
+    @media(max-width:650px){.candidate{grid-template-columns:1fr}.variants{grid-template-columns:repeat(2,minmax(0,1fr))}.lockups{grid-column:auto}.candidate{padding:20px 0}.surface{min-height:130px}}
+  </style>
+</head>
+<body>
+  <h1>Two mark directions</h1>
+  <p class="intro">Two directions remain for owner review. RAG-PDF is the provisional name; no mark is selected.</p>
+  <main id="studies"></main>
+  <script>
+    const candidates = [
+      { id: "r4-a-page-highlight", label: "A · Marked page", idea: "A page silhouette crossed by one highlighter bar; provisional app icon.", kind: "icon" },
+      { id: "swipe-wordmark", label: "B · Swipe wordmark", idea: "A two-tone typographic study, shown only as a wordmark.", kind: "word" }
+    ];
+    const studies = document.getElementById("studies");
+    const mark = (candidate, size) => {
+      if (candidate.kind === "word") return '<span class="word-sample" style="font-size:' + size + 'px"><span>RAG-</span><span class="swipe-mark">PDF</span></span>';
+      return '<svg class="mark" style="--size:' + size + 'px" viewBox="0 0 24 24" aria-hidden="true"><use href="assets/marks/' + candidate.id + '.svg#mark"></use></svg>';
+    };
+    candidates.forEach((candidate) => {
+      const section = document.createElement("section");
+      section.className = "candidate" + (candidate.kind === "word" ? " candidate-word" : "");
+      const info = document.createElement("div");
+      const title = document.createElement("h2"); title.textContent = candidate.label;
+      const idea = document.createElement("p"); idea.textContent = candidate.idea;
+      info.append(title, idea);
+      const variants = document.createElement("div"); variants.className = "variants";
+      const surfaceVariants = candidate.kind === "word"
+        ? [["Dark · two-tone", "dark two-tone"], ["Paper · two-tone", "paper two-tone"]]
+        : [["Dark · mono", "dark mono"], ["Dark · two-tone", "dark two-tone"], ["Paper · mono", "paper mono"], ["Paper · two-tone", "paper two-tone"]];
+      surfaceVariants.forEach((item) => {
+        const surface = document.createElement("div"); surface.className = "surface " + item[1];
+        const label = document.createElement("span"); label.className = "surface-label"; label.textContent = item[0];
+        const sizes = document.createElement("div"); sizes.className = "sizes";
+        [16, 32, 64].forEach((size) => {
+          const specimen = document.createElement("span"); specimen.className = "specimen";
+          specimen.innerHTML = mark(candidate, size);
+          const caption = document.createElement("span"); caption.textContent = size + "px";
+          specimen.append(caption); sizes.append(specimen);
+        });
+        surface.append(label, sizes); variants.append(surface);
+      });
+      const lockups = document.createElement("div"); lockups.className = "lockups";
+      [["dark", "Header · dark"], ["paper", "Header · paper"]].forEach((item) => {
+        const row = document.createElement("div"); row.className = "lockup " + item[0];
+        if (candidate.kind === "icon") {
+          row.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="assets/marks/' + candidate.id + '.svg#mark"></use></svg><span class="word-lockup">RAG-PDF</span>';
+        } else {
+          row.innerHTML = '<span class="type-lockup"><span>RAG-</span><span class="swipe-mark">PDF</span></span>';
+        }
+        const caption = document.createElement("span"); caption.className = "surface-label"; caption.textContent = item[1]; row.append(caption); lockups.append(row);
+      });
+      section.append(info, variants, lockups); studies.append(section);
+    });
+  </script>
+</body>
+</html>
