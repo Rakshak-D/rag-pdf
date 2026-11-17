@@ -482,7 +482,19 @@ test("mobile citation remains visible above the bottom sheet and snap behavior s
   expect(citeRect!.y + citeRect!.height).toBeLessThan(sheetRect!.y);
   await expect(page.locator(".reading-desk--viewer-open .chat-composer")).toBeVisible();
 
-  await page.getByRole("button", { name: /PDF sheet 30 percent/ }).click();
+  const snapControl = page.getByRole("button", { name: /PDF sheet 30 percent/ });
+  const toolbar = page.getByRole("navigation", { name: "PDF controls" });
+  await expect(toolbar).toBeVisible();
+  const controlOverlap = await snapControl.evaluate((button) => {
+    const nav = document.querySelector<HTMLElement>(".pdf-viewer__controls");
+    if (!nav) throw new Error("PDF controls toolbar is missing");
+    const a = button.getBoundingClientRect();
+    const b = nav.getBoundingClientRect();
+    return Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) *
+      Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+  });
+  expect(controlOverlap, "floating toolbar must not cover the mobile sheet-height control").toBe(0);
+  await snapControl.click();
   await expect(page.getByRole("dialog", { name: "PDF viewer" })).toHaveAttribute("data-mobile-snap", "55");
   await expect(page.locator(".reading-desk--viewer-open .chat-composer")).toBeHidden();
   await expect(page.getByRole("dialog", { name: "PDF viewer" })).toHaveAttribute("aria-modal", "true");

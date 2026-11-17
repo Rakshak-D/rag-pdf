@@ -515,7 +515,7 @@
   box-shadow: 0 20px 70px #0009;
 }
 .app-frame--reading .pdf-viewer__header {
-  position: relative;
+  position: static;
   display: flex;
   min-height: 58px;
   flex: 0 0 auto;
