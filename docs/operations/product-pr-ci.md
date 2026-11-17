@@ -45,19 +45,59 @@ Ruff checks `backend/` and `scripts/` with the Python 3.10 target and the
 common name/undefined-name errors. Frontend TypeScript checking is the frontend
 static-analysis gate; this milestone does not add a separate lint framework.
 
-On the unmodified `c1cba315e8df4130f281fd95ba5794663eb30c9f` baseline,
-Ruff 0.17.5 reports 177 findings in 30 files: E402 (26), E701 (26), E702
-(94), E731 (3), F401 (19), and F841 (9). The required lint step is left active
-and unsuppressed, so this baseline currently fails that job. Resolving those
-source findings requires a separately authorized code change; this CI-only
-change does not alter application or support scripts to obtain a green result.
+## Ruff baseline debt
+
+The unchanged product base `c1cba315e8df4130f281fd95ba5794663eb30c9f`, scanned
+with Ruff 0.17.5 and the full CI scope, contains 177 pre-existing findings in
+30 files:
+
+| Rule | Findings |
+| --- | ---: |
+| E402 | 26 |
+| E701 | 26 |
+| E702 | 94 |
+| E731 | 3 |
+| F401 | 19 |
+| F841 | 9 |
+| **Total** | **177** |
+
+The auditable per-finding inventory is [`scripts/ruff-baseline.json`](../../scripts/ruff-baseline.json).
+It records each repository-relative path, rule, diagnostic message, source
+context fingerprint, occurrence count, and original location, along with the
+source commit and exact Ruff configuration. The baseline was generated from an
+archive of that unchanged commit, not from the CI branch.
+
+The CI lint step runs focused comparator tests and
+[`scripts/check_ruff_baseline.py`](../../scripts/check_ruff_baseline.py). The
+comparator executes the pinned Ruff version over all of `backend/` and
+`scripts/`, then compares a multiset keyed by path, rule, message, and a SHA-256
+fingerprint of normalized source context. Line numbers are retained for review
+but are not used as identity. A new finding or an increased occurrence count
+fails CI. A removed or changed finding is reported and also requires a reviewed
+baseline reconciliation; it cannot silently replace another old finding.
+
+A future lint cleanup should fix source findings in its separately authorized
+code change, regenerate the baseline from the reviewed parent commit with the
+pinned Ruff version, inspect the exact reduction, and update the provenance and
+inventory in the same review. Do not manually edit diagnostic records or
+weaken the configured scope/rules.
+
+A green lint check means **no new Ruff findings relative to the recorded
+baseline**. It does not mean the repository is lint-clean: the 177 existing
+findings remain visible debt until they are intentionally fixed and reconciled.
+The initial CI suite also excludes the remaining 51 unit modules and 30
+integration modules described above; these exclusions are not covered by the
+green check. Authenticated browser end-to-end scenarios and the M9-A proof
+checker that depends on a Windows-specific Playwright path also remain outside
+this initial gate.
 
 To reproduce the backend checks from the repository root in an isolated Python
 environment, install both requirement files and run the pytest module list
-above followed by:
+above followed by the comparator tests and baseline check:
 
 ```sh
-python -m ruff check --target-version py310 --select E4,E7,E9,F backend scripts
+python -m unittest discover -s scripts/tests -p test_ruff_baseline.py -v
+python scripts/check_ruff_baseline.py
 ```
 
 From `frontend/`, reproduce the frontend checks with:

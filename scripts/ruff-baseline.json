@@ -1,0 +1,2311 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "source_commit": "c1cba315e8df4130f281fd95ba5794663eb30c9f",
+    "ruff_version": "0.17.5",
+    "target_version": "py310",
+    "select": [
+      "E4",
+      "E7",
+      "E9",
+      "F"
+    ],
+    "paths": [
+      "backend",
+      "scripts"
+    ]
+  },
+  "finding_count": 177,
+  "rule_counts": {
+    "E402": 26,
+    "E701": 26,
+    "E702": 94,
+    "E731": 3,
+    "F401": 19,
+    "F841": 9
+  },
+  "file_counts": {
+    "backend/api/bootstrap.py": 1,
+    "backend/app/runtime.py": 1,
+    "backend/config/schema.py": 1,
+    "backend/embeddings/image.py": 1,
+    "backend/engine/bm25.py": 7,
+    "backend/engine/fusion.py": 47,
+    "backend/engine/generation.py": 1,
+    "backend/engine/manifest.py": 1,
+    "backend/engine/retrieval.py": 38,
+    "backend/experiments/ablation_plans.py": 1,
+    "backend/experiments/ablation_runner.py": 1,
+    "backend/experiments/evaluation_runner.py": 8,
+    "backend/experiments/run_plan.py": 1,
+    "backend/local_gateway.py": 1,
+    "backend/model_lifecycle.py": 2,
+    "backend/services/ask_service.py": 1,
+    "backend/services/bootstrap_jobs.py": 1,
+    "backend/services/experiment_service.py": 1,
+    "backend/services/index_selection.py": 3,
+    "backend/services/job_manager.py": 2,
+    "backend/vectorstore/chroma_store.py": 9,
+    "scripts/authenticated_browser_e2e.py": 4,
+    "scripts/authenticated_browser_e2e_linux.py": 1,
+    "scripts/bootstrap_http_smoke.py": 7,
+    "scripts/bootstrap_vite_smoke.py": 5,
+    "scripts/index_bootstrap.py": 5,
+    "scripts/local_runtime_smoke.py": 16,
+    "scripts/manual_report_evaluation_smoke.py": 4,
+    "scripts/manual_report_retrieval_smoke.py": 3,
+    "scripts/report_handoff_preflight.py": 3
+  },
+  "findings": [
+    {
+      "path": "backend/api/bootstrap.py",
+      "code": "F841",
+      "message": "Local variable `exc` is assigned to but never used",
+      "fingerprint": "sha256:762a0332b304f1ddf9510a2119e517540c1766f56a63c16a2f1df3615b5bf5a4",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 507,
+          "column": 25,
+          "end_row": 507,
+          "end_column": 28
+        }
+      ]
+    },
+    {
+      "path": "backend/app/runtime.py",
+      "code": "F401",
+      "message": "`backend.services.index_selection.IndexSelectionError` imported but unused",
+      "fingerprint": "sha256:857e4bc3cf1c385d9d3c971949905b2a46da324bb54153d5a606849ff0bd953f",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 23,
+          "column": 46,
+          "end_row": 23,
+          "end_column": 65
+        }
+      ]
+    },
+    {
+      "path": "backend/config/schema.py",
+      "code": "F401",
+      "message": "`typing.Mapping` imported but unused",
+      "fingerprint": "sha256:26d3209b0dbb6861c94e8811dd7cedb09d505900f15e15855cc04a1d746342a3",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 6,
+          "column": 25,
+          "end_row": 6,
+          "end_column": 32
+        }
+      ]
+    },
+    {
+      "path": "backend/embeddings/image.py",
+      "code": "F401",
+      "message": "`collections.abc.Sequence` imported but unused",
+      "fingerprint": "sha256:8f43bb1f4cf1b2b567239dd53e3adc4912d40709243b36c83d505802dcb3afbf",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 5,
+          "column": 48,
+          "end_row": 5,
+          "end_column": 56
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/bm25.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:cf3d80d5ccee62cb63e381bdfd77a78956f845cd6ca26f9b472f20047cb6a3e3",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 84,
+          "column": 29,
+          "end_row": 84,
+          "end_column": 30
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/bm25.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:d2ce64947b725f712290a079665ba0cd2484beff85048ee7d95e4e14d031fa3c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 79,
+          "column": 79,
+          "end_row": 79,
+          "end_column": 80
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/bm25.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:f524a6471b9196d196c25a18a0e848dfb2467be1175945e4f155171e61011e2b",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 85,
+          "column": 13,
+          "end_row": 85,
+          "end_column": 14
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/bm25.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:f649c189d0930585a0926291e71eafbd94f1a5f9ef3e27df0e3a30097da8213e",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 78,
+          "column": 59,
+          "end_row": 78,
+          "end_column": 60
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/bm25.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:23237746fb40e243b197700e1fc52d52e7a5bb621a8a43c15f90b9b72d07bddd",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 89,
+          "column": 32,
+          "end_row": 89,
+          "end_column": 33
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/bm25.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:380a38a7198797c1998a68b9ece1568005c2f87ff2e64472fa70028a0254945e",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 58,
+          "column": 54,
+          "end_row": 58,
+          "end_column": 55
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/bm25.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:9109006f67d5dffeb9d2db371dcafd359417bab5ec7fceba39a9241ac9bb44cd",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 49,
+          "column": 39,
+          "end_row": 49,
+          "end_column": 40
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:0738b1a6e656ae29a48993289d74569492dd7642eecd8ec3651e97b2269abdcf",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 49,
+          "column": 26,
+          "end_row": 49,
+          "end_column": 27
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:404e8351277b6939eb5b4ec5e263fe66837ffbcf396cdd5b80665866afb0663c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 46,
+          "column": 46,
+          "end_row": 46,
+          "end_column": 47
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:4f0d94b15566878d13f21ab2e072592d8e57b43909aaa8f7c98b3fe19ed22f8c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 34,
+          "column": 22,
+          "end_row": 34,
+          "end_column": 23
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:5dc5aa1b347a42128ff2b5078130cdac917343b37d6496e5736b0cdb79c4ceee",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 23,
+          "column": 22,
+          "end_row": 23,
+          "end_column": 23
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:632cf5c07c5f644b53a82712324d9559e9faa80a679b921745eebe805ddc62f8",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 16,
+          "column": 85,
+          "end_row": 16,
+          "end_column": 86
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:67f99b8cc9167689e83d701704fa0aba3eadcea976389a640cb180aee91ab1b8",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 9,
+          "column": 30,
+          "end_row": 9,
+          "end_column": 31
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:a84af006c717f362962891a31914c91b45c6a3271afbccd192a0927fd885174a",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 17,
+          "column": 105,
+          "end_row": 17,
+          "end_column": 106
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:01dac63519d56cc2f4146809982d5b2ce481079e7a69bfedf1ff0dccbcd886cb",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 15,
+          "column": 34,
+          "end_row": 15,
+          "end_column": 35
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:04a1cb1b575f3d21213a93b25a48e827690557ab0f3e6b4cd819e09181203ecd",
+      "occurrences": 4,
+      "locations": [
+        {
+          "row": 69,
+          "column": 61,
+          "end_row": 69,
+          "end_column": 62
+        },
+        {
+          "row": 69,
+          "column": 116,
+          "end_row": 69,
+          "end_column": 117
+        },
+        {
+          "row": 69,
+          "column": 160,
+          "end_row": 69,
+          "end_column": 161
+        },
+        {
+          "row": 69,
+          "column": 218,
+          "end_row": 69,
+          "end_column": 219
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:306d8c53181465a8e671070977a40d17b380cf9a122cc702d0e7710129aaff9f",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 51,
+          "column": 37,
+          "end_row": 51,
+          "end_column": 38
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:37e1ca375f76c5bda02d449d0c7d2ceace7b625a8e15c9cb5c0c67550274713d",
+      "occurrences": 11,
+      "locations": [
+        {
+          "row": 47,
+          "column": 44,
+          "end_row": 47,
+          "end_column": 45
+        },
+        {
+          "row": 47,
+          "column": 82,
+          "end_row": 47,
+          "end_column": 83
+        },
+        {
+          "row": 47,
+          "column": 115,
+          "end_row": 47,
+          "end_column": 116
+        },
+        {
+          "row": 47,
+          "column": 148,
+          "end_row": 47,
+          "end_column": 149
+        },
+        {
+          "row": 47,
+          "column": 188,
+          "end_row": 47,
+          "end_column": 189
+        },
+        {
+          "row": 47,
+          "column": 223,
+          "end_row": 47,
+          "end_column": 224
+        },
+        {
+          "row": 47,
+          "column": 252,
+          "end_row": 47,
+          "end_column": 253
+        },
+        {
+          "row": 47,
+          "column": 312,
+          "end_row": 47,
+          "end_column": 313
+        },
+        {
+          "row": 47,
+          "column": 366,
+          "end_row": 47,
+          "end_column": 367
+        },
+        {
+          "row": 47,
+          "column": 437,
+          "end_row": 47,
+          "end_column": 438
+        },
+        {
+          "row": 47,
+          "column": 501,
+          "end_row": 47,
+          "end_column": 502
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:414d655c8349c6457da9a1d30bd90ab69f4777e6367ca78f073d1b87d3cb12ba",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 71,
+          "column": 36,
+          "end_row": 71,
+          "end_column": 37
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:4c568d740b80314325f21e7ebb1ac8f7811fc47da1174f3346b040414192e2cf",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 58,
+          "column": 43,
+          "end_row": 58,
+          "end_column": 44
+        },
+        {
+          "row": 58,
+          "column": 145,
+          "end_row": 58,
+          "end_column": 146
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:4c8cc66b77e16e23eb7e4e0dc0be771b53e8bd99cc9e660e0b89f14829c8c4c8",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 59,
+          "column": 57,
+          "end_row": 59,
+          "end_column": 58
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:584ae21eb72a84213d51dc59e90f3cc5b7fada680a14d50cf498413ff352a491",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 28,
+          "column": 30,
+          "end_row": 28,
+          "end_column": 31
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:61ccb1bbdf3266c47db7d9450eb48adffebc972c886d413e9d02820d83483ec9",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 41,
+          "column": 32,
+          "end_row": 41,
+          "end_column": 33
+        },
+        {
+          "row": 41,
+          "column": 43,
+          "end_row": 41,
+          "end_column": 44
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:6246184a4268da4a013a09c593527e2942881ab39c7209ef6d61f022502ff2cf",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 72,
+          "column": 56,
+          "end_row": 72,
+          "end_column": 57
+        },
+        {
+          "row": 72,
+          "column": 75,
+          "end_row": 72,
+          "end_column": 76
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:88939ce18fe9d3ccd1739695c2584c7f20fa80d96a4eb2c9d53c78b5d53a2df4",
+      "occurrences": 10,
+      "locations": [
+        {
+          "row": 56,
+          "column": 36,
+          "end_row": 56,
+          "end_column": 37
+        },
+        {
+          "row": 56,
+          "column": 66,
+          "end_row": 56,
+          "end_column": 67
+        },
+        {
+          "row": 56,
+          "column": 94,
+          "end_row": 56,
+          "end_column": 95
+        },
+        {
+          "row": 56,
+          "column": 166,
+          "end_row": 56,
+          "end_column": 167
+        },
+        {
+          "row": 56,
+          "column": 200,
+          "end_row": 56,
+          "end_column": 201
+        },
+        {
+          "row": 56,
+          "column": 257,
+          "end_row": 56,
+          "end_column": 258
+        },
+        {
+          "row": 56,
+          "column": 289,
+          "end_row": 56,
+          "end_column": 290
+        },
+        {
+          "row": 56,
+          "column": 327,
+          "end_row": 56,
+          "end_column": 328
+        },
+        {
+          "row": 56,
+          "column": 365,
+          "end_row": 56,
+          "end_column": 366
+        },
+        {
+          "row": 56,
+          "column": 403,
+          "end_row": 56,
+          "end_column": 404
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:9167f9694465cfafada822e22ebc2b2b2f4c7a04667fcfd3628764cef2478757",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 26,
+          "column": 50,
+          "end_row": 26,
+          "end_column": 51
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:e388eefefa5c127e217fbbf57beb4965c9a1bc92fcf0f432dd6b6c199c2ca5a6",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 29,
+          "column": 30,
+          "end_row": 29,
+          "end_column": 31
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "F401",
+      "message": "`hashlib` imported but unused",
+      "fingerprint": "sha256:ada1d9e0a360cda0fd1c8757d297aa74a4fc8d7193a69d3c28b43afc6950e9f9",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 3,
+          "column": 8,
+          "end_row": 3,
+          "end_column": 15
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/fusion.py",
+      "code": "F401",
+      "message": "`math` imported but unused",
+      "fingerprint": "sha256:b67c9ddef3e0c3715a3708ecfa296cc461a164bde94c8ba3fd112789b5bed926",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 4,
+          "column": 8,
+          "end_row": 4,
+          "end_column": 12
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/generation.py",
+      "code": "F841",
+      "message": "Local variable `exc` is assigned to but never used",
+      "fingerprint": "sha256:762a0332b304f1ddf9510a2119e517540c1766f56a63c16a2f1df3615b5bf5a4",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 296,
+          "column": 33,
+          "end_row": 296,
+          "end_column": 36
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/manifest.py",
+      "code": "F401",
+      "message": "`typing.Iterable` imported but unused",
+      "fingerprint": "sha256:2b92911ad83fc767f44131deb2a80307f4a5aedc41ab1df056412e3c32007d94",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 13,
+          "column": 25,
+          "end_row": 13,
+          "end_column": 33
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:076099d9e8e0db9f30ae38b3bdaab2083f6a225694ba361c08cf659b5c5a69fa",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 942,
+          "column": 29,
+          "end_row": 942,
+          "end_column": 30
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:30b12e41d1a0f255ac1e566a3082be6e60fe82b4f929c84a1a7c3b708bcee60c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 887,
+          "column": 41,
+          "end_row": 887,
+          "end_column": 42
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:3f5bc5621292456cdbec9349e60974bd3aeb1eaf22031ef8f0517a913d8cc8cd",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 900,
+          "column": 41,
+          "end_row": 900,
+          "end_column": 42
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:598b976eebb2601c6a1b6472b837395f4bbda3e84086bbee9287b6b87b422ccb",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 904,
+          "column": 16,
+          "end_row": 904,
+          "end_column": 17
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:785dbae237c820bdbf9c56630166ecf4c2e2e9654937d431765367b34e5ea9d5",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 911,
+          "column": 36,
+          "end_row": 911,
+          "end_column": 37
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:82d202679f1d52d6c55b63c806e6cbf8d9e4cd2a4b96ace695fc6c7b775ed038",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 917,
+          "column": 17,
+          "end_row": 917,
+          "end_column": 18
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:8e772bcbbe0eca30c9c8266fd67325915638a40bbf2f0f9c25a4408b21bf5ac2",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 895,
+          "column": 12,
+          "end_row": 895,
+          "end_column": 13
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:98a307b3e515e182be198d883f3aa5b8db9721e9ae8125d73b338ee6845355f9",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 896,
+          "column": 32,
+          "end_row": 896,
+          "end_column": 33
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:bd0ec4de9a65db85784c3e005afbfdd29c6140f69fccc3bb513b1f87629e2155",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 902,
+          "column": 21,
+          "end_row": 902,
+          "end_column": 22
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:c6441d40bbd6361a8f430b0b3236ccc2f628f4c26e2b672f493fb4ec8f01b23d",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 906,
+          "column": 31,
+          "end_row": 906,
+          "end_column": 32
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:d279742a4a9cd09dd56a714a699c13c523bb506d186399530ce3bafe760a0186",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 905,
+          "column": 36,
+          "end_row": 905,
+          "end_column": 37
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:f64d39e3e650852e700a207de411a6a590f77e6eb8fcb28b656f4644bcbfb746",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 897,
+          "column": 122,
+          "end_row": 897,
+          "end_column": 123
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:fd455f0a6e300eee8371b478cdc089aa11399d153fdf2c03b1fc556b40a91ddb",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 916,
+          "column": 32,
+          "end_row": 916,
+          "end_column": 33
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:2270acf30019215cd39010b752f5208714fdf90d930b4ba9aa0799adab0912eb",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 869,
+          "column": 36,
+          "end_row": 869,
+          "end_column": 37
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:28de2077c6a9a991170afdd17309a633955f7b571f4376c55a10e7f86b1e563e",
+      "occurrences": 3,
+      "locations": [
+        {
+          "row": 888,
+          "column": 32,
+          "end_row": 888,
+          "end_column": 33
+        },
+        {
+          "row": 888,
+          "column": 69,
+          "end_row": 888,
+          "end_column": 70
+        },
+        {
+          "row": 888,
+          "column": 97,
+          "end_row": 888,
+          "end_column": 98
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:357245fcd0beb79f08c21c077b8dca176a9041682ce65abd9cd7cbe8655d841b",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 875,
+          "column": 54,
+          "end_row": 875,
+          "end_column": 55
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:42fa8641ebbb7dece6368c21c85cc6adb953818debdd871c000895836bd035b2",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 910,
+          "column": 48,
+          "end_row": 910,
+          "end_column": 49
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:5fe0d32775232c2979f4f02466832ccacce1388ef1fac6cd397df86873f14f5c",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 912,
+          "column": 55,
+          "end_row": 912,
+          "end_column": 56
+        },
+        {
+          "row": 912,
+          "column": 74,
+          "end_row": 912,
+          "end_column": 75
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:9c4b8cdc7107f2e6480c5d0f6c846a8a94fa6b07462bc7363f1595f5e6e5b580",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 889,
+          "column": 101,
+          "end_row": 889,
+          "end_column": 102
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:9ebebcd85fe19d532b2c06cac0c96fb67edd73443c44814b4b312b205900b21d",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 901,
+          "column": 30,
+          "end_row": 901,
+          "end_column": 31
+        },
+        {
+          "row": 901,
+          "column": 68,
+          "end_row": 901,
+          "end_column": 69
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:afdee44bad4e04e0e243d4151b0840051a43a91deecc9a07de781fc0bff53bd3",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 870,
+          "column": 62,
+          "end_row": 870,
+          "end_column": 63
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:bd0ec4de9a65db85784c3e005afbfdd29c6140f69fccc3bb513b1f87629e2155",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 902,
+          "column": 68,
+          "end_row": 902,
+          "end_column": 69
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:c585125668a8d8bf81f19798a20220c509eb645bc624f388a04adaed9aad8b34",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 914,
+          "column": 145,
+          "end_row": 914,
+          "end_column": 146
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:cf89ede7664000744fdddad25c0892cff018ec8d3fa44893655f84dd16c65fb4",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 908,
+          "column": 46,
+          "end_row": 908,
+          "end_column": 47
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:ee3e34da39231fd70bebfa5a35856e2b8d6d953051d5fc04aceb7e3c341e93d4",
+      "occurrences": 6,
+      "locations": [
+        {
+          "row": 893,
+          "column": 17,
+          "end_row": 893,
+          "end_column": 18
+        },
+        {
+          "row": 893,
+          "column": 29,
+          "end_row": 893,
+          "end_column": 30
+        },
+        {
+          "row": 893,
+          "column": 43,
+          "end_row": 893,
+          "end_column": 44
+        },
+        {
+          "row": 893,
+          "column": 58,
+          "end_row": 893,
+          "end_column": 59
+        },
+        {
+          "row": 893,
+          "column": 74,
+          "end_row": 893,
+          "end_column": 75
+        },
+        {
+          "row": 893,
+          "column": 130,
+          "end_row": 893,
+          "end_column": 131
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:fcddf3317ef89353c6f2a7eac6ecb44651af3487da003f28aa2b3aa5d64fe68e",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 890,
+          "column": 79,
+          "end_row": 890,
+          "end_column": 80
+        },
+        {
+          "row": 890,
+          "column": 151,
+          "end_row": 890,
+          "end_column": 152
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "F401",
+      "message": "`backend.engine.fusion.FusionError` imported but unused",
+      "fingerprint": "sha256:7014142b99f7f7bc695a23540e26755f033006721e90092bb1164bed7d040ac6",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 22,
+          "column": 49,
+          "end_row": 22,
+          "end_column": 60
+        }
+      ]
+    },
+    {
+      "path": "backend/engine/retrieval.py",
+      "code": "F841",
+      "message": "Local variable `exc` is assigned to but never used",
+      "fingerprint": "sha256:13d70596bf2d7db304077fec203fc83e2d902d02496f756e1cb0ae0db3b7866f",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 267,
+          "column": 36,
+          "end_row": 267,
+          "end_column": 39
+        }
+      ]
+    },
+    {
+      "path": "backend/experiments/ablation_plans.py",
+      "code": "F401",
+      "message": "`hashlib` imported but unused",
+      "fingerprint": "sha256:ada1d9e0a360cda0fd1c8757d297aa74a4fc8d7193a69d3c28b43afc6950e9f9",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 7,
+          "column": 8,
+          "end_row": 7,
+          "end_column": 15
+        }
+      ]
+    },
+    {
+      "path": "backend/experiments/ablation_runner.py",
+      "code": "F401",
+      "message": "`collections.abc.Sequence` imported but unused",
+      "fingerprint": "sha256:3bbcf6684c888acb7ec270f9362eab58c4f474eb84907577ab800c75e30b0994",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 6,
+          "column": 39,
+          "end_row": 6,
+          "end_column": 47
+        }
+      ]
+    },
+    {
+      "path": "backend/experiments/evaluation_runner.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:91a5132c82ccb4b5b4dde294ed86c8c2c6fc10cd6ba0d91fe203c50e82c4509d",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 386,
+          "column": 37,
+          "end_row": 386,
+          "end_column": 38
+        },
+        {
+          "row": 386,
+          "column": 150,
+          "end_row": 386,
+          "end_column": 151
+        }
+      ]
+    },
+    {
+      "path": "backend/experiments/evaluation_runner.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:e12c985d2f235c8b9f35e1168a7ffad4efaf33dcca998152da9855c8c6af7e23",
+      "occurrences": 4,
+      "locations": [
+        {
+          "row": 367,
+          "column": 36,
+          "end_row": 367,
+          "end_column": 37
+        },
+        {
+          "row": 367,
+          "column": 52,
+          "end_row": 367,
+          "end_column": 53
+        },
+        {
+          "row": 367,
+          "column": 71,
+          "end_row": 367,
+          "end_column": 72
+        },
+        {
+          "row": 367,
+          "column": 87,
+          "end_row": 367,
+          "end_column": 88
+        }
+      ]
+    },
+    {
+      "path": "backend/experiments/evaluation_runner.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:f71f7a9a2c502b574e474f17d358952801f5aeed26bdfec2bbb4e64b222d5978",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 397,
+          "column": 37,
+          "end_row": 397,
+          "end_column": 38
+        },
+        {
+          "row": 397,
+          "column": 148,
+          "end_row": 397,
+          "end_column": 149
+        }
+      ]
+    },
+    {
+      "path": "backend/experiments/run_plan.py",
+      "code": "F401",
+      "message": "`pydantic.Field` imported but unused",
+      "fingerprint": "sha256:0e059bdc5dc4566cfdcd5acc068d9943c36de3e7972baefcee635bb55597b323",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 10,
+          "column": 45,
+          "end_row": 10,
+          "end_column": 50
+        }
+      ]
+    },
+    {
+      "path": "backend/local_gateway.py",
+      "code": "F401",
+      "message": "`typing.Any` imported but unused",
+      "fingerprint": "sha256:063e3d97fbe5c7382df417aae2453be61a01861561f37741b5ce484cfd6551d0",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 14,
+          "column": 20,
+          "end_row": 14,
+          "end_column": 23
+        }
+      ]
+    },
+    {
+      "path": "backend/model_lifecycle.py",
+      "code": "F401",
+      "message": "`gc` imported but unused",
+      "fingerprint": "sha256:28a6b0b61821d9c66a56cad38fae48b5562d0b5f93961aba31f6ccfac826edec",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 14,
+          "column": 8,
+          "end_row": 14,
+          "end_column": 10
+        }
+      ]
+    },
+    {
+      "path": "backend/model_lifecycle.py",
+      "code": "F401",
+      "message": "`typing.Any` imported but unused",
+      "fingerprint": "sha256:6faa819bae64764572c33bfe9a20f10f0e580a0c26d661830bd7a867a70b090a",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 18,
+          "column": 20,
+          "end_row": 18,
+          "end_column": 23
+        }
+      ]
+    },
+    {
+      "path": "backend/services/ask_service.py",
+      "code": "E731",
+      "message": "Do not assign a `lambda` expression, use a `def`",
+      "fingerprint": "sha256:af7c17388059a0d1a14ff124dd3c61ab7d3c1d3969920e263c2f775e56b1ded0",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 206,
+          "column": 9,
+          "end_row": 206,
+          "end_column": 124
+        }
+      ]
+    },
+    {
+      "path": "backend/services/bootstrap_jobs.py",
+      "code": "F401",
+      "message": "`backend.experiments.run_plan.RunPlan` imported but unused",
+      "fingerprint": "sha256:b3aa74ad0bbf73122c090f2237cac747cdeacc171ea0ff585bded3d073e2c557",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 22,
+          "column": 42,
+          "end_row": 22,
+          "end_column": 49
+        }
+      ]
+    },
+    {
+      "path": "backend/services/experiment_service.py",
+      "code": "F401",
+      "message": "`backend.experiments.ablation_plans.AblationVariantPlan` imported but unused",
+      "fingerprint": "sha256:3baeb8e6a6ca42536fbe2d6f93758c61e101f14cedceaac52ad1e0ef56bfbaa6",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 15,
+          "column": 62,
+          "end_row": 15,
+          "end_column": 81
+        }
+      ]
+    },
+    {
+      "path": "backend/services/index_selection.py",
+      "code": "E731",
+      "message": "Do not assign a `lambda` expression, use a `def`",
+      "fingerprint": "sha256:af7c17388059a0d1a14ff124dd3c61ab7d3c1d3969920e263c2f775e56b1ded0",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 247,
+          "column": 9,
+          "end_row": 247,
+          "end_column": 124
+        },
+        {
+          "row": 353,
+          "column": 9,
+          "end_row": 353,
+          "end_column": 124
+        }
+      ]
+    },
+    {
+      "path": "backend/services/index_selection.py",
+      "code": "F841",
+      "message": "Local variable `plan` is assigned to but never used",
+      "fingerprint": "sha256:cedee78740c7f93b0b9f476e7bd070bb025686088ba22dcfbd7e859ac41928dd",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 388,
+          "column": 9,
+          "end_row": 388,
+          "end_column": 13
+        }
+      ]
+    },
+    {
+      "path": "backend/services/job_manager.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:7918df756c245ff1d95c908093fe6a09c81b37cb860013b0d3f30bb179a6f946",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 422,
+          "column": 41,
+          "end_row": 422,
+          "end_column": 42
+        }
+      ]
+    },
+    {
+      "path": "backend/services/job_manager.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:b981f4288d55ba636a5785dfe22392f659700319771312fc328de7f47ba867ee",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 424,
+          "column": 39,
+          "end_row": 424,
+          "end_column": 40
+        }
+      ]
+    },
+    {
+      "path": "backend/vectorstore/chroma_store.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:67469eb1ea4f801a734ae833da5a99342a9960b931f84cbc7a64b188123182b4",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 591,
+          "column": 37,
+          "end_row": 591,
+          "end_column": 38
+        }
+      ]
+    },
+    {
+      "path": "backend/vectorstore/chroma_store.py",
+      "code": "E701",
+      "message": "Multiple statements on one line (colon)",
+      "fingerprint": "sha256:a289bef1c9c787ad258125b11e4aa7be75b8f5a3db3276628600494607e85cfd",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 589,
+          "column": 43,
+          "end_row": 589,
+          "end_column": 44
+        }
+      ]
+    },
+    {
+      "path": "backend/vectorstore/chroma_store.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:0ed1a0ce943911a90213e658b20da4a810e967a5fde8d7524a8ec61156103c78",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 586,
+          "column": 47,
+          "end_row": 586,
+          "end_column": 48
+        },
+        {
+          "row": 586,
+          "column": 106,
+          "end_row": 586,
+          "end_column": 107
+        }
+      ]
+    },
+    {
+      "path": "backend/vectorstore/chroma_store.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:8ed54965f16ce2771d37ff47beec471ddf345a38019fc6bfbe50d8904294f484",
+      "occurrences": 3,
+      "locations": [
+        {
+          "row": 590,
+          "column": 29,
+          "end_row": 590,
+          "end_column": 30
+        },
+        {
+          "row": 590,
+          "column": 49,
+          "end_row": 590,
+          "end_column": 50
+        },
+        {
+          "row": 590,
+          "column": 94,
+          "end_row": 590,
+          "end_column": 95
+        }
+      ]
+    },
+    {
+      "path": "backend/vectorstore/chroma_store.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:d6104fac84e6c8c8d75c436e4489c1d1e07d24b7353b57d42807d13dd0f7e933",
+      "occurrences": 2,
+      "locations": [
+        {
+          "row": 579,
+          "column": 28,
+          "end_row": 579,
+          "end_column": 29
+        },
+        {
+          "row": 579,
+          "column": 57,
+          "end_row": 579,
+          "end_column": 58
+        }
+      ]
+    },
+    {
+      "path": "scripts/authenticated_browser_e2e.py",
+      "code": "F841",
+      "message": "Local variable `bootstrap_root` is assigned to but never used",
+      "fingerprint": "sha256:ce3ff4deaed67ec8ce2d0bf51517e99d3a275aebf968b852a3d827641f1df038",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 1167,
+          "column": 9,
+          "end_row": 1167,
+          "end_column": 23
+        }
+      ]
+    },
+    {
+      "path": "scripts/authenticated_browser_e2e.py",
+      "code": "F841",
+      "message": "Local variable `ordinary_report` is assigned to but never used",
+      "fingerprint": "sha256:4030114d6ea27b145163992e7e9ab2cf35f183e67ee5a1313e4bc9976a71e44c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 1378,
+          "column": 5,
+          "end_row": 1378,
+          "end_column": 20
+        }
+      ]
+    },
+    {
+      "path": "scripts/authenticated_browser_e2e.py",
+      "code": "F841",
+      "message": "Local variable `ordinary_root` is assigned to but never used",
+      "fingerprint": "sha256:43915c2ceebda0a6aa7df9ae4aadc4d67953dcc7725ed43965780e6802284f9a",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 1162,
+          "column": 9,
+          "end_row": 1162,
+          "end_column": 22
+        }
+      ]
+    },
+    {
+      "path": "scripts/authenticated_browser_e2e.py",
+      "code": "F841",
+      "message": "Local variable `ordinary_source` is assigned to but never used",
+      "fingerprint": "sha256:ab737bacacab29a0fa66c17ed9f18deafb86e19c6c7298685b36f45edab8901c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 1368,
+          "column": 5,
+          "end_row": 1368,
+          "end_column": 20
+        }
+      ]
+    },
+    {
+      "path": "scripts/authenticated_browser_e2e_linux.py",
+      "code": "F841",
+      "message": "Local variable `exc` is assigned to but never used",
+      "fingerprint": "sha256:dbb887a174b077e165b7085741031335537c54b87cbb05e16ea04fd0f580827a",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 2128,
+          "column": 30,
+          "end_row": 2128,
+          "end_column": 33
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_http_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:03a93c8b109a7ea42a2b83136f0c3228486b1341930fafebcda915b08320de5c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 26,
+          "column": 1,
+          "end_row": 26,
+          "end_column": 60
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_http_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:2d60740cff7d5595ef7d587f0768597df2aebb8964b24316091dc86747b97596",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 23,
+          "column": 1,
+          "end_row": 23,
+          "end_column": 85
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_http_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:41c52f4855cf9d26e87672cec27c961448e87fee5ad14dd00f77fa7daffda6ba",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 25,
+          "column": 1,
+          "end_row": 25,
+          "end_column": 57
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_http_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:4ccc365cda3db169d211aa11c1cf681b5d574555989005b0834d66c85d7e7ed9",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 28,
+          "column": 1,
+          "end_row": 28,
+          "end_column": 36
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_http_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:6f11581db2b4487aaaf6eb8704a9acbe89cddd1ccde4652211c1a838bc70efde",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 21,
+          "column": 1,
+          "end_row": 21,
+          "end_column": 19
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_http_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:9678d8cb2ec4830386c5dcae6dde31e40b2f3685dbad6abc38b9585b3790d00a",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 24,
+          "column": 1,
+          "end_row": 24,
+          "end_column": 45
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_http_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:c179724e941e7e36086356e2e5326018c079c6331f4a88b191fbb70dc514e404",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 27,
+          "column": 1,
+          "end_row": 27,
+          "end_column": 56
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_vite_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:03a93c8b109a7ea42a2b83136f0c3228486b1341930fafebcda915b08320de5c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 22,
+          "column": 1,
+          "end_row": 22,
+          "end_column": 60
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_vite_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:4ccc365cda3db169d211aa11c1cf681b5d574555989005b0834d66c85d7e7ed9",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 24,
+          "column": 1,
+          "end_row": 24,
+          "end_column": 36
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_vite_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:9678d8cb2ec4830386c5dcae6dde31e40b2f3685dbad6abc38b9585b3790d00a",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 21,
+          "column": 1,
+          "end_row": 21,
+          "end_column": 45
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_vite_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:c179724e941e7e36086356e2e5326018c079c6331f4a88b191fbb70dc514e404",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 23,
+          "column": 1,
+          "end_row": 23,
+          "end_column": 56
+        }
+      ]
+    },
+    {
+      "path": "scripts/bootstrap_vite_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:5d229407ad3fa7bd7e533af5ff0190e856e5ab1983bb047daf69dd73189f9f35",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 127,
+          "column": 23,
+          "end_row": 127,
+          "end_column": 24
+        }
+      ]
+    },
+    {
+      "path": "scripts/index_bootstrap.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:03a93c8b109a7ea42a2b83136f0c3228486b1341930fafebcda915b08320de5c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 17,
+          "column": 1,
+          "end_row": 17,
+          "end_column": 60
+        }
+      ]
+    },
+    {
+      "path": "scripts/index_bootstrap.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:173fde9ddfaf5eed76104267e358ab0c977f22d0e6ba993c0a45af4564523309",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 15,
+          "column": 1,
+          "end_row": 15,
+          "end_column": 76
+        }
+      ]
+    },
+    {
+      "path": "scripts/index_bootstrap.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:2b7f6eb0ae3e7f452218df8cbb32d6787838073cf0f43cf0c66d9bbfa80b628a",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 14,
+          "column": 1,
+          "end_row": 14,
+          "end_column": 50
+        }
+      ]
+    },
+    {
+      "path": "scripts/index_bootstrap.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:3d145f5226641b318527b6cea19d45e5bf0cd9f5e5e5bea0bafeb181ec0acf8f",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 16,
+          "column": 1,
+          "end_row": 16,
+          "end_column": 75
+        }
+      ]
+    },
+    {
+      "path": "scripts/index_bootstrap.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:b3aa74ad0bbf73122c090f2237cac747cdeacc171ea0ff585bded3d073e2c557",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 18,
+          "column": 1,
+          "end_row": 18,
+          "end_column": 65
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:03a93c8b109a7ea42a2b83136f0c3228486b1341930fafebcda915b08320de5c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 24,
+          "column": 1,
+          "end_row": 24,
+          "end_column": 60
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:4ccc365cda3db169d211aa11c1cf681b5d574555989005b0834d66c85d7e7ed9",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 26,
+          "column": 1,
+          "end_row": 26,
+          "end_column": 36
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:9286bbee1b2ae49fb87f90f2bac91daf53a05d7c178a709afc4ab0c8f2b753fc",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 23,
+          "column": 1,
+          "end_row": 23,
+          "end_column": 52
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:b3aa74ad0bbf73122c090f2237cac747cdeacc171ea0ff585bded3d073e2c557",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 25,
+          "column": 1,
+          "end_row": 25,
+          "end_column": 65
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:1782b89de2f1be4479918912b6cf99f72ce925cf68d21c9d4ddab6d88efb3a50",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 165,
+          "column": 62,
+          "end_row": 165,
+          "end_column": 63
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:1bc65f2f9e97c42652eb3338a87b82b3e7c22b4675d379bf490f53b24bb2ba59",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 157,
+          "column": 123,
+          "end_row": 157,
+          "end_column": 124
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:276776761aba9de94859311ba7141e0945dda4d9b1d4c7647ae6b7a960f35da3",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 168,
+          "column": 300,
+          "end_row": 168,
+          "end_column": 301
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:7e52a16d8bfba78944a3e053795264a66e9fd7fad840abebec5a8e8664b6ddea",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 149,
+          "column": 37,
+          "end_row": 149,
+          "end_column": 38
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:904e0f1c08514588dc1a5c80d85ea784bb86ace38fa2cb4f094d402d92d2ef33",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 189,
+          "column": 45,
+          "end_row": 189,
+          "end_column": 46
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:9219276ea660e08064acae9058bd0f3e3eef0812213ab2fb73263ec7d8c4455c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 111,
+          "column": 39,
+          "end_row": 111,
+          "end_column": 40
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:9f8f9baa8d356c25fcc63b95d7180d3cc662e9d2a2a40aa7e3a3ccf22154db8e",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 109,
+          "column": 31,
+          "end_row": 109,
+          "end_column": 32
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:a0b4f96b923fc22cca2a9ddf7b23efb85ffaddfd9b7f1159f49d29c70ad9fde6",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 108,
+          "column": 31,
+          "end_row": 108,
+          "end_column": 32
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:a9141ddac088bcfc4ba74508c78d3189058f284874ad7032af153916417f16eb",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 115,
+          "column": 69,
+          "end_row": 115,
+          "end_column": 70
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:acfeb552c615e2dd5de7e75dffda8e3566c766ae78f0d2c23f4930680b3381c4",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 160,
+          "column": 303,
+          "end_row": 160,
+          "end_column": 304
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:e7e8fff1095162e911bfc4fa2489b6f0d390208e9b4f3f71e029a897517b21f6",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 107,
+          "column": 33,
+          "end_row": 107,
+          "end_column": 34
+        }
+      ]
+    },
+    {
+      "path": "scripts/local_runtime_smoke.py",
+      "code": "E702",
+      "message": "Multiple statements on one line (semicolon)",
+      "fingerprint": "sha256:f5177446b7e429c5b79a1acd3a851577b3a85ff95b2b845b5655ddf4de105ccb",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 155,
+          "column": 78,
+          "end_row": 155,
+          "end_column": 79
+        }
+      ]
+    },
+    {
+      "path": "scripts/manual_report_evaluation_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:3ecfa6e33e909ee220ae777c22d4b93964dd55291582b08d506b3a559b94dbc4",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 29,
+          "column": 1,
+          "end_row": 29,
+          "end_column": 69
+        }
+      ]
+    },
+    {
+      "path": "scripts/manual_report_evaluation_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:602e3e149b0fd3d79a543427f91d34ddfbd221a85ab9e5a0c6e9f50bf5bd247c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 28,
+          "column": 1,
+          "end_row": 28,
+          "end_column": 59
+        }
+      ]
+    },
+    {
+      "path": "scripts/manual_report_evaluation_smoke.py",
+      "code": "F401",
+      "message": "`backend.services.experiment_service` imported but unused",
+      "fingerprint": "sha256:a8825bcf5af69ba08868d0c187f3ebcf1e246a64be94b7cfd32c1e0a77b730a9",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 490,
+          "column": 55,
+          "end_row": 490,
+          "end_column": 69
+        }
+      ]
+    },
+    {
+      "path": "scripts/manual_report_evaluation_smoke.py",
+      "code": "F401",
+      "message": "`numpy` imported but unused",
+      "fingerprint": "sha256:6f11581db2b4487aaaf6eb8704a9acbe89cddd1ccde4652211c1a838bc70efde",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 262,
+          "column": 21,
+          "end_row": 262,
+          "end_column": 23
+        }
+      ]
+    },
+    {
+      "path": "scripts/manual_report_retrieval_smoke.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:602e3e149b0fd3d79a543427f91d34ddfbd221a85ab9e5a0c6e9f50bf5bd247c",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 29,
+          "column": 1,
+          "end_row": 29,
+          "end_column": 59
+        }
+      ]
+    },
+    {
+      "path": "scripts/manual_report_retrieval_smoke.py",
+      "code": "F401",
+      "message": "`backend.config.writer_lease.WriterLeaseError` imported but unused",
+      "fingerprint": "sha256:ad10c0621c86e8dc9bb43a6cb590c137a646f64b41cbac2ba5b1136277023c34",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 205,
+          "column": 62,
+          "end_row": 205,
+          "end_column": 78
+        }
+      ]
+    },
+    {
+      "path": "scripts/manual_report_retrieval_smoke.py",
+      "code": "F401",
+      "message": "`backend.engine.retrieval.RetrievalReportError` imported but unused",
+      "fingerprint": "sha256:69ed129253f8e3fedaed98fe0f1383a6d2b711c9855d86e2fae74c480d4af8aa",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 209,
+          "column": 13,
+          "end_row": 209,
+          "end_column": 33
+        }
+      ]
+    },
+    {
+      "path": "scripts/report_handoff_preflight.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:2b7f6eb0ae3e7f452218df8cbb32d6787838073cf0f43cf0c66d9bbfa80b628a",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 18,
+          "column": 1,
+          "end_row": 18,
+          "end_column": 50
+        }
+      ]
+    },
+    {
+      "path": "scripts/report_handoff_preflight.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:3d145f5226641b318527b6cea19d45e5bf0cd9f5e5e5bea0bafeb181ec0acf8f",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 19,
+          "column": 1,
+          "end_row": 19,
+          "end_column": 75
+        }
+      ]
+    },
+    {
+      "path": "scripts/report_handoff_preflight.py",
+      "code": "E402",
+      "message": "Module level import not at top of file",
+      "fingerprint": "sha256:f26de4f6ea7dc97bc61520c7712633b6e835f98cc031148b4582771bb23b737e",
+      "occurrences": 1,
+      "locations": [
+        {
+          "row": 20,
+          "column": 1,
+          "end_row": 24,
+          "end_column": 2
+        }
+      ]
+    }
+  ]
+}
