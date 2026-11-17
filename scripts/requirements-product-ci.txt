@@ -1,0 +1,3 @@
+# Additional pinned static-analysis tool for the product pull-request gate.
+# Backend runtime and pytest dependencies remain in requirements-browser-ci.txt.
+ruff==0.17.5
