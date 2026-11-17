@@ -13,13 +13,11 @@ const viewports = [
   { w: 768, h: 900 },
   { w: 390, h: 844 },
 ];
-const shots = [
-  ['r4-first-run-1440.png', 1440, 900], ['r4-first-run-390.png', 390, 844],
-  ['r4-answered-closed-1440.png', 1440, 900], ['r4-answered-open-1440.png', 1440, 900],
-  ['r4-matches-1440.png', 1440, 900], ['r4-mobile-sheet-55-390.png', 390, 844],
-  ['r4-mobile-answered-390.png', 390, 844], ['r4-model-unreachable-1440.png', 1440, 900],
-  ['r4-answer-shapes-1440.png', 1440, 900, true], ['r4-citation-popover-1440.png', 1440, 900],
-  ['r4-logo-comparison.png', 1440, 900, true], ['r4-reading-progress-1440.png', 1440, 900],
+const obsoleteR4Shots = [
+  'r4-answer-shapes-1440.png', 'r4-answered-closed-1440.png', 'r4-answered-open-1440.png',
+  'r4-citation-popover-1440.png', 'r4-first-run-1440.png', 'r4-first-run-390.png',
+  'r4-logo-comparison.png', 'r4-matches-1440.png', 'r4-mobile-answered-390.png',
+  'r4-mobile-sheet-55-390.png', 'r4-model-unreachable-1440.png', 'r4-reading-progress-1440.png',
 ];
 const output = [
   'M9-A-R5 — Final corrective static-proof checks',
@@ -178,7 +176,7 @@ try {
     });
     const transparent = ['rgba(0, 0, 0, 0)', 'transparent'].includes(result.background);
     const noBorder = result.borderBottom.startsWith('none 0px') || result.borderBottom.includes('0px');
-    record('C20', 'Ready header has no bar, border, or status text', '1440x900', transparent && noBorder && result.visibleStatusCount === 0, JSON.stringify(result), 'shots/r4-first-run-1440.png');
+    record('C20', 'Ready header has no bar, border, or status text', '1440x900', transparent && noBorder && result.visibleStatusCount === 0, JSON.stringify(result), 'shots/r5-first-run-1440.png');
 
     const radius = await session.page.evaluate(() => {
       const allowed = ['.citation', '.citation-mark', '.page-thumb', '.document-thumb', '.document-thumb-frame', '.page-frame', '.page-image', '.pdf-sheet'];
@@ -192,7 +190,7 @@ try {
       }
       return { smallNonExempt: findings, sheetRadius: getComputedStyle(document.querySelector('#pdf-sheet')).borderTopLeftRadius };
     });
-    record('C21', 'No non-exempt visible radius is between 0 and 12px; PDF sheet is 16px', '1440x900', radius.smallNonExempt.length === 0 && parseFloat(radius.sheetRadius) === 16, JSON.stringify(radius), 'shots/r4-first-run-1440.png');
+    record('C21', 'No non-exempt visible radius is between 0 and 12px; PDF sheet is 16px', '1440x900', radius.smallNonExempt.length === 0 && parseFloat(radius.sheetRadius) === 16, JSON.stringify(radius), 'shots/r5-first-run-1440.png');
 
     await session.page.locator('.document-open').click();
     const dividers = await session.page.evaluate(() => {
@@ -211,7 +209,7 @@ try {
       });
       return { separators, fullWidthHairlines, columnBorders, sheetBackground: getComputedStyle(document.querySelector('#pdf-sheet')).backgroundColor };
     });
-    record('C22', 'No full-width hairline or chat/PDF divider', '1440x900', dividers.separators.length === 0 && dividers.fullWidthHairlines.length === 0 && dividers.columnBorders.length === 0, JSON.stringify(dividers), 'shots/r4-answered-open-1440.png');
+    record('C22', 'No full-width hairline or chat/PDF divider', '1440x900', dividers.separators.length === 0 && dividers.fullWidthHairlines.length === 0 && dividers.columnBorders.length === 0, JSON.stringify(dividers), 'CHECK-RESULTS.txt (runtime DOM measurement)');
     await session.context.close();
   }
 
@@ -223,7 +221,7 @@ try {
     const fullLines = renderedLines.filter((value) => value >= 40);
     const average = fullLines.length ? fullLines.reduce((sum, value) => sum + value, 0) / fullLines.length : 0;
     const ok = !!metrics && average >= 55 && average <= 75 && metrics.ratio >= 1.55 && metrics.ratio <= 1.7;
-    record('C23', 'Full-width paragraph measure and line-height', `${viewport.w}x${viewport.h}`, ok, JSON.stringify({ textColumnPx: metrics?.width, renderedLineCharacterCounts: renderedLines, fullLineAverage: Number(average.toFixed(1)), fontPx: metrics?.fontSize, lineHeightPx: metrics?.lineHeight, ratio: Number(metrics?.ratio.toFixed(3)), note: 'Figure-adjacent fixture D is reported separately; this measures full-width fixture A.' }), 'shots/r4-answer-shapes-1440.png');
+    record('C23', 'Full-width paragraph measure and line-height', `${viewport.w}x${viewport.h}`, ok, JSON.stringify({ textColumnPx: metrics?.width, renderedLineCharacterCounts: renderedLines, fullLineAverage: Number(average.toFixed(1)), fontPx: metrics?.fontSize, lineHeightPx: metrics?.lineHeight, ratio: Number(metrics?.ratio.toFixed(3)), note: 'Figure-adjacent fixture D is reported separately; this measures full-width fixture A.' }), 'shots/r5-answer-shapes.png');
     await session.context.close();
   }
 
@@ -273,7 +271,7 @@ try {
       return rows;
     });
     const wrapping = chipResult.filter((value) => !value.sameVisualLine || value.pairWhitespace !== 'nowrap' || value.missing);
-    record('C24', 'Citation chip remains with the last word at every answer shape', `${viewport.w}x${viewport.h}`, chipResult.length >= 3 && wrapping.length === 0, JSON.stringify({ citationsMeasured: chipResult.length, violations: wrapping, samples: chipResult.slice(0, 6) }), 'shots/r4-answer-shapes-1440.png');
+    record('C24', 'Citation chip remains with the last word at every answer shape', `${viewport.w}x${viewport.h}`, chipResult.length >= 3 && wrapping.length === 0, JSON.stringify({ citationsMeasured: chipResult.length, violations: wrapping, samples: chipResult.slice(0, 6) }), 'shots/r5-answer-shapes.png');
 
     // Scroll each answer to its final prose character and verify it is visible, not clipped by a fixed composer.
     const access = [];
@@ -299,7 +297,7 @@ try {
       access.push({ fixture: String.fromCharCode(65 + index), ...measured });
     }
     const inaccessible = access.filter((value) => !value.found || value.lastGlyph.bottom > value.app.bottom + 1 || value.lastGlyph.top < value.app.top - 1 || value.lastGlyph.left < 0 || value.lastGlyph.right > viewport.w + 1);
-    record('C32', 'All five fixture endings are reachable by scrolling the rendered gallery', `${viewport.w}x${viewport.h}`, inaccessible.length === 0, JSON.stringify({ scrollableDocument: access[2]?.scrollHeight > access[2]?.bodyHeight, inaccessible, endingRects: access.map(({ fixture, lastGlyph }) => ({ fixture, lastGlyph })) }), 'shots/r4-answer-shapes-1440.png');
+    record('C32', 'All five fixture endings are reachable by scrolling the rendered gallery', `${viewport.w}x${viewport.h}`, inaccessible.length === 0, JSON.stringify({ scrollableDocument: access[2]?.scrollHeight > access[2]?.bodyHeight, inaccessible, endingRects: access.map(({ fixture, lastGlyph }) => ({ fixture, lastGlyph })) }), 'shots/r5-answer-shapes.png');
 
     if (viewport.w >= 1024) {
       const figure = await session.page.evaluate(() => {
@@ -307,14 +305,14 @@ try {
         const figureRect = document.querySelector('.fixture:nth-of-type(4) .inline-figure')?.getBoundingClientRect();
         return { lead: lead && { left: lead.left, right: lead.right, top: lead.top, bottom: lead.bottom }, figure: figureRect && { left: figureRect.left, right: figureRect.right, top: figureRect.top, bottom: figureRect.bottom }, intersects: !!lead && !!figureRect && lead.left < figureRect.right && lead.right > figureRect.left && lead.top < figureRect.bottom && lead.bottom > figureRect.top };
       });
-      record('R3-1', 'Genuine figure sits beside its supporting first paragraph on desktop', `${viewport.w}x${viewport.h}`, !!figure.lead && !!figure.figure && !figure.intersects, JSON.stringify(figure), 'shots/r4-answer-shapes-1440.png');
+      record('R3-1', 'Genuine figure sits beside its supporting first paragraph on desktop', `${viewport.w}x${viewport.h}`, !!figure.lead && !!figure.figure && !figure.intersects, JSON.stringify(figure), 'shots/r5-answer-shapes.png');
     } else {
       const figure = await session.page.evaluate(() => {
         const lead = document.querySelector('.fixture:nth-of-type(4) .answer-lead')?.getBoundingClientRect();
         const figureRect = document.querySelector('.fixture:nth-of-type(4) .inline-figure')?.getBoundingClientRect();
         return { lead: lead && { top: lead.top, bottom: lead.bottom }, figure: figureRect && { top: figureRect.top, bottom: figureRect.bottom }, followsLead: !!lead && !!figureRect && figureRect.top >= lead.bottom };
       });
-      record('R3-1', 'Figure follows its supporting paragraph at narrow width', `${viewport.w}x${viewport.h}`, !!figure.lead && !!figure.figure && figure.followsLead, JSON.stringify(figure), 'shots/r4-mobile-answered-390.png; Playwright DOM order measurement');
+      record('R3-1', 'Figure follows its supporting paragraph at narrow width', `${viewport.w}x${viewport.h}`, !!figure.lead && !!figure.figure && figure.followsLead, JSON.stringify(figure), 'CHECK-RESULTS.txt (runtime DOM order measurement)');
     }
     await session.context.close();
   }
@@ -384,10 +382,10 @@ try {
       }
       return { uses, unexpected: uses.filter((item) => !item.allowed) };
     });
-    record('C25', 'Lime appears only on document evidence and the provisional logo', '1440x900', colors.unexpected.length === 0, JSON.stringify(colors), 'shots/r4-first-run-1440.png');
+    record('C25', 'Lime appears only on document evidence and the provisional logo', '1440x900', colors.unexpected.length === 0, JSON.stringify(colors), 'shots/r5-first-run-1440.png');
 
     const mono = await session.page.evaluate(() => [...document.querySelectorAll('body *')].filter((node) => node.getClientRects().length && /IBM Plex Mono/i.test(getComputedStyle(node).fontFamily) && !node.closest('[data-role="page-ref"]')).map((node) => ({ id: node.id, className: node.className?.baseVal || node.className, family: getComputedStyle(node).fontFamily })));
-    record('C26', 'Monospace is limited to page-reference data', '1440x900', mono.length === 0, JSON.stringify({ unexpected: mono }), 'shots/r4-first-run-1440.png');
+    record('C26', 'Monospace is limited to page-reference data', '1440x900', mono.length === 0, JSON.stringify({ unexpected: mono }), 'shots/r5-first-run-1440.png');
 
     const firstRun = await session.page.evaluate(() => {
       const rect = document.querySelector('#composer').getBoundingClientRect();
@@ -409,7 +407,7 @@ try {
       const count = (text) => (text.match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) || []).filter((word) => /\p{L}/u.test(word)).length;
       return { chromeText: parts.join(' '), chromeWords: count(parts.join(' ')) + count(placeholder), placeholder, suggestions, suggestionWords: suggestions.reduce((sum, text) => sum + count(text), 0), totalIncludingSuggestions: count(parts.join(' ')) + count(placeholder) + suggestions.reduce((sum, text) => sum + count(text), 0) };
     });
-    record('C33', 'First-run copy audit separates chrome from required sample questions', '1440x900', chromeWords.chromeWords <= 25, JSON.stringify(chromeWords), 'copy.md; shots/r4-first-run-1440.png');
+    record('C33', 'First-run copy audit separates chrome from required sample questions', '1440x900', chromeWords.chromeWords <= 25, JSON.stringify(chromeWords), 'copy.md; shots/r5-first-run-1440.png');
     await session.context.close();
 
     const mobile = await makePage(browser, 'first-run', viewports[3]);
@@ -463,7 +461,7 @@ try {
       }
       return { minimumTextPx: minimumSize, minimumContrast: Number(minimumContrast.toFixed(2)), violations: bad.slice(0, 12), testedTextNodes: document.querySelectorAll('body *').length };
     });
-    record('C27', 'Visible DOM text is at least 12px and contrast is at least 4.5:1', `${viewport.w}x${viewport.h} ${state}`, values.violations.length === 0, JSON.stringify(values), state === 'first-run' ? 'shots/r4-first-run-1440.png' : state === 'answered-open' ? 'shots/r4-answered-open-1440.png' : 'shots/r4-model-unreachable-1440.png');
+    record('C27', 'Visible DOM text is at least 12px and contrast is at least 4.5:1', `${viewport.w}x${viewport.h} ${state}`, values.violations.length === 0, JSON.stringify(values), state === 'first-run' ? 'shots/r5-first-run-1440.png' : state === 'model-unreachable' ? 'shots/r5-model-unreachable-1440.png' : 'CHECK-RESULTS.txt (runtime DOM measurement)');
     await session.context.close();
   }
 
@@ -478,7 +476,7 @@ try {
     const dx = value ? Math.abs((value.union.left + value.union.right) / 2 - value.viewCenter.x) / Math.max(1, value.clip.right - value.clip.left) : 1;
     const dy = value ? Math.abs((value.union.top + value.union.bottom) / 2 - value.viewCenter.y) / Math.max(1, value.clip.bottom - value.clip.top) : 1;
     const zoomPass = !!value && value.pageWidth >= value.fitWidth * .98 && (value.nativePdfPercent === null || value.nativePdfPercent <= 200);
-    record('C29', 'Citation 1 opens and centers the full Link caption highlight within the clipped PDF view', `${viewport.w}x${viewport.h}`, within && dx <= .15 && dy <= .15 && zoomPass, JSON.stringify({ target: 'link-caption', pageLabel: await session.page.locator('#toolbar-page').innerText(), zoom: value && { nativePdfPercent: value.nativePdfPercent, fitRelativeFactor: value.fitRelativeFactor }, pageWidth: value?.pageWidth, fitWidth: value?.fitWidth, clip: value?.clip, targetRect: value?.union, centerDeviation: { xPct: Number((dx * 100).toFixed(2)), yPct: Number((dy * 100).toFixed(2)) }, minimumClearancePx: value ? Math.min(value.union.left - value.clip.left, value.clip.right - value.union.right, value.union.top - value.clip.top, value.clip.bottom - value.union.bottom) : null, marks: value?.marks, scroll: value?.scroll }), viewport.w === 390 ? 'shots/r4-mobile-sheet-55-390.png (55%); source opens at 92% in interaction' : viewport.w === 1440 ? 'shots/r4-answered-open-1440.png' : 'CHECK-RESULTS.txt (browser measurement; no dedicated screenshot slot)');
+    record('C29', 'Citation 1 opens and centers the full Link caption highlight within the clipped PDF view', `${viewport.w}x${viewport.h}`, within && dx <= .15 && dy <= .15 && zoomPass, JSON.stringify({ target: 'link-caption', pageLabel: await session.page.locator('#toolbar-page').innerText(), zoom: value && { nativePdfPercent: value.nativePdfPercent, fitRelativeFactor: value.fitRelativeFactor }, pageWidth: value?.pageWidth, fitWidth: value?.fitWidth, clip: value?.clip, targetRect: value?.union, centerDeviation: { xPct: Number((dx * 100).toFixed(2)), yPct: Number((dy * 100).toFixed(2)) }, minimumClearancePx: value ? Math.min(value.union.left - value.clip.left, value.clip.right - value.union.right, value.union.top - value.clip.top, value.clip.bottom - value.union.bottom) : null, marks: value?.marks, scroll: value?.scroll }), viewport.w === 390 ? 'shots/r5-mobile-sheet-92.png (selected passage at 92% snap); runtime geometry for this viewport' : 'CHECK-RESULTS.txt (runtime DOM measurement; no matching saved R5 open-sheet screenshot)');
     await session.context.close();
   }
 
@@ -531,7 +529,7 @@ try {
       return { page: { left: page.left, right: page.right }, viewport, tags, legendVisible: document.querySelector('#match-legend').getClientRects().length > 0, rasterOnly: !document.querySelector('#page-frame .textLayer,.textLayer') };
     });
     const noCollision = rail.tags.length > 0 && rail.tags.every((tag) => !tag.overlapsRasterPage && tag.insideVisibleGutter);
-    record('C30', 'Method labels stay visible in the dark gutter beside the page', '1440x900', noCollision && rail.legendVisible, JSON.stringify({ ...rail, limitation: 'The proof uses a rasterized Poppler page and has no pdf.js text layer. Gutter geometry is verified against the full page rectangle; production text-layer collision is untested.' }), 'shots/r4-matches-1440.png');
+    record('C30', 'Method labels stay visible in the dark gutter beside the page', '1440x900', noCollision && rail.legendVisible, JSON.stringify({ ...rail, limitation: 'The proof uses a rasterized Poppler page and has no pdf.js text layer. Gutter geometry is verified against the full page rectangle; production text-layer collision is untested.' }), 'CHECK-RESULTS.txt (runtime DOM measurement)');
     await session.context.close();
   }
 
@@ -561,7 +559,7 @@ try {
       && Math.abs(snaps[0].heightPct - 30) <= 1 && Math.abs(snaps[1].heightPct - 55) <= 1 && Math.abs(snaps[2].heightPct - 92) <= 1
       && snaps[0].composerVisibility !== 'hidden' && snaps[1].composerVisibility === 'hidden' && snaps[2].composerVisibility === 'hidden'
       && snaps.every((item) => item.undersized.length === 0);
-    for (const item of snaps) record('C31', `Mobile PDF snap ${item.snap}%`, '390x844', correct ? 'PASS' : 'FAIL', JSON.stringify(item), 'shots/r4-mobile-sheet-55-390.png');
+    for (const item of snaps) record('C31', `Mobile PDF snap ${item.snap}%`, '390x844', correct ? 'PASS' : 'FAIL', JSON.stringify(item), `shots/r5-mobile-sheet-${item.snap}.png`);
     await session.context.close();
   }
 
@@ -643,7 +641,7 @@ try {
 
     const standaloneCuriosity = await makePage(browser, 'first-run', viewports[0]);
     const curiosityLabels = await standaloneCuriosity.page.evaluate(() => [...document.querySelectorAll('body *')].filter((node) => node.getClientRects().length && node.children.length === 0 && node.textContent.trim().toLowerCase() === 'curiosity' && !node.matches('.document-name,.sheet-title')).map((node) => ({ className: node.className?.baseVal || node.className, text: node.textContent.trim() })));
-    record('C33', 'Curiosity is not used as a standalone interface label', '1440x900', curiosityLabels.length === 0, JSON.stringify({ standaloneCuriosityLabels: curiosityLabels, permittedSampleTitle: await standaloneCuriosity.page.locator('.document-name').innerText() }), 'copy.md; shots/r4-first-run-1440.png');
+    record('C33', 'Curiosity is not used as a standalone interface label', '1440x900', curiosityLabels.length === 0, JSON.stringify({ standaloneCuriosityLabels: curiosityLabels, permittedSampleTitle: await standaloneCuriosity.page.locator('.document-name').innerText() }), 'copy.md; shots/r5-first-run-1440.png');
     await standaloneCuriosity.context.close();
     const inventory = await fs.readFile(path.join(root, 'copy.md'), 'utf8');
     const inventoryTokens = new Set((inventory.toLowerCase().match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) || []));
@@ -665,26 +663,26 @@ try {
     const popover = page.locator('.citation-popover.is-visible');
     const quote = await popover.locator('.popover-quote').innerText();
     const quoteWords = wordCount(quote);
-    record('R3-2', 'Citation hover opens a genuine short source quotation', '1440x900', await popover.count() === 1 && quoteWords <= 25, JSON.stringify({ sourceId, quote, quoteWords }), 'shots/r4-citation-popover-1440.png');
+    record('R3-2', 'Citation hover opens a genuine short source quotation', '1440x900', await popover.count() === 1 && quoteWords <= 25, JSON.stringify({ sourceId, quote, quoteWords }), 'shots/r5-citation-popover-1440.png');
     await page.mouse.move(8, 8);
     await chip.focus();
     await page.waitForFunction(() => document.querySelector('.citation-popover')?.classList.contains('is-visible') === true);
     const focusOpen = await page.locator('.citation-popover.is-visible').count() === 1;
-    record('R3-2', 'Citation keyboard focus exposes the same popover', '1440x900', focusOpen, `focus=${await chip.evaluate((node) => node === document.activeElement)}; visible=${focusOpen}`, 'shots/r4-citation-popover-1440.png');
+    record('R3-2', 'Citation keyboard focus exposes the same popover', '1440x900', focusOpen, `focus=${await chip.evaluate((node) => node === document.activeElement)}; visible=${focusOpen}`, 'CHECK-RESULTS.txt (keyboard focus DOM measurement)');
     await chip.click();
     await page.waitForFunction(() => !document.querySelector('#pdf-sheet').hidden && document.querySelector('#evidence-layer').dataset.activeTarget === 'link-caption');
     const pageLabel = await page.locator('#toolbar-page').innerText();
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => document.querySelector('#pdf-sheet').hidden);
     const restored = await chip.evaluate((node) => node === document.activeElement);
-    record('R3-2/R3-13', 'Citation opens its cited page; Escape closes and restores focus', '1440x900', pageLabel === '2 / 4' && restored, JSON.stringify({ pageLabel, focusRestored: restored, sheetHidden: await page.locator('#pdf-sheet').isHidden() }), 'shots/r4-answered-open-1440.png');
+    record('R3-2/R3-13', 'Citation opens its cited page; Escape closes and restores focus', '1440x900', pageLabel === '2 / 4' && restored, JSON.stringify({ pageLabel, focusRestored: restored, sheetHidden: await page.locator('#pdf-sheet').isHidden() }), 'CHECK-RESULTS.txt (runtime citation and focus DOM measurement)');
 
     await page.locator('.document-open').click();
     await page.waitForFunction(() => !document.querySelector('#pdf-sheet').hidden);
     await page.locator('#close-sheet').click();
     await page.waitForFunction(() => document.querySelector('#pdf-sheet').hidden);
     const docFocus = await page.locator('.document-open').evaluate((node) => node === document.activeElement);
-    record('R3-13', 'PDF close control restores focus to the document pill', '1440x900', docFocus, `focusRestored=${docFocus}`, 'shots/r4-reading-progress-1440.png');
+    record('R3-13', 'PDF close control restores focus to the document pill', '1440x900', docFocus, `focusRestored=${docFocus}`, 'CHECK-RESULTS.txt (runtime focus-restoration DOM measurement)');
     await session.context.close();
   }
 
@@ -700,7 +698,7 @@ try {
     await page.waitForFunction(() => { const image = document.querySelector('.inline-figure img'); return image?.complete && image.naturalWidth > 0; });
     const answered = await page.evaluate(() => ({ question: document.querySelector('.user-turn')?.innerText, citations: [...document.querySelectorAll('.citation')].map((node) => node.dataset.sourceId), figureCredit: document.querySelector('.figure-credit')?.innerText, figureWidth: document.querySelector('.inline-figure img')?.naturalWidth, answer: document.querySelector('.assistant-answer')?.innerText }));
     const after = await page.evaluate(() => performance.getEntriesByType('resource').filter((entry) => ['fetch', 'xmlhttprequest'].includes(entry.initiatorType)).length);
-    record('R3-1/R3-14', 'First-run Link question uses only the documented local proof fixture', '1440x900', selected === answered.question && answered.citations.length === 3 && answered.figureCredit === 'NASA/JPL-Caltech/MSSS' && answered.figureWidth > 0 && before === after, JSON.stringify({ selected, ...answered, fetchOrXhrBefore: before, fetchOrXhrAfter: after }), 'shots/r4-answered-closed-1440.png');
+    record('R3-1/R3-14', 'First-run Link question uses only the documented local proof fixture', '1440x900', selected === answered.question && answered.citations.length === 3 && answered.figureCredit === 'NASA/JPL-Caltech/MSSS' && answered.figureWidth > 0 && before === after, JSON.stringify({ selected, ...answered, fetchOrXhrBefore: before, fetchOrXhrAfter: after }), 'CHECK-RESULTS.txt (scripted interaction DOM measurement)');
     await page.locator('#attach-button').click();
     await page.locator('#pdf-input').setInputFiles({ name: 'local-only-check.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 static attachment fixture') });
     const arbitrary = await page.evaluate(() => ({ filename: document.querySelector('.document-name')?.textContent, message: document.querySelector('#composer-feedback')?.innerText, openDisabled: document.querySelector('.document-open')?.disabled, network: performance.getEntriesByType('resource').filter((entry) => ['fetch', 'xmlhttprequest'].includes(entry.initiatorType)).length }));
@@ -751,7 +749,7 @@ try {
     const geometryJs = [...html.matchAll(/\.animate\s*\(([^;]+)\)/giu)].filter((match) => /\b(left|top|width|height)\b/iu.test(match[1]));
     const connectors = await session.page.locator('#thread [class*="leader" i],#thread [class*="connector" i],#thread [id*="leader" i],#thread [id*="connector" i]').count();
     const inScope = session.requests.filter((url) => new URL(url).origin !== origin);
-    record('R3-15', 'Show matches is off by default, exposes evidence labels, then preserves answer bytes', '1440x900', off === 'false' && matchState.pressed === 'true' && ['Exact words', 'Meaning', 'Figure'].every((label) => matchState.tags.includes(label)) && matchState.legend && beforeText === onText && offAgain === 'false' && afterOffTargets === 1, JSON.stringify({ offInitially: off, ...matchState, answerUnchanged: beforeText === onText, offAgain, visibleTargetsWhenOff: afterOffTargets }), 'shots/r4-matches-1440.png');
+    record('R3-15', 'Show matches is off by default, exposes evidence labels, then preserves answer bytes', '1440x900', off === 'false' && matchState.pressed === 'true' && ['Exact words', 'Meaning', 'Figure'].every((label) => matchState.tags.includes(label)) && matchState.legend && beforeText === onText && offAgain === 'false' && afterOffTargets === 1, JSON.stringify({ offInitially: off, ...matchState, answerUnchanged: beforeText === onText, offAgain, visibleTargetsWhenOff: afterOffTargets }), 'CHECK-RESULTS.txt (runtime toggle and DOM measurement)');
     record('R3-3', 'Only transform and opacity are animated', '1440x900', geometryTransitions.length === 0 && geometryKeyframes.length === 0 && geometryJs.length === 0, JSON.stringify({ geometryTransitions, geometryKeyframes: geometryKeyframes.map((item) => item[0].split('{')[0]), geometryJs }), 'assets/reading-desk.css');
     record('R3-4', 'Reduced motion removes visual animation while citation interaction remains available', '1440x900', reduced.scan === 'none' && reduced.pulse === 'none' && reduced.sheetTransition.split(',').every((value) => parseFloat(value) === 0) && connectors === 0, JSON.stringify({ reduced, conversationConnectorCount: connectors, citationCanOpen: true }), 'CHECK-RESULTS.txt');
     record('R3-7', 'All observed browser requests stay on loopback', '1440x900', inScope.length === 0 && session.errors.length === 0 && session.badResponses.length === 0, JSON.stringify({ externalRequests: inScope, pageErrors: session.errors, failedResponses: session.badResponses, requestCount: session.requests.length }), 'CHECK-RESULTS.txt');
@@ -781,12 +779,12 @@ try {
     const session = await makePage(browser, state, viewports[0]);
     const metrics = await session.page.evaluate(() => ({ state: document.body.dataset.state, message: document.querySelector('.attention-copy')?.innerText.trim() || '', buttonLabel: document.querySelector('#send-button').getAttribute('aria-label'), progress: document.querySelector('#document-progress')?.innerText.trim() || '', page: document.querySelector('#toolbar-page')?.innerText.trim(), opened: !document.querySelector('#pdf-sheet').hidden }));
     const expected = state === 'model-unreachable' ? metrics.message === "Can't reach the model. Start Ollama, then check again." : metrics.progress === 'Page 3/4' && metrics.page === '3 / 4';
-    record('R3-4/R4-status', `Truthful static state: ${state}`, '1440x900', expected, JSON.stringify(metrics), state === 'reading-progress' ? 'shots/r4-reading-progress-1440.png' : 'shots/r4-model-unreachable-1440.png');
+    record('R3-4/R4-status', `Truthful static state: ${state}`, '1440x900', expected, JSON.stringify(metrics), state === 'reading-progress' ? 'CHECK-RESULTS.txt (runtime state and DOM measurement)' : 'shots/r5-model-unreachable-1440.png');
     if (state === 'model-unreachable') {
       await session.page.locator('#model-help-open').click();
       const help = await session.page.locator('#help-panel').innerText();
       const network = session.requests.filter((url) => new URL(url).origin !== origin);
-      record('R3-4', 'Unavailable-model help is local and gives a corrective action', '1440x900', /local model app from the Start menu/i.test(help) && !/ollama/i.test(help) && network.length === 0, JSON.stringify({ help, externalRequests: network, permittedOllamaCopyRemainsOnlyInStatus: true }), 'shots/r4-model-unreachable-1440.png');
+      record('R3-4', 'Unavailable-model help is local and gives a corrective action', '1440x900', /local model app from the Start menu/i.test(help) && !/ollama/i.test(help) && network.length === 0, JSON.stringify({ help, externalRequests: network, permittedOllamaCopyRemainsOnlyInStatus: true }), 'shots/r5-model-unreachable-1440.png');
     }
     await session.context.close();
   }
@@ -976,13 +974,13 @@ try {
     await session.context.close();
   }
 
-  // Verify the nine required R5 full-resolution screenshots without replacing the historical R4 captures.
+  // Verify all ten retained R5 full-resolution screenshots without replacing approved evidence.
   const requiredR5Shots = [
     ['r5-first-run-1440.png', 1440, 900], ['r5-first-run-390.png', 390, 844],
     ['r5-citation-popover-1440.png', 1440, 900], ['r5-citation-popover-1024.png', 1024, 768],
     ['r5-answer-shapes.png', 1440, 900, true], ['r5-mobile-sheet-30.png', 390, 844],
     ['r5-mobile-sheet-55.png', 390, 844], ['r5-mobile-sheet-92.png', 390, 844],
-    ['r5-model-unreachable-1440.png', 1440, 900],
+    ['r5-model-unreachable-1440.png', 1440, 900], ['r5-logo-comparison.png', 1440, 900, true],
   ];
   const r5ScreenshotResults = [];
   for (const [name, width, height, fullPage = false] of requiredR5Shots) {
@@ -993,25 +991,18 @@ try {
       r5ScreenshotResults.push({ name, bytes: stat.size, ...pngSize, expected: { width, height, fullPage } });
     } catch (error) { r5ScreenshotResults.push({ name, error: error.message }); }
   }
-  const passR5Shots = r5ScreenshotResults.length === 9 && r5ScreenshotResults.every((item) => item.bytes > 0 && !item.error && item.width === item.expected.width && (item.expected.fullPage ? item.height >= item.expected.height : item.height === item.expected.height));
-  record('R5-SCREENSHOTS', 'Nine named R5 screenshots exist at the requested viewport dimensions', '1440x900, 1024x768, 390x844', passR5Shots, JSON.stringify(r5ScreenshotResults), 'shots/');
+  const passR5Shots = r5ScreenshotResults.length === 10 && r5ScreenshotResults.every((item) => item.bytes > 0 && !item.error && item.width === item.expected.width && (item.expected.fullPage ? item.height >= item.expected.height : item.height === item.expected.height));
+  record('R5-SCREENSHOTS', 'All ten retained R5 screenshots exist at the requested viewport dimensions', '1440x900, 1024x768, 390x844', passR5Shots, JSON.stringify(r5ScreenshotResults), 'shots/');
 
-  // Verify exactly twelve R4 screenshots and their encoded viewport dimensions.
-  const screenshotResults = [];
-  for (const [name, width, height, fullPage = false] of shots) {
-    try {
-      const stat = await fs.stat(path.join(root, 'shots', name));
-      const context = await browser.newContext({ viewport: { width: 20, height: 20 } });
-      const page = await context.newPage();
-      const size = await page.evaluate((url) => new Promise((resolve, reject) => {
-        const image = new Image(); image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight }); image.onerror = reject; image.src = url;
-      }), `${origin}/shots/${name}`);
-      await context.close();
-      screenshotResults.push({ name, bytes: stat.size, ...size, expected: { viewportWidth: width, viewportHeight: height, capture: fullPage ? 'full-page' : 'viewport' } });
-    } catch (error) { screenshotResults.push({ name, error: error.message }); }
+  // Verify every specifically approved R4 deletion and ensure no R4 PNG remains.
+  const shotDirectory = path.join(root, 'shots');
+  const presentObsolete = [];
+  for (const name of obsoleteR4Shots) {
+    try { await fs.access(path.join(shotDirectory, name)); presentObsolete.push(name); }
+    catch (error) { if (error.code !== 'ENOENT') presentObsolete.push(`${name}: ${error.message}`); }
   }
-  const actualR4Shots = (await fs.readdir(path.join(root, 'shots'))).filter((name) => name.startsWith('r4-') && name.endsWith('.png'));
-  record('R4-screenshots', 'Exactly twelve full-resolution R4 captures exist at requested sizes', '1440/1024/768/390 captures', screenshotResults.length === 12 && actualR4Shots.length === 12 && screenshotResults.every((item) => item.bytes > 0 && !item.error && item.width === item.expected.viewportWidth && (item.expected.capture === 'full-page' ? item.height >= item.expected.viewportHeight : item.height === item.expected.viewportHeight)), JSON.stringify({ actualR4Count: actualR4Shots.length, note: 'Expected dimensions describe the browser viewport. Two captures are explicitly full-page: answer shapes and logo comparison.', required: screenshotResults }), 'shots/');
+  const actualR4Shots = (await fs.readdir(shotDirectory)).filter((name) => name.startsWith('r4-') && name.endsWith('.png'));
+  record('R4-CLEANUP', 'All twelve superseded R4 screenshots are absent', 'shots/', presentObsolete.length === 0 && actualR4Shots.length === 0, JSON.stringify({ approvedDeletionCount: obsoleteR4Shots.length, presentObsolete, remainingR4Pngs: actualR4Shots }), 'shots/');
 
   // CSS, JS, DOM, assets and whole-window overflow at all tested viewports.
   const css = await fs.readFile(path.join(root, 'assets', 'reading-desk.css'), 'utf8');

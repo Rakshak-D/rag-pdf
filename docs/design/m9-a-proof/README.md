@@ -1,6 +1,6 @@
-# M9-A-R5 — Final static reading-interface proof
+# M9-A-R5 — Approved static reading-interface proof
 
-This self-contained proof shows the proposed RAG-PDF reading interface. It is not the application and does not connect to a backend, Ollama, Chroma, or a retrieval service.
+R5 is the owner-approved, locked visual direction for the RAG-PDF reading interface. This static proof is not the application and does not connect to a backend, Ollama, Chroma, or a retrieval service. Its answers are pre-authored fixtures; production retrieval and generation remain unverified.
 
 ## View and verify
 
@@ -21,7 +21,7 @@ node --check docs/design/m9-a-proof/capture.mjs
 node --check docs/design/m9-a-proof/check.mjs
 ```
 
-The scripts use the locally installed Playwright-managed Chrome channel and write the nine R5 screenshots plus one logo comparison under `shots/`. Earlier R4 screenshots remain unchanged as historical evidence. See `CHECK-RESULTS.txt` for the browser version, measurements, individual pass/fail results, and limitations.
+The scripts use the locally installed Playwright-managed Chrome channel and write the ten retained R5 screenshots under `shots/`. The superseded R4 screenshots and the obsolete `font-comparison.html` have been removed. See `CHECK-RESULTS.txt` for the browser version, measurements, individual pass/fail results, and limitations.
 
 ## What the proof demonstrates
 
@@ -37,4 +37,4 @@ The scripts use the locally installed Playwright-managed Chrome channel and writ
 
 The page renders are genuine Poppler images of the source NASA PDF. The Link figure is a genuine extracted image with its original caption and credit. `CREDITS.md` records source passages, URLs, figure provenance, and coordinate verification. These assets validate only this static raster proof; they do not verify production PDF.js coordinate conversion, indexing, retrieval, or generation.
 
-The answer fixtures and method classifications are authored proof content. No model was loaded, no benchmark was run, and no answer is presented as a live model output. `copy.md` inventories visible interface strings and measured word counts. `TASTE.md` records the final design review. `R5-CHANGES.md` lists the corrective changes and remaining limits. `FONT-LICENSES.md` records local font licences.
+The answer fixtures and method classifications are authored proof content. No model was loaded, no benchmark was run, and no answer is presented as a live model output. `copy.md` inventories visible interface strings and measured word counts. `TASTE.md` records the final design review. `R5-CHANGES.md` lists the corrective changes and remaining limits. `FONT-LICENSES.md` records the three locally bundled families: Newsreader, Instrument Sans, and IBM Plex Mono. Mark A remains provisional; the two-tone wordmark study B is not a selected permanent brand.
