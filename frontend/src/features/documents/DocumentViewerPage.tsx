@@ -5,7 +5,7 @@ import { AnnotationMode, GlobalWorkerOptions, getDocument, TextLayer, type PDFDo
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { ApiError, BootstrapApiClient } from "../../api/client";
 import type { BootstrapDocumentContent } from "../../api/types";
-import { locatePassage, measureTextFragment } from "./passageLocation";
+import { locatePassage, measurePassageGeometry, type TextItemBounds } from "./passageLocation";
 import "./document-viewer.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -36,6 +36,22 @@ function clearCanvas(canvas: HTMLCanvasElement): void {
   canvas.height = 0;
   canvas.style.width = "";
   canvas.style.height = "";
+}
+
+function renderedTextItemBounds(layer: TextLayer): Array<TextItemBounds | null> {
+  return layer.textDivs.map((textDiv) => {
+    if (!textDiv?.isConnected) return null;
+    const rect = textDiv.getBoundingClientRect();
+    const direction = getComputedStyle(textDiv).direction;
+    if (direction !== "ltr" && direction !== "rtl") return null;
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      direction,
+    };
+  });
 }
 
 function mediaQuery(query: string): MediaQueryList | null {
@@ -374,9 +390,13 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
 
   useEffect(() => {
     setEvidenceState({ status: "none" });
+    setRetrievedMarks([]);
     if (!citationLabel || citedPage === null || page !== citedPage || viewer.kind !== "ready" ||
       renderedTextLayer?.page !== page || !pageFrame.current) return;
 
+    const layer = renderedTextLayer.layer;
+    const textItems = layer.textContentItemsStr;
+    const textItemBounds = renderedTextItemBounds(layer);
     const result = locatePassage({
       loadedDocumentId: viewer.content.document_id,
       citedDocumentId,
@@ -386,7 +406,8 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
       loadedPageNumber: renderedTextLayer.page,
       pageCount: viewer.content.page_count,
       passage: citedPassage,
-      textItems: renderedTextLayer.layer.textContentItemsStr,
+      textItems,
+      textItemBounds,
     });
     if (result.status === "unresolved") {
       setEvidenceState({ status: "unresolved", reason: result.reason });
@@ -394,21 +415,12 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
     }
 
     const frameRect = pageFrame.current.getBoundingClientRect();
-    const marks = result.fragments.flatMap((fragment) => {
-      const textDiv = renderedTextLayer.layer.textDivs[fragment.itemIndex];
-      if (!textDiv) return [];
-      return measureTextFragment(textDiv, fragment, frameRect).map((rect) => ({
-        left: rect.left,
-        top: rect.top,
-        width: rect.width,
-        height: rect.height,
-        itemIndex: fragment.itemIndex,
-      }));
-    });
-    const withinPage = marks.length > 0 && marks.every((mark) =>
-      mark.left >= 0 && mark.top >= 0 && mark.width > 0 && mark.height > 0 &&
-      mark.left + mark.width <= frameRect.width + 1 && mark.top + mark.height <= frameRect.height + 1);
-    setEvidenceState(withinPage ? { status: "matched", marks } : { status: "unresolved", reason: "geometry-unavailable" });
+    const geometry = measurePassageGeometry(result.fragments, textItems, layer.textDivs, frameRect);
+    if (geometry.status !== "matched") {
+      setEvidenceState({ status: "unresolved", reason: geometry.reason });
+      return;
+    }
+    setEvidenceState({ status: "matched", marks: geometry.marks });
     const nextRetrieved = showMatches ? citedMatches.flatMap((match) => {
       if (match.label === citationLabel || match.documentId !== viewer.content.document_id ||
         match.manifestHash !== viewer.content.manifest_hash || match.page !== page) return [];
@@ -421,19 +433,13 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
         loadedPageNumber: renderedTextLayer.page,
         pageCount: viewer.content.page_count,
         passage: match.passage,
-        textItems: renderedTextLayer.layer.textContentItemsStr,
+        textItems,
+        textItemBounds,
       });
       if (located.status !== "matched") return [];
-      const matchMarks = located.fragments.flatMap((fragment) => {
-        const textDiv = renderedTextLayer.layer.textDivs[fragment.itemIndex];
-        if (!textDiv) return [];
-        return measureTextFragment(textDiv, fragment, frameRect).map((rect) => ({
-          left: rect.left, top: rect.top, width: rect.width, height: rect.height, itemIndex: fragment.itemIndex,
-        }));
-      });
-      return matchMarks.length && matchMarks.every((mark) => mark.left >= 0 && mark.top >= 0 && mark.width > 0 && mark.height > 0 &&
-        mark.left + mark.width <= frameRect.width + 1 && mark.top + mark.height <= frameRect.height + 1)
-        ? [{ label: match.label, marks: matchMarks }]
+      const matchGeometry = measurePassageGeometry(located.fragments, textItems, layer.textDivs, frameRect);
+      return matchGeometry.status === "matched"
+        ? [{ label: match.label, marks: matchGeometry.marks }]
         : [];
     }) : [];
     setRetrievedMarks(nextRetrieved);

@@ -315,6 +315,28 @@ test("unlocatable text opens the requested page with an honest no-highlight fall
   await assertLoopbackOnly(page);
 });
 
+test("an incomplete rendered text fragment invalidates the entire source highlight", async ({ page }) => {
+  await page.addInitScript(() => {
+    const nativeGetClientRects = Range.prototype.getClientRects;
+    Range.prototype.getClientRects = function getClientRectsWithMissingSourceFragment() {
+      if (this.toString().trim() === "of water.") {
+        (window as Window & { __suppressedSourceFragmentGeometry?: boolean }).__suppressedSourceFragmentGeometry = true;
+        return [] as unknown as DOMRectList;
+      }
+      return nativeGetClientRects.call(this);
+    };
+  });
+  await openDesk(page);
+  await ask(page, LINK_QUESTION);
+  await openCitation(page, "T1", 2);
+  await expect.poll(() => page.evaluate(() =>
+    (window as Window & { __suppressedSourceFragmentGeometry?: boolean }).__suppressedSourceFragmentGeometry ?? false,
+  )).toBe(true);
+  await expect(page.locator(".pdf-viewer-context [role='status']")).toContainText("Passage on page 2");
+  await expect(page.getByTestId("pdf-evidence-mark")).toHaveCount(0);
+  await assertLoopbackOnly(page);
+});
+
 test("text found on another page is not highlighted on the cited page", async ({ page }) => {
   await page.route("**/api/v1/ask", async (route) => {
     const upstream = await route.fetch();
