@@ -19,11 +19,12 @@ generation.
 The qualification environment was a disposable Python 3.10.22 container with
 the repository mounted read-only. The pinned requirements were installed
 before qualification, then the container was disconnected from its network.
-The three candidate modules did not attempt external requests. The later full
-selection runs did attempt the blocked `tiktoken` request described below.
-No Ollama process, model, or model download was used. No index build or
-existing user storage was accessed. API tests used pytest temporary
-directories for source, state, and storage.
+The three candidate modules did not attempt external requests. Initial
+full-selection runs without a tokenizer cache attempted the blocked `tiktoken`
+request described below. After warming the tokenizer cache as setup, the full
+selection passed with networking disabled. No Ollama process, model, or model
+download was used. No index build or existing user storage was accessed. API
+tests used pytest temporary directories for source, state, and storage.
 
 ## Candidate results
 
@@ -61,11 +62,16 @@ warning noted above.
 
 The three candidate modules passed individually and in all five combined
 qualification runs without attempting network access. However, the full
-backend selection attempted an external test-time request, so C1-08 is not
-met for the complete current selection. This is a pre-existing CI-suite
-limitation and remains an explicit qualification gap; it must not be described
-as an all-tests-offline pass. The attempted request was blocked, so no external
-response was received.
+backend selection initially attempted an external test-time request when the
+tokenizer cache was empty. To keep the test execution offline, the backend CI
+job now warms the `cl100k_base` cache in its setup step, before pytest, under
+`runner.temp`. The pinned `tiktoken==0.12.0` package checks the asset against
+its embedded SHA-256 (`223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7`).
+The cache is job-local and ephemeral. Dependency installation and this
+integrity-checked tokenizer setup may use network; the pytest runs themselves
+are validated below with networking disabled. The initial cache-free run made
+no successful external connection; the deliberate setup fetch later retrieved
+the asset and verified its SHA-256.
 
 ## CI selection change
 
@@ -92,10 +98,14 @@ It adds:
 16. `tests/integration/test_general_chat_api.py`
 
 The intended pytest selection is therefore 16 modules. The Ruff comparator
-command, its recorded 177-finding baseline, Python version, dependencies, and
-the other three CI jobs are not changed by this qualification. The separate
-full-selection offline run above still has the two reproduced tokenizer-cache
-failures from the existing ingestion tests.
+command, its recorded 177-finding baseline, Python version, dependency pins,
+and the other three CI jobs are unchanged. The backend job adds only the
+job-local tokenizer cache setup needed to prevent a test-time fetch by two
+existing ingestion tests. After warming the cache and disconnecting the
+container from networking, the complete expanded selection passed: 190 passed,
+2 skipped, 0 failed in 39.22 seconds, with the single Starlette/AnyIO
+deprecation warning described above. The final offline test run made no network
+requests.
 
 ## Static validation
 
