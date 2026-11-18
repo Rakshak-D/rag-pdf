@@ -4,7 +4,6 @@ import type { Mode } from "./conversations";
 interface Props {
   question: string;
   mode: Mode;
-  modelStatus: string;
   pending: boolean;
   disabledReason: string | null;
   textareaRef: Ref<HTMLTextAreaElement>;
@@ -14,7 +13,7 @@ interface Props {
   attachmentControl?: ReactNode;
 }
 
-export function ChatComposer({ question, mode, modelStatus, pending, disabledReason, textareaRef, onChange, onSubmit, onKeyDown, attachmentControl }: Props) {
+export function ChatComposer({ question, mode, pending, disabledReason, textareaRef, onChange, onSubmit, onKeyDown, attachmentControl }: Props) {
   const blocked = pending || disabledReason !== null;
   return <div className="chat-compose-area">
     {disabledReason ? <p className="chat-compose-hint" role="status">{disabledReason}</p> : null}
@@ -27,13 +26,12 @@ export function ChatComposer({ question, mode, modelStatus, pending, disabledRea
         maxLength={4000}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
-        placeholder={mode === "general" ? "Message your local model…" : "Ask about the selected PDFs…"}
+        placeholder={mode === "general" ? "Ask a question…" : "Ask about the selected PDFs…"}
         disabled={pending}
         rows={3}
         aria-describedby="chat-composer-help"
       />
       <div className="chat-composer__foot">
-        <span className="chat-composer__context">{modelStatus}</span>
         <div className="chat-composer__actions">
           {attachmentControl}
           <small aria-live="off">{question.length}/4000</small>

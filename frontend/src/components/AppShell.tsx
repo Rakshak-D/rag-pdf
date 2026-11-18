@@ -3,6 +3,8 @@ import { Link, useLocation } from "react-router-dom";
 
 interface AppShellProps {
   children: ReactNode;
+  readingMode?: boolean;
+  pdfViewerOpen?: boolean;
 }
 
 const sections = [
@@ -20,7 +22,7 @@ function sectionFor(pathname: string): string {
   return "Not found";
 }
 
-export function AppShell({ children }: AppShellProps) {
+export function AppShell({ children, readingMode = false, pdfViewerOpen = false }: AppShellProps) {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -68,7 +70,7 @@ export function AppShell({ children }: AppShellProps) {
     menuButton.current?.focus();
   };
 
-  return <div className={`app-frame${collapsed ? " app-frame--collapsed" : ""}${mobileOpen ? " app-frame--mobile-open" : ""}`}>
+  return <div className={`app-frame${collapsed ? " app-frame--collapsed" : ""}${mobileOpen ? " app-frame--mobile-open" : ""}${readingMode ? " app-frame--reading" : ""}${pdfViewerOpen ? " app-frame--pdf-open" : ""}`}>
     <a className="skip-link" href="#main-content">Skip to content</a>
     {mobileOpen ? <button className="mobile-scrim" type="button" aria-label="Close navigation" onClick={closeMobileToButton} /> : null}
     <aside ref={sidebar} id="main-sidebar" className={`sidebar${mobileOpen ? " sidebar--mobile-open" : ""}`} aria-label="Primary sidebar" role={mobileOpen ? "dialog" : undefined} aria-modal={mobileOpen || undefined}>

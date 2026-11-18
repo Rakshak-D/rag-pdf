@@ -110,5 +110,5 @@ export function useConversations() {
     remove,
   };
 }
-function empty(): Session { const c = fresh("general"); return { version: 1, activeId: c.id, conversations: [c] }; }
+function empty(): Session { const c = fresh("document"); return { version: 1, activeId: c.id, conversations: [c] }; }
 export type ConversationStore = ReturnType<typeof useConversations>;

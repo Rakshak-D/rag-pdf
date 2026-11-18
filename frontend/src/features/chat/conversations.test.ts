@@ -80,6 +80,7 @@ describe("application conversation ownership", () => {
 describe("last active conversation per mode", () => {
   it("returns to the selected older chat rather than the newest created chat", () => {
     const { result } = renderHook(() => useConversations());
+    act(() => result.current.setMode("general"));
     const a = result.current.active.id;
     act(() => result.current.setQuestion("A"));
     act(() => result.current.create("general"));
