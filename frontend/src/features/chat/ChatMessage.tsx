@@ -20,6 +20,12 @@ function sourceForLabel(response: AskResponse, label: string): SourceEvidence | 
     response.image_evidence.find((evidence) => evidence.label === label) ?? null;
 }
 
+function sourceAccessibleName(evidence: SourceEvidence): string {
+  const type = "passage" in evidence ? "Text source" : "Figure source";
+  const page = evidence.page_number === null ? "page not identified" : `page ${evidence.page_number}`;
+  return `${type} ${evidence.label}, ${page}`;
+}
+
 function quote(passage: string): string {
   const words = passage.trim().split(/\s+/u).filter(Boolean);
   if (words.length <= 25) return passage.trim();
@@ -37,13 +43,15 @@ function citedText(
   return text.split(/(\[[TI][0-9]{1,3}\])/g).map((part, index) => {
     const match = /^\[([TI][0-9]{1,3})\]$/.exec(part);
     const label = match?.[1];
-    if (!label || !permitted.has(label) || !sourceForLabel(response, label)) return <span key={`${index}-${part}`}>{part}</span>;
+    const evidence = label ? sourceForLabel(response, label) : null;
+    if (!label || !permitted.has(label) || !evidence) return <span key={`${index}-${part}`}>{part}</span>;
     const id = `citation-${messageId}-${label}`;
     return <button
       id={id}
       className={`chat-citation${activeLabel === label ? " is-active" : ""}`}
       type="button"
       key={`${index}-${part}`}
+      aria-label={sourceAccessibleName(evidence)}
       aria-expanded={activeLabel === label}
       aria-controls={`citation-popover-${messageId}`}
       onClick={(event) => onSelect(label, event.currentTarget)}
@@ -95,7 +103,7 @@ export function ChatMessage({ message, selectedFingerprint, imageUrls, onOpenEvi
             id={`source-open-${message.id}-${activeSource.label}`}
             type="button"
             onClick={() => onOpenDocument(message, activeSource, `citation-${message.id}-${activeSource.label}`)}
-          >Open page {activeSource.page_number}</button> : <span>Page unavailable</span>}
+          >Open page {activeSource.page_number}</button> : null}
           <button type="button" className="chat-citation-popover__close" aria-label="Close citation" onClick={() => {
             setActiveLabel(null);
             requestAnimationFrame(() => activeTrigger.current?.focus());
