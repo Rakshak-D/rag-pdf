@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { CSSProperties } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { AnnotationMode, GlobalWorkerOptions, getDocument, TextLayer, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from "pdfjs-dist";
+import { AnnotationMode, GlobalWorkerOptions, getDocument, TextLayer, type PDFDocumentLoadingTask, type PDFDocumentProxy, type PDFPageProxy, type RenderTask } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { ApiError, BootstrapApiClient } from "../../api/client";
 import type { BootstrapDocumentContent } from "../../api/types";
-import { locatePassage, measurePassageGeometry, type TextItemBounds } from "./passageLocation";
+import { locatePassage, measurePassageGeometry, measureTextFragment, type TextItemBounds } from "./passageLocation";
 import "./document-viewer.css";
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -24,7 +24,15 @@ type RouteContext = {
   textEvidence?: unknown;
 };
 type ViewerState = { kind: "loading" } | { kind: "ready"; content: Omit<BootstrapDocumentContent, "bytes">; pdf: PDFDocumentProxy } | { kind: "error"; message: string };
-type RenderedTextLayer = { page: number; scale: number; rotation: number; layer: TextLayer };
+type PdfTransform = [number, number, number, number, number, number];
+type RenderedTextLayer = {
+  page: number;
+  scale: number;
+  rotation: number;
+  layer: TextLayer;
+  lineBreakAfter: boolean[];
+  textToViewport: PdfTransform | null;
+};
 type EvidenceMark = { left: number; top: number; width: number; height: number; itemIndex: number };
 type CitedMatch = { label: string; documentId: string; manifestHash: string; page: number; passage: string };
 type EvidenceState = { status: "none" } | { status: "matched"; marks: EvidenceMark[] } | { status: "unresolved"; reason: string };
@@ -38,20 +46,105 @@ function clearCanvas(canvas: HTMLCanvasElement): void {
   canvas.style.height = "";
 }
 
-function renderedTextItemBounds(layer: TextLayer): Array<TextItemBounds | null> {
-  return layer.textDivs.map((textDiv) => {
+function renderedTextItemBounds(layer: TextLayer, lineBreakAfter: readonly boolean[]): Array<TextItemBounds | null> {
+  if (lineBreakAfter.length !== layer.textContentItemsStr.length || layer.textDivs.length !== layer.textContentItemsStr.length) {
+    return layer.textDivs.map(() => null);
+  }
+  const metricsCanvas = document.createElement("canvas");
+  const metrics = metricsCanvas.getContext("2d");
+  if (!metrics) return layer.textDivs.map(() => null);
+  return layer.textDivs.map((textDiv, index) => {
     if (!textDiv?.isConnected) return null;
     const rect = textDiv.getBoundingClientRect();
-    const direction = getComputedStyle(textDiv).direction;
+    const computed = getComputedStyle(textDiv);
+    const direction = computed.direction;
     if (direction !== "ltr" && direction !== "rtl") return null;
+    const transform = computed.transform === "none" ? new DOMMatrixReadOnly() : new DOMMatrixReadOnly(computed.transform);
+    const inlineScale = Math.hypot(transform.a, transform.b);
+    const blockScale = Math.hypot(transform.c, transform.d);
+    const fontHeight = Number.parseFloat(computed.fontSize) * blockScale;
+    metrics.font = computed.font;
+    const spaceAdvance = metrics.measureText(" ").width * inlineScale;
+    if (![inlineScale, blockScale, fontHeight, spaceAdvance].every(Number.isFinite) || inlineScale <= 0 || blockScale <= 0 ||
+      fontHeight <= 0 || spaceAdvance <= 0) return null;
+    const readingSign = direction === "rtl" ? -1 : 1;
     return {
       left: rect.left,
       top: rect.top,
       right: rect.right,
       bottom: rect.bottom,
       direction,
+      axisX: (transform.a / inlineScale) * readingSign,
+      axisY: (transform.b / inlineScale) * readingSign,
+      fontHeight,
+      spaceAdvance,
+      lineBreakAfter: lineBreakAfter[index] ?? false,
     };
   });
+}
+
+function pdfJsLineBreakAfter(items: readonly unknown[]): boolean[] {
+  const textItems = items.filter((item): item is { str: string; hasEOL?: boolean } =>
+    Boolean(item && typeof item === "object" && "str" in item && typeof (item as { str?: unknown }).str === "string"));
+  return textItems.map((item, index) => {
+    if (item.hasEOL) return true;
+    for (let next = index + 1; next < textItems.length; next += 1) {
+      const following = textItems[next]!;
+      if (following.str.length > 0) return false;
+      if (following.hasEOL) return true;
+    }
+    return false;
+  });
+}
+
+function inverseTransform([a, b, c, d, e, f]: PdfTransform): PdfTransform | null {
+  const determinant = a * d - b * c;
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < Number.EPSILON) return null;
+  return [
+    d / determinant,
+    -b / determinant,
+    -c / determinant,
+    a / determinant,
+    (c * f - d * e) / determinant,
+    (b * e - a * f) / determinant,
+  ];
+}
+
+function multiplyTransforms(left: PdfTransform, right: PdfTransform): PdfTransform {
+  return [
+    left[0] * right[0] + left[2] * right[1],
+    left[1] * right[0] + left[3] * right[1],
+    left[0] * right[2] + left[2] * right[3],
+    left[1] * right[2] + left[3] * right[3],
+    left[0] * right[4] + left[2] * right[5] + left[4],
+    left[1] * right[4] + left[3] * right[5] + left[5],
+  ];
+}
+
+function textToViewportTransform(
+  pdfPage: PDFPageProxy,
+  viewport: ReturnType<PDFPageProxy["getViewport"]>,
+): PdfTransform | null {
+  const baseViewport = pdfPage.getViewport({ scale: viewport.scale, rotation: 0 });
+  const inverseBase = inverseTransform(baseViewport.transform as PdfTransform);
+  return inverseBase ? multiplyTransforms(viewport.transform as PdfTransform, inverseBase) : null;
+}
+
+function transformRect(rect: DOMRect, transform: PdfTransform): DOMRect {
+  const points = [
+    [rect.left, rect.top],
+    [rect.right, rect.top],
+    [rect.left, rect.bottom],
+    [rect.right, rect.bottom],
+  ].map(([x = 0, y = 0]) => ({
+    x: transform[0] * x + transform[2] * y + transform[4],
+    y: transform[1] * x + transform[3] * y + transform[5],
+  }));
+  const xs = points.map(({ x }) => x);
+  const ys = points.map(({ y }) => y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return new DOMRect(left, top, Math.max(...xs) - left, Math.max(...ys) - top);
 }
 
 function mediaQuery(query: string): MediaQueryList | null {
@@ -348,11 +441,19 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
         if (!isCurrent()) return;
         const textContent = await pdfPage.getTextContent();
         if (!isCurrent()) return;
+        const lineBreakAfter = pdfJsLineBreakAfter(textContent.items);
         const textLayer = new TextLayer({ textContentSource: textContent, container: textHost, viewport });
         textLayerRef.current = textLayer;
         await textLayer.render();
         if (isCurrent()) {
-          setRenderedTextLayer({ page, scale, rotation: viewport.rotation, layer: textLayer });
+          setRenderedTextLayer({
+            page,
+            scale,
+            rotation: viewport.rotation,
+            layer: textLayer,
+            lineBreakAfter,
+            textToViewport: textToViewportTransform(pdfPage, viewport),
+          });
           setRenderStatus("ready");
         }
       } catch (error: unknown) {
@@ -396,7 +497,7 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
 
     const layer = renderedTextLayer.layer;
     const textItems = layer.textContentItemsStr;
-    const textItemBounds = renderedTextItemBounds(layer);
+    const textItemBounds = renderedTextItemBounds(layer, renderedTextLayer.lineBreakAfter);
     const result = locatePassage({
       loadedDocumentId: viewer.content.document_id,
       citedDocumentId,
@@ -415,7 +516,12 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
     }
 
     const frameRect = pageFrame.current.getBoundingClientRect();
-    const geometry = measurePassageGeometry(result.fragments, textItems, layer.textDivs, frameRect);
+    const textToViewport = renderedTextLayer.textToViewport;
+    const geometry = measurePassageGeometry(result.fragments, textItems, layer.textDivs, frameRect,
+      (textDiv, fragment, pageRect) => {
+        if (!textToViewport) return [];
+        return measureTextFragment(textDiv, fragment, pageRect).map((rect) => transformRect(rect, textToViewport));
+      });
     if (geometry.status !== "matched") {
       setEvidenceState({ status: "unresolved", reason: geometry.reason });
       return;
@@ -437,7 +543,11 @@ export function DocumentViewerPage({ token }: { token: string | null }) {
         textItemBounds,
       });
       if (located.status !== "matched") return [];
-      const matchGeometry = measurePassageGeometry(located.fragments, textItems, layer.textDivs, frameRect);
+      const matchGeometry = measurePassageGeometry(located.fragments, textItems, layer.textDivs, frameRect,
+        (textDiv, fragment, pageRect) => {
+          if (!textToViewport) return [];
+          return measureTextFragment(textDiv, fragment, pageRect).map((rect) => transformRect(rect, textToViewport));
+        });
       return matchGeometry.status === "matched"
         ? [{ label: match.label, marks: matchGeometry.marks }]
         : [];

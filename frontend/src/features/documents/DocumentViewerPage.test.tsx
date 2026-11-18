@@ -41,7 +41,13 @@ function route(initial = `/documents/view/${documentId}?manifest_hash=${manifest
 function pdfMocks(pageCount = 3) {
   const renderTask = { promise: Promise.resolve(), cancel: vi.fn() };
   const page = {
-    getViewport: vi.fn(({ scale }: { scale: number }) => ({ width: 612 * scale, height: 792 * scale })),
+    getViewport: vi.fn(({ scale }: { scale: number }) => ({
+      width: 612 * scale,
+      height: 792 * scale,
+      rotation: 0,
+      scale,
+      transform: [scale, 0, 0, -scale, 0, 792 * scale],
+    })),
     render: vi.fn(() => renderTask),
     getTextContent: vi.fn(async () => ({ items: [] })),
     cleanup: vi.fn(),
