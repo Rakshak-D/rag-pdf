@@ -32,6 +32,7 @@ export default defineConfig({
       url: `${fixtureUrl}/health`,
       reuseExistingServer: false,
       timeout: 30_000,
+      gracefulShutdown: { signal: "SIGINT", timeout: 5_000 },
       env: { NASA_FIXTURE_PORT: "4214" },
     },
     {

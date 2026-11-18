@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const port = Number(process.env.NASA_FIXTURE_PORT ?? 4174);
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const pdfPath = fileURLToPath(new URL("../../../data/pdf/mars-science-laboratory.pdf", import.meta.url));
 const figurePath = fileURLToPath(new URL("../../../data/images_pymupdf/mars-science-laboratory/page_2_img_0.png", import.meta.url));
 const pdf = await readFile(pdfPath);
@@ -27,6 +30,40 @@ const sample = {
   size_bytes: pdf.byteLength,
   sha256: pdfSha,
 };
+const layoutFixtureDir = await mkdtemp(path.join(tmpdir(), "rag-pdf-pdfjs-layout-"));
+const python = process.env.PYTHON ?? (process.platform === "win32" ? "py" : "python3");
+const layoutGenerator = path.join(repoRoot, "scripts", "generate_pdfjs_layout_fixtures.py");
+const pythonArguments = process.platform === "win32" && !process.env.PYTHON ? ["-3.10"] : [];
+const generated = spawnSync(python, [...pythonArguments, layoutGenerator, "--output-dir", layoutFixtureDir], {
+  cwd: repoRoot,
+  encoding: "utf8",
+  windowsHide: true,
+});
+if (generated.error || generated.status !== 0) {
+  await rm(layoutFixtureDir, { recursive: true, force: true });
+  const detail = generated.error?.message ?? generated.stderr?.trim() ?? `exit ${generated.status}`;
+  throw new Error(`The pinned PyMuPDF layout fixture generator failed: ${detail}`);
+}
+const generatedLayoutManifest = JSON.parse(await readFile(path.join(layoutFixtureDir, "manifest.json"), "utf8"));
+const layoutPdfBytes = new Map();
+const layoutDocuments = new Map();
+for (const entry of generatedLayoutManifest.documents) {
+  const bytes = await readFile(path.join(layoutFixtureDir, entry.file));
+  const actualSha = createHash("sha256").update(bytes).digest("hex");
+  if (actualSha !== entry.sha256) throw new Error("The generated layout fixture checksum did not match its manifest.");
+  const document = {
+    document_id: `doc_${actualSha}`,
+    manifest_hash: createHash("sha256").update(`pdfjs-layout-fixture:${actualSha}`).digest("hex"),
+    relative_path: entry.file,
+    size_bytes: bytes.byteLength,
+    sha256: actualSha,
+    page_count: entry.page_count,
+    pages: entry.pages,
+    cases: entry.cases,
+  };
+  layoutPdfBytes.set(document.document_id, bytes);
+  layoutDocuments.set(document.document_id, document);
+}
 
 const evidence = {
   link: {
@@ -175,28 +212,48 @@ const server = createServer(async (request, response) => {
     });
     return;
   }
-  if (request.method === "GET" && /^\/bootstrap-api\/v1\/bootstrap\/documents\/doc_[0-9a-f]{64}\/content$/u.test(url.pathname) &&
-    url.pathname !== `/bootstrap-api/v1/bootstrap/documents/${documentId}/content`) {
-    sendJson(response, 404, { error: { code: "document_not_found" } });
+  if (request.method === "GET" && url.pathname === "/bootstrap-api/test-fixtures/layout-manifest") {
+    sendJson(response, 200, {
+      generator: generatedLayoutManifest.generator,
+      pymupdf_version: generatedLayoutManifest.pymupdf_version,
+      oracle: generatedLayoutManifest.oracle,
+      documents: [...layoutDocuments.values()],
+    });
     return;
   }
-  if (request.method === "GET" && url.pathname === `/bootstrap-api/v1/bootstrap/documents/${documentId}/content`) {
-    if (url.searchParams.get("manifest_hash") !== manifestHash) {
+  const contentDocumentMatch = url.pathname.match(/^\/bootstrap-api\/v1\/bootstrap\/documents\/(doc_[0-9a-f]{64})\/content$/u);
+  if (request.method === "GET" && contentDocumentMatch) {
+    const requestedId = contentDocumentMatch[1];
+    const layoutDocument = layoutDocuments.get(requestedId);
+    if (requestedId !== documentId && !layoutDocument) {
+      sendJson(response, 404, { error: { code: "document_not_found" } });
+      return;
+    }
+    const selected = requestedId === documentId ? {
+      document_id: documentId, manifest_hash: manifestHash, relative_path: sample.relative_path,
+      sha256: pdfSha, page_count: 4, size_bytes: pdf.byteLength,
+    } : layoutDocument;
+    const bytes = requestedId === documentId ? pdf : layoutPdfBytes.get(requestedId);
+    if (!bytes) {
+      sendJson(response, 404, { error: { code: "document_not_found" } });
+      return;
+    }
+    if (url.searchParams.get("manifest_hash") !== selected.manifest_hash) {
       sendJson(response, 409, { error: { code: "document_manifest_changed" } });
       return;
     }
     response.writeHead(200, {
       "Content-Type": "application/pdf",
-      "Content-Length": String(pdf.byteLength),
+      "Content-Length": String(bytes.byteLength),
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
-      "X-Rag-Document-Id": documentId,
-      "X-Rag-Document-Sha256": pdfSha,
-      "X-Rag-Manifest-Hash": manifestHash,
-      "X-Rag-Document-Name": encodeURIComponent(sample.relative_path),
-      "X-Rag-Page-Count": "4",
+      "X-Rag-Document-Id": selected.document_id,
+      "X-Rag-Document-Sha256": selected.sha256,
+      "X-Rag-Manifest-Hash": selected.manifest_hash,
+      "X-Rag-Document-Name": encodeURIComponent(selected.relative_path),
+      "X-Rag-Page-Count": String(selected.page_count),
     });
-    response.end(pdf);
+    response.end(bytes);
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/v1/ask") {
@@ -219,4 +276,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => process.stdout.write(`NASA test fixture server listening on 127.0.0.1:${port}\n`));
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => server.close(() => process.exit(0)));
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => server.close(async () => {
+  await rm(layoutFixtureDir, { recursive: true, force: true });
+  process.exit(0);
+}));
