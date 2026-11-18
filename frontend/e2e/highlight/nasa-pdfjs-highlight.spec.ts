@@ -101,7 +101,7 @@ async function openCitation(page: Page, label: string, pageNumber: number): Prom
   const citation = page.locator(".chat-citation").filter({ hasText: `[${label}]` });
   await expect(citation).toHaveCount(1);
   await citation.click();
-  const popover = page.getByLabel(`Source ${label}`);
+  const popover = page.getByRole("region", { name: `Source ${label}` });
   await expect(popover).toBeVisible();
   await popover.getByRole("button", { name: `Open page ${pageNumber}` }).click();
   await expect(page.getByRole("dialog", { name: "PDF viewer" })).toBeVisible();
@@ -365,7 +365,7 @@ test("mismatched citation identity cannot borrow the displayed NASA page", async
   await ask(page, LINK_QUESTION);
   const citation = page.locator(".chat-citation").filter({ hasText: "[T1]" });
   await citation.click();
-  await page.getByLabel("Source T1").getByRole("button", { name: "Open page 2" }).click();
+  await page.getByRole("region", { name: "Source T1" }).getByRole("button", { name: "Open page 2" }).click();
   await expect(page.getByRole("dialog", { name: "PDF viewer" })).toBeVisible();
   await expect(page.getByRole("alert")).toContainText("The original PDF is no longer available in this source collection.");
   await expect(page.getByTestId("pdf-evidence-mark")).toHaveCount(0);
@@ -377,11 +377,11 @@ test("citation popovers are click-only, dismiss with Escape and restore focus", 
   await ask(page, LINK_QUESTION);
   const citation = page.locator(".chat-citation").filter({ hasText: "[T1]" });
   await citation.hover();
-  await expect(page.getByLabel("Source T1")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Source T1" })).toHaveCount(0);
   await citation.click();
-  await expect(page.getByLabel("Source T1")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Source T1" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByLabel("Source T1")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Source T1" })).toHaveCount(0);
   await expect(citation).toBeFocused();
   await assertLoopbackOnly(page);
 });
@@ -495,7 +495,7 @@ test("mobile citation remains visible above the bottom sheet and snap behavior s
   await ask(page, LINK_QUESTION);
   const citation = page.locator(".chat-citation").filter({ hasText: "[T2]" });
   await citation.click();
-  await page.getByLabel("Source T2").getByRole("button", { name: "Open page 2" }).click();
+  await page.getByRole("region", { name: "Source T2" }).getByRole("button", { name: "Open page 2" }).click();
   await expect(page.getByRole("dialog", { name: "PDF viewer" })).toHaveAttribute("data-mobile-snap", "30");
   const citeRect = await citation.boundingBox();
   const sheetRect = await page.getByRole("dialog", { name: "PDF viewer" }).boundingBox();

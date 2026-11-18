@@ -733,7 +733,8 @@ describe("chat-first local application", () => {
     await user.keyboard("{Enter}");
     await user.click(await screen.findByRole("button", { name: "Copy answer" }));
     expect(writeText).toHaveBeenCalledWith(askAnswer.answer);
-    const citation = await screen.findByRole("button", { name: "[T1]" });
+    const citation = await screen.findByRole("button", { name: "Text source T1, page 2" });
+    expect(citation).toHaveTextContent("[T1]");
     await user.click(citation);
     const sourcePopover = await screen.findByRole("region", { name: "Source T1" });
     expect(within(sourcePopover).getByText("The figure rises from left to right.")).toBeInTheDocument();
@@ -755,10 +756,10 @@ describe("chat-first local application", () => {
     expect(sourceCall?.[0]).toBe(`/bootstrap-api/v1/bootstrap/documents/doc_${"d".repeat(64)}/content?manifest_hash=${"b".repeat(64)}`);
     expect(new Headers(sourceCall?.[1]?.headers).has("Authorization")).toBe(false);
     await user.click(screen.getByRole("button", { name: "Close PDF viewer" }));
-    expect(await screen.findByRole("button", { name: "[T1]" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Text source T1, page 2" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Message" })).toHaveValue("Draft while I inspect the source");
     expect(await screen.findByRole("region", { name: "Source T1" })).toBeVisible();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "[T1]" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Text source T1, page 2" }));
     expect(await screen.findByRole("img", { name: "Chart evidence" })).toHaveAttribute("src", "blob:document-evidence");
     expect(fetcher.mock.calls.filter(([url]) => String(url).includes("/api/v1/ask/images/")).length).toBe(1);
     expect(revoke).not.toHaveBeenCalled();
@@ -769,7 +770,7 @@ describe("chat-first local application", () => {
     expect(await screen.findByText("The figure shows a steady rise [T1] [I1].")).toBeInTheDocument();
     expect(screen.getByText(/Source links expired when this tab was reloaded/)).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Source T1" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "[T1]" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Text source T1, page 2" })).not.toBeInTheDocument();
   });
 
   it("saves installed model and generation preferences for the next General Chat request", async () => {

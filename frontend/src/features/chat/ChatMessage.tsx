@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { AskResponse } from "../../api/types";
 import type { SourceEvidence } from "./EvidenceInspector";
 import type { Message } from "./conversations";
@@ -20,6 +20,12 @@ function sourceForLabel(response: AskResponse, label: string): SourceEvidence | 
     response.image_evidence.find((evidence) => evidence.label === label) ?? null;
 }
 
+function sourceAccessibleName(evidence: SourceEvidence): string {
+  const type = "passage" in evidence ? "Text source" : "Figure source";
+  const page = evidence.page_number === null ? "page not identified" : `page ${evidence.page_number}`;
+  return `${type} ${evidence.label}, ${page}`;
+}
+
 function quote(passage: string): string {
   const words = passage.trim().split(/\s+/u).filter(Boolean);
   if (words.length <= 25) return passage.trim();
@@ -30,23 +36,27 @@ function citedText(
   text: string,
   response: AskResponse,
   messageId: string,
-  activeLabel: string | null,
-  onSelect: (label: string, trigger: HTMLButtonElement) => void,
+  activeCitation: { label: string; occurrenceId: string } | null,
+  onSelect: (label: string, occurrenceId: string) => void,
 ) {
   const permitted = new Set(response.referenced_citations);
+  let citationOccurrence = 0;
   return text.split(/(\[[TI][0-9]{1,3}\])/g).map((part, index) => {
     const match = /^\[([TI][0-9]{1,3})\]$/.exec(part);
     const label = match?.[1];
-    if (!label || !permitted.has(label) || !sourceForLabel(response, label)) return <span key={`${index}-${part}`}>{part}</span>;
-    const id = `citation-${messageId}-${label}`;
+    const evidence = label ? sourceForLabel(response, label) : null;
+    if (!label || !permitted.has(label) || !evidence) return <span key={`${index}-${part}`}>{part}</span>;
+    const occurrenceId = `citation-${messageId}-${citationOccurrence++}`;
+    const isActive = activeCitation?.occurrenceId === occurrenceId;
     return <button
-      id={id}
-      className={`chat-citation${activeLabel === label ? " is-active" : ""}`}
+      id={occurrenceId}
+      className={`chat-citation${isActive ? " is-active" : ""}`}
       type="button"
       key={`${index}-${part}`}
-      aria-expanded={activeLabel === label}
-      aria-controls={`citation-popover-${messageId}`}
-      onClick={(event) => onSelect(label, event.currentTarget)}
+      aria-label={sourceAccessibleName(evidence)}
+      aria-expanded={isActive}
+      aria-controls={isActive ? `citation-popover-${messageId}` : undefined}
+      onClick={() => onSelect(label, occurrenceId)}
     >{part}</button>;
   });
 }
@@ -54,30 +64,28 @@ function citedText(
 export function ChatMessage({ message, selectedFingerprint, imageUrls, onOpenEvidence, onOpenDocument, onCopy }: Props) {
   const response = message.document;
   const evidenceCount = (response?.text_evidence.length ?? 0) + (response?.image_evidence.length ?? 0);
-  const [activeLabel, setActiveLabel] = useState<string | null>(null);
-  const activeTrigger = useRef<HTMLButtonElement | null>(null);
-  const activeSource = response && activeLabel ? sourceForLabel(response, activeLabel) : null;
+  const [activeCitation, setActiveCitation] = useState<{ label: string; occurrenceId: string } | null>(null);
+  const activeSource = response && activeCitation ? sourceForLabel(response, activeCitation.label) : null;
 
   useEffect(() => {
-    if (!activeLabel) return;
+    if (!activeCitation) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      setActiveLabel(null);
-      requestAnimationFrame(() => activeTrigger.current?.focus());
+      const occurrenceId = activeCitation.occurrenceId;
+      setActiveCitation(null);
+      requestAnimationFrame(() => document.getElementById(occurrenceId)?.focus());
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [activeLabel]);
+  }, [activeCitation]);
 
-  const onSelectCitation = (label: string, trigger: HTMLButtonElement) => {
-    if (activeLabel === label) {
-      setActiveLabel(null);
-      activeTrigger.current = null;
+  const onSelectCitation = (label: string, occurrenceId: string) => {
+    if (activeCitation?.occurrenceId === occurrenceId) {
+      setActiveCitation(null);
       return;
     }
-    activeTrigger.current = trigger;
-    setActiveLabel(label);
+    setActiveCitation({ label, occurrenceId });
   };
 
   const images = response?.image_evidence ?? [];
@@ -85,20 +93,21 @@ export function ChatMessage({ message, selectedFingerprint, imageUrls, onOpenEvi
     {message.role === "user" ? <p className="chat-message__user-text">{message.text}</p> : null}
     {message.role === "assistant" ? <div className="chat-message__body">
       <p className="chat-message__text">{response?.outcome === "answered"
-        ? citedText(message.text, response, message.id, activeLabel, onSelectCitation)
+        ? citedText(message.text, response, message.id, activeCitation, onSelectCitation)
         : message.text}</p>
-      {activeSource && response ? <section className="chat-citation-popover" id={`citation-popover-${message.id}`} aria-label={`Source ${activeSource.label}`}>
+      {activeSource && response && activeCitation ? <section className="chat-citation-popover" id={`citation-popover-${message.id}`} aria-label={`Source ${activeSource.label}`}>
         <p>{"passage" in activeSource ? quote(activeSource.passage) : quote(activeSource.caption)}</p>
         <div className="chat-citation-popover__foot">
           <span>{activeSource.page_number === null ? "Page unavailable" : `Page ${activeSource.page_number}`}</span>
           {activeSource.page_number !== null ? <button
             id={`source-open-${message.id}-${activeSource.label}`}
             type="button"
-            onClick={() => onOpenDocument(message, activeSource, `citation-${message.id}-${activeSource.label}`)}
-          >Open page {activeSource.page_number}</button> : <span>Page unavailable</span>}
+            onClick={() => onOpenDocument(message, activeSource, activeCitation.occurrenceId)}
+          >Open page {activeSource.page_number}</button> : null}
           <button type="button" className="chat-citation-popover__close" aria-label="Close citation" onClick={() => {
-            setActiveLabel(null);
-            requestAnimationFrame(() => activeTrigger.current?.focus());
+            const occurrenceId = activeCitation.occurrenceId;
+            setActiveCitation(null);
+            requestAnimationFrame(() => document.getElementById(occurrenceId)?.focus());
           }}>×</button>
         </div>
       </section> : null}
