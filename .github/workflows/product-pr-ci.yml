@@ -53,6 +53,9 @@ jobs:
           tests/unit/test_paths_and_fingerprint.py
           tests/unit/test_retrieval_contracts.py
           tests/unit/test_run_plans.py
+          tests/unit/test_general_chat.py
+          tests/unit/test_generation_contracts.py
+          tests/integration/test_general_chat_api.py
 
       - name: Ruff — reject new findings against recorded baseline
         run: |
