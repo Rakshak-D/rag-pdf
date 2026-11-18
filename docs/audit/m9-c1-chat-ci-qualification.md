@@ -117,6 +117,11 @@ requests.
 - The workflow parsed successfully with the already pinned PyYAML dependency;
   `actionlint` was not installed locally.
 - `git diff --check` passed.
+- An intermediate push run created no jobs and GitHub classified it as a
+  workflow-file issue. Review found `runner.temp` had been used in
+  job-level `env`, where that context is unavailable. The expression is now
+  scoped to the two consuming steps; the final-head run is required to verify
+  this correction.
 
 ## PR #11 documentation coordination
 
