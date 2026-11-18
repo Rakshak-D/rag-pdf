@@ -1,0 +1,2 @@
+# Exact generator used by the deterministic PDF.js layout fixtures.
+PyMuPDF==1.26.7

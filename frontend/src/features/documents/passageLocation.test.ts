@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { locatePassage, locatePassageText, measurePassageGeometry, type PassageFragment } from "./passageLocation";
+import { locatePassage, locatePassageText, measurePassageGeometry, type PassageFragment, type TextItemBounds } from "./passageLocation";
 
 const documentId = `doc_${"a".repeat(64)}`;
 const manifestHash = "b".repeat(64);
@@ -19,6 +19,24 @@ function locate(passage: string, textItems: readonly string[], overrides: Partia
   });
 }
 
+function bounds(
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+  options: Partial<Pick<TextItemBounds, "axisX" | "axisY" | "fontHeight" | "spaceAdvance" | "lineBreakAfter" | "direction">> = {},
+): TextItemBounds {
+  return {
+    left, top, right, bottom,
+    direction: options.direction ?? "ltr",
+    axisX: options.axisX ?? 1,
+    axisY: options.axisY ?? 0,
+    fontHeight: options.fontHeight ?? 10,
+    spaceAdvance: options.spaceAdvance ?? 5,
+    lineBreakAfter: options.lineBreakAfter ?? false,
+  };
+}
+
 describe("locatePassage", () => {
   it("matches text fragmented across rendered PDF.js items and ignores surrounding line text", () => {
     const result = locate(
@@ -28,6 +46,13 @@ describe("locatePassage", () => {
         "pebbles mixed with hardened sand in conglomerate rocks at and",
         "near the landing site. Analysis of Mars' atmospheric composition",
       ],
+      {
+        textItemBounds: [
+          bounds(10, 10, 230, 20, { lineBreakAfter: true }),
+          bounds(10, 25.5, 230, 35.5, { lineBreakAfter: true }),
+          bounds(10, 41, 230, 51),
+        ],
+      },
     );
 
     expect(result).toEqual({
@@ -42,8 +67,8 @@ describe("locatePassage", () => {
 
   it("handles a word split across PDF.js text items without inserting a guessed space", () => {
     expect(locatePassageText(["depo", "sition of water"], "deposition of water", [
-      { left: 10, top: 20, right: 34, bottom: 30, direction: "ltr" },
-      { left: 34, top: 20, right: 92, bottom: 30, direction: "ltr" },
+      bounds(10, 20, 34, 30),
+      bounds(34, 20, 92, 30),
     ])).toEqual({
       status: "matched",
       fragments: [
@@ -60,12 +85,12 @@ describe("locatePassage", () => {
   it("rejects split-word items on another line or distant in the same line", () => {
     const separatedItems = ["depo", "sition"];
     const separateColumn = locatePassageText(separatedItems, "deposition", [
-      { left: 10, top: 20, right: 34, bottom: 30, direction: "ltr" },
-      { left: 90, top: 20, right: 148, bottom: 30, direction: "ltr" },
+      bounds(10, 20, 34, 30),
+      bounds(90, 20, 148, 30),
     ]);
     const separateLine = locatePassageText(separatedItems, "deposition", [
-      { left: 10, top: 20, right: 34, bottom: 30, direction: "ltr" },
-      { left: 10, top: 50, right: 68, bottom: 60, direction: "ltr" },
+      bounds(10, 20, 34, 30, { lineBreakAfter: true }),
+      bounds(10, 50, 68, 60),
     ]);
 
     expect(separateColumn.status).toBe("unresolved");
@@ -73,7 +98,50 @@ describe("locatePassage", () => {
   });
 
   it("normalizes whitespace and typographic apostrophes conservatively", () => {
-    expect(locate("Mars’ early\n history", ["Mars'", "early   history"]).status).toBe("matched");
+    expect(locate("Mars’ early\n history", ["Mars'", "early   history"], {
+      textItemBounds: [bounds(10, 20, 35, 30), bounds(40, 20, 100, 30)],
+    }).status).toBe("matched");
+  });
+
+  it("requires inserted spaces to follow actual same-line text geometry", () => {
+    const separateColumns = locatePassageText(["left source phrase", "right column claim"], "left source phrase right column claim", [
+      bounds(10, 20, 110, 30),
+      bounds(220, 20, 330, 30),
+    ]);
+    const distantExtractionNeighbors = locatePassageText(["source phrase", "unrelated continuation"], "source phrase unrelated continuation", [
+      bounds(10, 20, 105, 30),
+      bounds(10, 80, 150, 90),
+    ]);
+
+    expect(separateColumns).toEqual({ status: "unresolved", reason: "discontinuous" });
+    expect(distantExtractionNeighbors).toEqual({ status: "unresolved", reason: "discontinuous" });
+  });
+
+  it("accepts a line-wrapped passage only when PDF.js marks adjacent lines in the same reading column", () => {
+    const items = ["legitimate passage continues", "", "on the next line exactly"];
+    const matching = locatePassageText(items, "legitimate passage continues on the next line exactly", [
+      bounds(20, 20, 180, 30, { lineBreakAfter: true }),
+      null,
+      bounds(20, 35.5, 160, 45.5),
+    ]);
+    const otherColumn = locatePassageText(items, "legitimate passage continues on the next line exactly", [
+      bounds(20, 20, 180, 30, { lineBreakAfter: true }),
+      null,
+      bounds(240, 35.5, 380, 45.5),
+    ]);
+
+    expect(matching.status).toBe("matched");
+    expect(otherColumn).toEqual({ status: "unresolved", reason: "discontinuous" });
+  });
+
+  it("keeps a cited range limited to its source phrase when unrelated words share the text item", () => {
+    const source = "Verified source passage. Unrelated footer text.";
+    const result = locatePassageText([source], "Verified source passage.");
+
+    expect(result).toEqual({
+      status: "matched",
+      fragments: [{ itemIndex: 0, startOffset: 0, endOffset: "Verified source passage.".length }],
+    });
   });
 
   it("rejects a repeated passage instead of selecting the first occurrence", () => {

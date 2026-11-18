@@ -10,6 +10,14 @@ export interface TextItemBounds {
   right: number;
   bottom: number;
   direction: "ltr" | "rtl" | "ttb";
+  /** Unit vector in PDF.js reading order, derived from the rendered text span transform. */
+  axisX: number;
+  axisY: number;
+  /** Rendered font size and one measured space advance, in CSS pixels. */
+  fontHeight: number;
+  spaceAdvance: number;
+  /** PDF.js marks an explicit line break after this text item. */
+  lineBreakAfter: boolean;
 }
 
 export interface PageRelativeRect {
@@ -151,42 +159,117 @@ function fragmentKey(fragments: readonly PassageFragment[]): string {
 }
 
 function finiteBounds(bounds: TextItemBounds | null | undefined): bounds is TextItemBounds {
-  return Boolean(bounds && [bounds.left, bounds.top, bounds.right, bounds.bottom].every(Number.isFinite) &&
-    bounds.right > bounds.left && bounds.bottom > bounds.top);
+  return Boolean(bounds && [bounds.left, bounds.top, bounds.right, bounds.bottom,
+    bounds.axisX, bounds.axisY, bounds.fontHeight, bounds.spaceAdvance].every(Number.isFinite) &&
+    bounds.right > bounds.left && bounds.bottom > bounds.top && bounds.fontHeight > 0 && bounds.spaceAdvance > 0 &&
+    typeof bounds.lineBreakAfter === "boolean" &&
+    Math.abs(Math.hypot(bounds.axisX, bounds.axisY) - 1) < Number.EPSILON * 128);
 }
 
-function sameRenderedWordRun(left: TextItemBounds, right: TextItemBounds): boolean {
-  if (left.direction !== right.direction || (left.direction !== "ltr" && left.direction !== "rtl")) return false;
-
-  // PDF.js positions adjacent text runs from their rendered advance boxes. A
-  // word may cross items only when those boxes share a baseline and their
-  // writing-direction edges touch. The epsilon covers floating-point
-  // roundoff only; it is not a visual-distance threshold.
-  const coordinates = [left.left, left.right, left.bottom, right.left, right.right, right.bottom];
-  const epsilon = Math.max(1, ...coordinates.map(Math.abs)) * Number.EPSILON * 64;
-  const edgeGap = left.direction === "ltr" ? right.left - left.right : left.left - right.right;
-  return Math.abs(edgeGap) <= epsilon && Math.abs(left.bottom - right.bottom) <= epsilon;
+interface ProjectedTextRun {
+  axisX: number;
+  axisY: number;
+  start: number;
+  end: number;
+  baseline: number;
 }
 
-function hasVerifiedWordContinuity(
+function projectedTextRun(bounds: TextItemBounds): ProjectedTextRun | null {
+  const axisX = bounds.axisX;
+  const axisY = bounds.axisY;
+  const epsilon = Number.EPSILON * 128;
+  // The DOMRect is an axis-aligned box. Its projection is exact for horizontal
+  // and vertical PDF.js text runs (including 90-degree rotated pages). For an
+  // oblique run, reject cross-item stitching rather than overestimate its edges.
+  if (Math.abs(axisX) > epsilon && Math.abs(axisY) > epsilon) return null;
+
+  const centerX = (bounds.left + bounds.right) / 2;
+  const centerY = (bounds.top + bounds.bottom) / 2;
+  const extent = Math.abs(axisX) * (bounds.right - bounds.left) + Math.abs(axisY) * (bounds.bottom - bounds.top);
+  const centerAlong = centerX * axisX + centerY * axisY;
+  const centerAcross = centerX * -axisY + centerY * axisX;
+  return {
+    axisX,
+    axisY,
+    start: centerAlong - extent / 2,
+    end: centerAlong + extent / 2,
+    baseline: centerAcross,
+  };
+}
+
+function continuityEpsilon(...values: number[]): number {
+  return Math.max(1, ...values.map(Math.abs)) * Number.EPSILON * 128;
+}
+
+function sameReadingAxis(left: ProjectedTextRun, right: ProjectedTextRun): boolean {
+  const cross = left.axisX * right.axisY - left.axisY * right.axisX;
+  const dot = left.axisX * right.axisX + left.axisY * right.axisY;
+  return Math.abs(cross) <= Number.EPSILON * 128 && dot > 0;
+}
+
+function sameRenderedLine(left: TextItemBounds, right: TextItemBounds, epsilon: number): boolean {
+  const leftRun = projectedTextRun(left);
+  const rightRun = projectedTextRun(right);
+  return Boolean(leftRun && rightRun && sameReadingAxis(leftRun, rightRun) &&
+    Math.abs(leftRun.baseline - rightRun.baseline) <= epsilon);
+}
+
+function lineContinuation(left: TextItemBounds, right: TextItemBounds, epsilon: number): boolean {
+  const leftRun = projectedTextRun(left);
+  const rightRun = projectedTextRun(right);
+  if (!leftRun || !rightRun || !sameReadingAxis(leftRun, rightRun)) return false;
+
+  // A line transition is accepted only when PDF.js supplies an EOL marker, the
+  // next line begins at the same column origin, and the baseline advance is no
+  // more than two rendered font ems. This rejects gaps/column jumps without a
+  // fixed-pixel distance threshold. Split words still require exact same-line
+  // edge contact below.
+  const advance = Math.abs(rightRun.baseline - leftRun.baseline);
+  return left.lineBreakAfter && Math.abs(rightRun.start - leftRun.start) <= epsilon &&
+    advance > epsilon && advance <= 2 * Math.max(left.fontHeight, right.fontHeight);
+}
+
+function hasVerifiedTextContinuity(
   fragments: readonly PassageFragment[],
   textItems: readonly string[],
   textItemBounds: readonly (TextItemBounds | null | undefined)[] | undefined,
+  allowLineBreaks: boolean,
 ): boolean {
   for (let index = 1; index < fragments.length; index += 1) {
     const previous = fragments[index - 1]!;
     const current = fragments[index]!;
     if (previous.itemIndex === current.itemIndex) continue;
 
-    const previousText = textItems[previous.itemIndex]?.slice(previous.startOffset, previous.endOffset) ?? "";
-    const currentText = textItems[current.itemIndex]?.slice(current.startOffset, current.endOffset) ?? "";
-    if (/\s$/u.test(previousText) || /^\s/u.test(currentText)) continue;
-    if (current.itemIndex !== previous.itemIndex + 1) return false;
+    if (current.itemIndex <= previous.itemIndex) return false;
+    for (let skipped = previous.itemIndex + 1; skipped < current.itemIndex; skipped += 1) {
+      if (textItems[skipped] !== "") return false;
+    }
 
     const previousBounds = textItemBounds?.[previous.itemIndex];
     const currentBounds = textItemBounds?.[current.itemIndex];
-    if (!finiteBounds(previousBounds) || !finiteBounds(currentBounds) ||
-      !sameRenderedWordRun(previousBounds, currentBounds)) return false;
+    if (!finiteBounds(previousBounds) || !finiteBounds(currentBounds)) return false;
+    const epsilon = continuityEpsilon(previousBounds.left, previousBounds.top, previousBounds.right, previousBounds.bottom,
+      currentBounds.left, currentBounds.top, currentBounds.right, currentBounds.bottom);
+
+    if (sameRenderedLine(previousBounds, currentBounds, epsilon)) {
+      const previousRun = projectedTextRun(previousBounds);
+      const currentRun = projectedTextRun(currentBounds);
+      if (!previousRun || !currentRun) return false;
+      const gap = currentRun.start - previousRun.end;
+      const previousText = textItems[previous.itemIndex]?.slice(previous.startOffset, previous.endOffset) ?? "";
+      const currentText = textItems[current.itemIndex]?.slice(current.startOffset, current.endOffset) ?? "";
+      const splitWord = !allowLineBreaks && !/\s$/u.test(previousText) && !/^\s/u.test(currentText);
+      if (splitWord ? Math.abs(gap) > epsilon : gap < -epsilon || gap > Math.max(previousBounds.spaceAdvance, currentBounds.spaceAdvance) + epsilon) {
+        return false;
+      }
+      continue;
+    }
+
+    if (!allowLineBreaks || !lineContinuation(previousBounds, currentBounds, epsilon)) return false;
+
+    const previousText = textItems[previous.itemIndex]?.slice(previous.startOffset, previous.endOffset) ?? "";
+    const currentText = textItems[current.itemIndex]?.slice(current.startOffset, current.endOffset) ?? "";
+    if (!allowLineBreaks && !(/\s$/u.test(previousText) || /^\s/u.test(currentText))) return false;
   }
   return true;
 }
@@ -202,13 +285,18 @@ export function locatePassageText(
   const noSeparatorCandidates = findOccurrences(textItems, passage, false);
   let discontinuousCandidate = false;
   const verifiedNoSeparatorCandidates = noSeparatorCandidates.filter((candidate) => {
-    const verified = hasVerifiedWordContinuity(candidate, textItems, textItemBounds);
+    const verified = hasVerifiedTextContinuity(candidate, textItems, textItemBounds, false);
+    if (!verified) discontinuousCandidate = true;
+    return verified;
+  });
+  const separatedCandidates = findOccurrences(textItems, passage, true).filter((candidate) => {
+    const verified = hasVerifiedTextContinuity(candidate, textItems, textItemBounds, true);
     if (!verified) discontinuousCandidate = true;
     return verified;
   });
   const candidates = [
     ...verifiedNoSeparatorCandidates,
-    ...findOccurrences(textItems, passage, true),
+    ...separatedCandidates,
   ];
   const unique = new Map(candidates.map((candidate) => [fragmentKey(candidate), candidate]));
   if (!unique.size) return { status: "unresolved", reason: discontinuousCandidate ? "discontinuous" : "not-found" };
