@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AskResponse } from "../../api/types";
@@ -122,5 +122,53 @@ describe("ChatMessage citations", () => {
     expect(within(region).getByText("The second answer has different evidence.")).toBeInTheDocument();
     expect(citations[0]).toHaveAttribute("aria-expanded", "false");
     expect(secondCitation).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("tracks repeated citations by occurrence and restores the initiating occurrence", async () => {
+    const user = userEvent.setup();
+    const openDocument = vi.fn();
+    const answer = message("answer-repeated", "Evidence supports this [T1], and the conclusion also cites it [T1].", response());
+    render(<ChatMessage
+      message={answer}
+      selectedFingerprint={null}
+      imageUrls={{}}
+      onOpenEvidence={() => undefined}
+      onOpenDocument={openDocument}
+      onCopy={() => undefined}
+    />);
+
+    const citations = screen.getAllByRole("button", { name: "Text source T1, page 2" });
+    expect(citations).toHaveLength(2);
+    const first = citations[0]!;
+    const second = citations[1]!;
+    expect(first).toHaveTextContent("[T1]");
+    expect(second).toHaveTextContent("[T1]");
+    expect(first.id).not.toBe(second.id);
+
+    await user.click(first);
+    expect(first).toHaveAttribute("aria-expanded", "true");
+    expect(second).toHaveAttribute("aria-expanded", "false");
+    const region = screen.getByRole("region", { name: "Source T1" });
+    expect(first).toHaveAttribute("aria-controls", region.id);
+    expect(second).not.toHaveAttribute("aria-controls");
+
+    await user.click(second);
+    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(first).not.toHaveAttribute("aria-controls");
+    expect(second).toHaveAttribute("aria-expanded", "true");
+    expect(second).toHaveAttribute("aria-controls", region.id);
+
+    await user.click(second);
+    expect(screen.queryByRole("region", { name: "Source T1" })).not.toBeInTheDocument();
+    expect(second).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(first);
+    await user.click(second);
+    await user.keyboard("{Escape}");
+    expect(second).toHaveFocus();
+
+    await user.click(second);
+    await user.click(screen.getByRole("button", { name: "Open page 2" }));
+    expect(openDocument).toHaveBeenCalledWith(answer, expect.objectContaining({ label: "T1", page_number: 2 }), second.id);
   });
 });

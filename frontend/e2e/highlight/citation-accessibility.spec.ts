@@ -198,6 +198,68 @@ test("reused citation labels remain tied to their originating answers", async ({
   await assertLoopbackOnly(page);
 });
 
+test("repeated citations in one answer keep unique identity and restore focus to the activated occurrence", async ({ page }) => {
+  await page.route("**/api/v1/ask", async (route) => {
+    const upstream = await route.fetch();
+    const value = await upstream.json() as CitationResponse;
+    value.answer = "The Link outcrop shows evidence of water deposition [T1]. The same passage supports this claim [T1].";
+    await route.fulfill({ response: upstream, json: value });
+  });
+  await openDesk(page);
+  await ask(page);
+
+  const citations = page.getByRole("button", { name: "Text source T1, page 2" });
+  await expect(citations).toHaveCount(2);
+  const first = citations.nth(0);
+  const second = citations.nth(1);
+  await expect(first).toHaveText("[T1]");
+  await expect(second).toHaveText("[T1]");
+  const ids = await citations.evaluateAll((nodes) => nodes.map((node) => node.id));
+  expect(new Set(ids).size).toBe(2);
+
+  await first.click();
+  const regionId = await first.getAttribute("aria-controls");
+  expect(regionId).toBeTruthy();
+  const region = page.locator(`#${regionId}`);
+  await expect(region).toBeVisible();
+  await expect(region).toContainText("deposition of water");
+  await expect(first).toHaveAttribute("aria-expanded", "true");
+  await expect(second).toHaveAttribute("aria-expanded", "false");
+  await expect(second).not.toHaveAttribute("aria-controls", /.+/);
+
+  await second.click();
+  await expect(first).toHaveAttribute("aria-expanded", "false");
+  await expect(first).not.toHaveAttribute("aria-controls", /.+/);
+  await expect(second).toHaveAttribute("aria-expanded", "true");
+  await expect(second).toHaveAttribute("aria-controls", regionId!);
+  await expect(region).toContainText("deposition of water");
+
+  await second.click();
+  await expect(region).toHaveCount(0);
+  await expect(second).toHaveAttribute("aria-expanded", "false");
+
+  await first.focus();
+  await page.keyboard.press("Enter");
+  await expect(first).toHaveAttribute("aria-expanded", "true");
+  await second.focus();
+  await page.keyboard.press("Space");
+  await expect(first).toHaveAttribute("aria-expanded", "false");
+  await expect(second).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(region).toHaveCount(0);
+  await expect(second).toBeFocused();
+
+  await second.click();
+  await page.getByRole("region", { name: "Source T1" }).getByRole("button", { name: "Open page 2" }).click();
+  const viewer = page.getByRole("dialog", { name: "PDF viewer" });
+  await expect(viewer).toBeVisible();
+  await expect(page.getByTestId("pdf-page-frame")).toHaveAttribute("data-page-number", "2");
+  await page.getByRole("button", { name: "Close PDF viewer" }).click();
+  await expect(viewer).toHaveCount(0);
+  await expect(second).toBeFocused();
+  await assertLoopbackOnly(page);
+});
+
 test("mobile modeless sheet permits Tab to leave; modal snaps contain keyboard focus", async ({ page }) => {
   await openDesk(page, 390, 844);
   await ask(page);
