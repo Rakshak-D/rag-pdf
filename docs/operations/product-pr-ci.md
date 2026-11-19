@@ -10,7 +10,8 @@ are installed from the committed lockfile with `npm ci`. The backend installs
 the pinned lightweight set in `scripts/requirements-browser-ci.txt` and the
 exact Ruff pin in `scripts/requirements-product-ci.txt`.
 
-The required backend pytest selection is fixed at these 13 modules:
+The required backend pytest selection is fixed at these 16 modules (15 unit
+modules and one integration module):
 
 - `tests/unit/test_api_schemas.py`
 - `tests/unit/test_local_gateway.py`
@@ -25,22 +26,45 @@ The required backend pytest selection is fixed at these 13 modules:
 - `tests/unit/test_paths_and_fingerprint.py`
 - `tests/unit/test_retrieval_contracts.py`
 - `tests/unit/test_run_plans.py`
+- `tests/unit/test_general_chat.py`
+- `tests/unit/test_generation_contracts.py`
+- `tests/integration/test_general_chat_api.py`
 
 This deterministic baseline covers API and local-gateway contracts, lexical
 retrieval, fusion, ingestion/chunking, source and index contracts, manifests,
-fingerprints, leases, run plans, and resource/model lifecycle decisions. Its
-fixtures use synthetic inputs, temporary directories, or fakes; it does not
-load models or contact Ollama or external APIs.
+fingerprints, leases, run plans, resource/model lifecycle decisions, and
+authenticated General Chat request/failure contracts. Its fixtures use
+synthetic inputs, temporary directories, or fakes. The added
+General Chat service and authenticated API tests use fake Ollama clients; the
+generation-contract tests use deterministic generation failures. They verify
+request and failure contracts. They do not verify genuine Ollama inference or
+real Document Chat generation. The selection does not load models or call
+Ollama.
 
-The remaining 51 unit modules and all 30 integration modules are outside this
-initial required gate. They include broader application/pipeline integration,
+The repository currently contains 64 unit test modules and 30 integration test
+modules. With 15 unit modules and one integration module selected above, the
+remaining 49 unit modules and 29 integration modules are outside this required
+gate. They include broader application/pipeline integration,
 research and evaluation scenarios, model/embedding/reranking implementations,
 image and database workflows, process and platform-specific behavior, and
 other specialized contracts. This exclusion is a scope statement, not a claim
 that those tests fail or are unnecessary. They remain available for their
 appropriate dedicated environments and workflows.
 
-The workflow also runs two focused browser jobs:
+The **Frontend tests, typecheck and production build** job runs the complete
+deterministic Vitest suite, `npm run typecheck`, and `npm run build` using the
+committed lockfile. Together with the backend job and the two browser jobs
+below, this is the four-job product PR gate:
+
+- **Backend tests and Python static analysis** runs the 16 selected pytest
+  modules, Ruff comparator tests, and the pinned Ruff baseline check described
+  above.
+- **Frontend tests, typecheck and production build** runs the frontend checks
+  described above.
+- **NASA PDF.js highlight accuracy** and **Real local PDF document viewer**
+  run the focused browser checks described below.
+
+The two focused browser jobs are:
 
 - **NASA PDF.js highlight accuracy** runs the pinned Playwright suite against
   the tracked NASA PDF and deterministic layout fixtures. It covers source
@@ -52,8 +76,19 @@ The workflow also runs two focused browser jobs:
   It checks document inventory and identity, manifest-change failures, actual
   PDF bytes and viewer rendering. It does not build an index or call a model.
 
-These focused browser jobs do not expand the 13-module backend pytest
+These focused browser jobs do not expand the 16-module backend pytest
 selection above.
+
+Before backend pytest, CI sets `TIKTOKEN_CACHE_DIR` to a temporary job-local
+cache and prepares the `cl100k_base` tokenizer data using pinned
+`tiktoken==0.12.0`. The package validates the downloaded asset against its
+embedded checksum. Dependency installation and tokenizer setup may require
+network access. The M9-C1 qualification demonstrated that pytest can run
+offline after the cache is prepared. GitHub Actions does not enforce network
+isolation for the backend pytest step, so this is qualification evidence rather
+than a CI network-sandbox guarantee. M9-C0's dated audit describes the coverage
+that existed at that audit commit; this current operations guide describes the
+expanded post-M9-C1 selection.
 
 Ruff checks `backend/` and `scripts/` with the Python 3.10 target and the
 `E4`, `E7`, `E9`, and `F` rule families for import, syntax, statement, and
@@ -99,15 +134,18 @@ weaken the configured scope/rules.
 
 A green lint check means **no new Ruff findings relative to the recorded
 baseline**; the 177 existing findings remain visible debt until they are
-intentionally fixed and reconciled. The remaining 51 unit modules and 30
+intentionally fixed and reconciled. The remaining 49 unit modules and 29
 integration modules are outside backend pytest and are not covered by its green
 check. Broader authenticated browser workflows remain outside the two focused
 browser jobs above. The M9-A proof checker that depends on a Windows-specific
 Playwright path is also excluded.
 
 To reproduce the backend checks from the repository root in an isolated Python
-environment, install both requirement files and run the pytest module list
-above followed by the comparator tests and baseline check:
+environment, install both requirement files, prepare `cl100k_base` in a
+temporary `TIKTOKEN_CACHE_DIR`, and run the 16 pytest modules above followed by
+the comparator tests and baseline check. Setup may access the network; after the
+tokenizer cache is prepared, the M9-C1 qualification ran pytest with networking
+disabled. The GitHub Actions backend pytest step itself is not network-isolated.
 
 ```sh
 python -m unittest discover -s scripts/tests -p test_ruff_baseline.py -v

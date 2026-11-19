@@ -37,7 +37,14 @@ jobs:
       - name: Install pinned backend CI dependencies
         run: python -m pip install --no-input -r scripts/requirements-browser-ci.txt -r scripts/requirements-product-ci.txt
 
+      - name: Cache pinned tokenizer data before offline tests
+        env:
+          TIKTOKEN_CACHE_DIR: ${{ runner.temp }}/tiktoken-cache
+        run: python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+
       - name: Run deterministic backend tests
+        env:
+          TIKTOKEN_CACHE_DIR: ${{ runner.temp }}/tiktoken-cache
         run: >-
           python -m pytest -p no:cacheprovider -q
           tests/unit/test_api_schemas.py
@@ -53,6 +60,9 @@ jobs:
           tests/unit/test_paths_and_fingerprint.py
           tests/unit/test_retrieval_contracts.py
           tests/unit/test_run_plans.py
+          tests/unit/test_general_chat.py
+          tests/unit/test_generation_contracts.py
+          tests/integration/test_general_chat_api.py
 
       - name: Ruff — reject new findings against recorded baseline
         run: |
