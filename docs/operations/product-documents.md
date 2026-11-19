@@ -57,5 +57,6 @@ index, or model. No files were deleted. Real browser checks cover isolated
 uploads, validation, interrupted-response recovery, selected-report readback,
 PDF Chat handoff, desktop/mobile layout and reduced motion. Deterministic tests
 cover build admission, job monitoring and failed/interrupted recovery. No new
-real index build or model inference is claimed. Source-page viewing remains
-outside this sprint.
+real index build or model inference is claimed. Source-page viewing was outside
+this original sprint's scope; the integrated viewer is documented in
+[`source-viewer.md`](source-viewer.md).

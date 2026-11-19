@@ -40,6 +40,21 @@ other specialized contracts. This exclusion is a scope statement, not a claim
 that those tests fail or are unnecessary. They remain available for their
 appropriate dedicated environments and workflows.
 
+The workflow also runs two focused browser jobs:
+
+- **NASA PDF.js highlight accuracy** runs the pinned Playwright suite against
+  the tracked NASA PDF and deterministic layout fixtures. It covers source
+  identity, highlight geometry and fallback, citation interactions, and the
+  supported rotated and multi-column cases. Runtime browser requests are
+  restricted to loopback.
+- **Real local PDF document viewer** starts an isolated temporary bootstrap
+  API, gateway, and Vite stack with a temporary copy of the tracked NASA PDF.
+  It checks document inventory and identity, manifest-change failures, actual
+  PDF bytes and viewer rendering. It does not build an index or call a model.
+
+These focused browser jobs do not expand the 13-module backend pytest
+selection above.
+
 Ruff checks `backend/` and `scripts/` with the Python 3.10 target and the
 `E4`, `E7`, `E9`, and `F` rule families for import, syntax, statement, and
 common name/undefined-name errors. Frontend TypeScript checking is the frontend
@@ -84,12 +99,11 @@ weaken the configured scope/rules.
 
 A green lint check means **no new Ruff findings relative to the recorded
 baseline**; the 177 existing findings remain visible debt until they are
-intentionally fixed and reconciled.
-The initial CI suite also excludes the remaining 51 unit modules and 30
-integration modules described above; these exclusions are not covered by the
-green check. Authenticated browser end-to-end scenarios and the M9-A proof
-checker that depends on a Windows-specific Playwright path also remain outside
-this initial gate.
+intentionally fixed and reconciled. The remaining 51 unit modules and 30
+integration modules are outside backend pytest and are not covered by its green
+check. Broader authenticated browser workflows remain outside the two focused
+browser jobs above. The M9-A proof checker that depends on a Windows-specific
+Playwright path is also excluded.
 
 To reproduce the backend checks from the repository root in an isolated Python
 environment, install both requirement files and run the pytest module list
