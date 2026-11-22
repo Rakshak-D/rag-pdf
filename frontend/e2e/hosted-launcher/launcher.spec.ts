@@ -3,6 +3,13 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 
 const digest = "65ba3e145dcb1ab75a6d89717bc46791fda88b1957b4d63c258c044f5ad7a77c";
 const readOnlyMethods = new Set(["GET", "HEAD", "OPTIONS"]);
+const reviewedReadOnlyPostPaths = new Set(["/bootstrap-api/v1/bootstrap/preview"]);
+
+function isReadOnlyRequest(method: string, pathname: string): boolean {
+  const normalized = method.toUpperCase();
+  return readOnlyMethods.has(normalized) ||
+    (normalized === "POST" && reviewedReadOnlyPostPaths.has(pathname));
+}
 
 async function checkedApiRead(
   context: APIRequestContext,
@@ -23,19 +30,33 @@ async function checkedApiRead(
 test("the real launcher serves the isolated PDF through the Library", async ({ page, request, baseURL }) => {
   const external: string[] = [];
   const authenticated: string[] = [];
-  const stateChanging: string[] = [];
+  const rejectedMutations: string[] = [];
+  const reviewedReadOnlyPosts: string[] = [];
+  const reviewedReadOnlyPostStatuses: number[] = [];
   const apiObserved: Array<{ method: string; origin: string; path: string }> = [];
   const origin = new URL(baseURL!).origin;
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "CONNECT", "TRACE"]) {
+    expect(isReadOnlyRequest(method, "/unreviewed-write")).toBe(false);
+  }
+  expect(isReadOnlyRequest("POST", "/bootstrap-api/v1/bootstrap/preview")).toBe(true);
+  page.on("response", response => {
+    const request = response.request();
+    if (request.method() === "POST" && new URL(response.url()).pathname === "/bootstrap-api/v1/bootstrap/preview") {
+      reviewedReadOnlyPostStatuses.push(response.status());
+    }
+  });
   await page.route("**/*", async route => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.origin !== origin) { external.push(url.origin); await route.abort(); return; }
     if ((await request.allHeaders()).authorization) authenticated.push(url.pathname);
-    if (!readOnlyMethods.has(request.method().toUpperCase())) {
-      stateChanging.push(`${request.method().toUpperCase()} ${url.pathname}`);
+    const method = request.method().toUpperCase();
+    if (!isReadOnlyRequest(method, url.pathname)) {
+      rejectedMutations.push(`${method} ${url.pathname}`);
       await route.abort();
       return;
     }
+    if (!readOnlyMethods.has(method)) reviewedReadOnlyPosts.push(`${method} ${url.pathname}`);
     await route.continue();
   });
   await page.goto("/");
@@ -82,10 +103,13 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
   await expect(page.locator(".textLayer")).toContainText("Juniper-47");
   await page.goto(`/documents/view/doc_${"f".repeat(64)}?manifest_hash=${inventory.manifest_hash}&page=1`);
   await expect(page.getByText("The original PDF is no longer available in this source collection.", { exact: true })).toBeVisible();
-  console.log("HOSTED_BROWSER_MUTATION_ATTEMPTS", JSON.stringify(stateChanging));
+  console.log("HOSTED_BROWSER_MUTATION_GUARD", JSON.stringify({ rejected: rejectedMutations, reviewedReadOnlyPosts }));
   expect(external).toEqual([]);
   expect(authenticated).toEqual([]);
-  expect(stateChanging).toEqual([]);
+  expect(rejectedMutations).toEqual([]);
+  expect(reviewedReadOnlyPosts).toEqual(["POST /bootstrap-api/v1/bootstrap/preview"]);
+  expect(reviewedReadOnlyPostStatuses).toEqual([200]);
+  expect(reviewedReadOnlyPosts.some(path => path.endsWith("/jobs"))).toBe(false);
   expect(apiObserved.map(({ method }) => method)).toEqual(["GET", "GET"]);
   expect(apiObserved.every(({ origin: requestOrigin }) => requestOrigin === origin)).toBe(true);
   expect(apiObserved.map(({ path }) => path)).toEqual([
@@ -97,7 +121,9 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
     pages: 3,
     browserExternalRequests: external.length,
     browserAuthorizationHeaders: authenticated.length,
-    browserStateChangingMethods: stateChanging.length,
+    browserRejectedMutations: rejectedMutations,
+    browserReviewedReadOnlyPosts: reviewedReadOnlyPosts,
+    browserReviewedReadOnlyPostStatuses: reviewedReadOnlyPostStatuses,
     separateApiRequests: apiObserved,
     indexSelection: "unselected",
     buildSubmitted: false,
