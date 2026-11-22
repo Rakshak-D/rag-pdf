@@ -3,7 +3,10 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 
 const digest = "65ba3e145dcb1ab75a6d89717bc46791fda88b1957b4d63c258c044f5ad7a77c";
 const readOnlyMethods = new Set(["GET", "HEAD", "OPTIONS"]);
-const reviewedReadOnlyPostPaths = new Set(["/bootstrap-api/v1/bootstrap/preview"]);
+const reviewedReadOnlyPostPaths = new Set([
+  "/bootstrap-api/v1/bootstrap/preview",
+  "/bootstrap-api/v1/bootstrap/index-inventory",
+]);
 
 function isReadOnlyRequest(method: string, pathname: string): boolean {
   const normalized = method.toUpperCase();
@@ -32,7 +35,7 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
   const authenticated: string[] = [];
   const rejectedMutations: string[] = [];
   const reviewedReadOnlyPosts: string[] = [];
-  const reviewedReadOnlyPostStatuses: number[] = [];
+  const reviewedReadOnlyPostResults: Array<{ path: string; status: number }> = [];
   const apiObserved: Array<{ method: string; origin: string; path: string }> = [];
   const origin = new URL(baseURL!).origin;
   for (const method of ["POST", "PUT", "PATCH", "DELETE", "CONNECT", "TRACE"]) {
@@ -41,8 +44,9 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
   expect(isReadOnlyRequest("POST", "/bootstrap-api/v1/bootstrap/preview")).toBe(true);
   page.on("response", response => {
     const request = response.request();
-    if (request.method() === "POST" && new URL(response.url()).pathname === "/bootstrap-api/v1/bootstrap/preview") {
-      reviewedReadOnlyPostStatuses.push(response.status());
+    const pathname = new URL(response.url()).pathname;
+    if (request.method() === "POST" && reviewedReadOnlyPostPaths.has(pathname)) {
+      reviewedReadOnlyPostResults.push({ path: pathname, status: response.status() });
     }
   });
   await page.route("**/*", async route => {
@@ -107,9 +111,14 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
   expect(external).toEqual([]);
   expect(authenticated).toEqual([]);
   expect(rejectedMutations).toEqual([]);
-  expect(reviewedReadOnlyPosts).toEqual(["POST /bootstrap-api/v1/bootstrap/preview"]);
-  expect(reviewedReadOnlyPostStatuses).toEqual([200]);
-  expect(reviewedReadOnlyPosts.some(path => path.endsWith("/jobs"))).toBe(false);
+  expect(reviewedReadOnlyPosts).toEqual([
+    "POST /bootstrap-api/v1/bootstrap/preview",
+    "POST /bootstrap-api/v1/bootstrap/index-inventory",
+  ]);
+  expect(reviewedReadOnlyPostResults).toEqual([
+    { path: "/bootstrap-api/v1/bootstrap/preview", status: 200 },
+    { path: "/bootstrap-api/v1/bootstrap/index-inventory", status: 200 },
+  ]);
   expect(apiObserved.map(({ method }) => method)).toEqual(["GET", "GET"]);
   expect(apiObserved.every(({ origin: requestOrigin }) => requestOrigin === origin)).toBe(true);
   expect(apiObserved.map(({ path }) => path)).toEqual([
@@ -123,7 +132,7 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
     browserAuthorizationHeaders: authenticated.length,
     browserRejectedMutations: rejectedMutations,
     browserReviewedReadOnlyPosts: reviewedReadOnlyPosts,
-    browserReviewedReadOnlyPostStatuses: reviewedReadOnlyPostStatuses,
+    browserReviewedReadOnlyPostResults: reviewedReadOnlyPostResults,
     separateApiRequests: apiObserved,
     indexSelection: "unselected",
     buildSubmitted: false,
