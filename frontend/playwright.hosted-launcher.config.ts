@@ -8,5 +8,10 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 12_000 },
   reporter: "line",
-  use: { ...devices["Desktop Chrome"], baseURL: process.env.M9C2B_APP_URL, headless: true },
+  use: {
+    ...devices["Desktop Chrome"],
+    baseURL: process.env.M9C2B_APP_URL,
+    headless: true,
+    serviceWorkers: "block",
+  },
 });

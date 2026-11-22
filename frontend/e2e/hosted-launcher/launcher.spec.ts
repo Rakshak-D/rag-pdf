@@ -1,29 +1,63 @@
 import { createHash } from "node:crypto";
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 
 const digest = "65ba3e145dcb1ab75a6d89717bc46791fda88b1957b4d63c258c044f5ad7a77c";
+const readOnlyMethods = new Set(["GET", "HEAD", "OPTIONS"]);
 
-test("the real launcher serves the isolated PDF through the Library", async ({ page, baseURL }) => {
+async function checkedApiRead(
+  context: APIRequestContext,
+  method: string,
+  url: string,
+  origin: string,
+  observed: Array<{ method: string; origin: string; path: string }>,
+) {
+  const target = new URL(url);
+  expect(readOnlyMethods.has(method)).toBe(true);
+  expect(target.origin).toBe(origin);
+  observed.push({ method, origin: target.origin, path: target.pathname });
+  const response = await context.fetch(target.toString(), { method, maxRedirects: 0 });
+  expect(new URL(response.url()).origin).toBe(origin);
+  return response;
+}
+
+test("the real launcher serves the isolated PDF through the Library", async ({ page, request, baseURL }) => {
   const external: string[] = [];
   const authenticated: string[] = [];
-  const forbidden: string[] = [];
+  const stateChanging: string[] = [];
+  const apiObserved: Array<{ method: string; origin: string; path: string }> = [];
   const origin = new URL(baseURL!).origin;
   await page.route("**/*", async route => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.origin !== origin) { external.push(url.origin); await route.abort(); return; }
     if ((await request.allHeaders()).authorization) authenticated.push(url.pathname);
-    if (/\/(ask|chat|jobs)(\?|$)/u.test(url.pathname) && request.method() === "POST") forbidden.push(url.pathname);
+    if (!readOnlyMethods.has(request.method().toUpperCase())) {
+      stateChanging.push(request.method().toUpperCase());
+      await route.abort();
+      return;
+    }
     await route.continue();
   });
   await page.goto("/");
-  const selection = await page.request.get(`${origin}/api/v1/index/selection`);
+  const selection = await checkedApiRead(
+    request,
+    "GET",
+    `${origin}/api/v1/index/selection`,
+    origin,
+    apiObserved,
+  );
   expect(selection.status()).toBe(200);
   expect((await selection.json()).selection_status).toBe("unselected");
   await page.getByRole("button", { name: "Menu" }).click();
   await page.getByRole("navigation", { name: "Reading Desk menu" }).getByRole("link", { name: "Library" }).click();
   await expect(page.getByText("Orbit_Field_Notes.pdf", { exact: true })).toBeVisible();
-  const response = await page.request.get(`${origin}/bootstrap-api/v1/bootstrap/documents?limit=50&offset=0`);
+  const response = await checkedApiRead(
+    request,
+    "GET",
+    `${origin}/bootstrap-api/v1/bootstrap/documents?limit=50&offset=0`,
+    origin,
+    apiObserved,
+  );
   expect(response.status()).toBe(200);
   const inventory = await response.json();
   expect(inventory.total).toBe(1);
@@ -50,6 +84,21 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
   await expect(page.getByText("The original PDF is no longer available in this source collection.", { exact: true })).toBeVisible();
   expect(external).toEqual([]);
   expect(authenticated).toEqual([]);
-  expect(forbidden).toEqual([]);
-  console.log("HOSTED_BROWSER_PASS", JSON.stringify({ sha256: digest, pages: 3, externalRequests: external.length, authorizationHeaders: authenticated.length, prohibitedPosts: forbidden.length }));
+  expect(stateChanging).toEqual([]);
+  expect(apiObserved.map(({ method }) => method)).toEqual(["GET", "GET"]);
+  expect(apiObserved.every(({ origin: requestOrigin }) => requestOrigin === origin)).toBe(true);
+  expect(apiObserved.map(({ path }) => path)).toEqual([
+    "/api/v1/index/selection",
+    "/bootstrap-api/v1/bootstrap/documents",
+  ]);
+  console.log("HOSTED_BROWSER_PASS", JSON.stringify({
+    sha256: digest,
+    pages: 3,
+    browserExternalRequests: external.length,
+    browserAuthorizationHeaders: authenticated.length,
+    browserStateChangingMethods: stateChanging.length,
+    separateApiRequests: apiObserved,
+    indexSelection: "unselected",
+    buildSubmitted: false,
+  }));
 });
