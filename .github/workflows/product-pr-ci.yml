@@ -192,14 +192,24 @@ jobs:
         run: python -m unittest scripts.tests.test_local_pdf_service_stack -v
         working-directory: ${{ github.workspace }}
 
+      - name: Test hosted launcher process supervision
+        run: python -m unittest scripts.tests.test_hosted_launcher_acceptance -v
+        working-directory: ${{ github.workspace }}
+
       - name: Verify the real isolated local PDF service and viewer
         run: node node_modules/playwright/cli.js test --config playwright.local-document-service.config.ts
+
+      - name: Verify the full model-free local launcher
+        working-directory: ${{ github.workspace }}
+        run: python scripts/hosted_launcher_acceptance.py
 
       - name: Preserve local-service browser diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: local-pdf-viewer-failure-${{ github.run_id }}
-          path: frontend/test-results/local-document-service/**
+          path: |
+            frontend/test-results/local-document-service/**
+            ${{ runner.temp }}/rag-pdf-hosted-launcher-failure.json
           if-no-files-found: ignore
           retention-days: 7
