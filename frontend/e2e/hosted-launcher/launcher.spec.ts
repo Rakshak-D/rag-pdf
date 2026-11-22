@@ -32,7 +32,7 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
     if (url.origin !== origin) { external.push(url.origin); await route.abort(); return; }
     if ((await request.allHeaders()).authorization) authenticated.push(url.pathname);
     if (!readOnlyMethods.has(request.method().toUpperCase())) {
-      stateChanging.push(request.method().toUpperCase());
+      stateChanging.push(`${request.method().toUpperCase()} ${url.pathname}`);
       await route.abort();
       return;
     }
@@ -82,6 +82,7 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
   await expect(page.locator(".textLayer")).toContainText("Juniper-47");
   await page.goto(`/documents/view/doc_${"f".repeat(64)}?manifest_hash=${inventory.manifest_hash}&page=1`);
   await expect(page.getByText("The original PDF is no longer available in this source collection.", { exact: true })).toBeVisible();
+  console.log("HOSTED_BROWSER_MUTATION_ATTEMPTS", JSON.stringify(stateChanging));
   expect(external).toEqual([]);
   expect(authenticated).toEqual([]);
   expect(stateChanging).toEqual([]);
