@@ -20,7 +20,8 @@ test("the real launcher serves the isolated PDF through the Library", async ({ p
   const selection = await page.request.get(`${origin}/api/v1/index/selection`);
   expect(selection.status()).toBe(200);
   expect((await selection.json()).selection_status).toBe("unselected");
-  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("link", { name: "Library" }).click();
+  await page.getByRole("button", { name: "Menu" }).click();
+  await page.getByRole("navigation", { name: "Reading Desk menu" }).getByRole("link", { name: "Library" }).click();
   await expect(page.getByText("Orbit_Field_Notes.pdf", { exact: true })).toBeVisible();
   const response = await page.request.get(`${origin}/bootstrap-api/v1/bootstrap/documents?limit=50&offset=0`);
   expect(response.status()).toBe(200);

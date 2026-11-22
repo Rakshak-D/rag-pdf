@@ -142,7 +142,8 @@ def main() -> None:
                         launcher.wait(timeout=35)
                     except subprocess.TimeoutExpired:
                         for child in reversed(children):
-                            if child.is_running(): child.kill()
+                            if child.is_running():
+                                child.kill()
                         launcher.kill()
                         launcher.wait(timeout=5)
                         raise RuntimeError("launcher did not shut down normally")
