@@ -195,6 +195,10 @@ jobs:
       - name: Verify the real isolated local PDF service and viewer
         run: node node_modules/playwright/cli.js test --config playwright.local-document-service.config.ts
 
+      - name: Verify the full model-free local launcher
+        working-directory: ${{ github.workspace }}
+        run: python scripts/hosted_launcher_acceptance.py
+
       - name: Preserve local-service browser diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
