@@ -13,6 +13,7 @@ from scripts.hosted_launcher_acceptance import (
     ProcessIdentity,
     ProcessTreeMonitor,
     find_model_processes,
+    model_process_snapshot,
     parse_connect_trace,
     run_with_cleanup,
     shutdown_task,
@@ -21,6 +22,15 @@ from scripts.hosted_launcher_acceptance import (
 
 
 class ModelProcessDetectionTests(unittest.TestCase):
+    def test_process_snapshot_uses_pid_property_not_info_mapping(self) -> None:
+        class ProcessStub:
+            pid = 41001
+            info = {"name": "ollama"}
+
+        found = model_process_snapshot([ProcessStub()])
+
+        self.assertEqual([(item.pid, item.name) for item in found], [(41001, "ollama")])
+
     def test_synthetic_model_process_names_are_detected_without_arguments(self) -> None:
         synthetic = [
             ProcessIdentity(41001, 10.0, "ollama", 41000, 1),

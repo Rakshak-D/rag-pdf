@@ -78,6 +78,21 @@ def find_model_processes(identities: Iterable[ProcessIdentity]) -> list[ProcessI
     ]
 
 
+def model_process_snapshot(processes: Iterable[psutil.Process]) -> list[ProcessIdentity]:
+    """Classify a process_iter snapshot without depending on optional info keys."""
+    identities = [
+        ProcessIdentity(
+            process.pid,
+            0.0,
+            process.info.get("name") or "",
+            0,
+            0,
+        )
+        for process in processes
+    ]
+    return find_model_processes(identities)
+
+
 def _identity_for(process: psutil.Process, depth: int) -> ProcessIdentity:
     return ProcessIdentity(
         process.pid,
@@ -545,13 +560,7 @@ def _main(diagnostics: dict[str, object]) -> None:
     if hashlib.sha256(pdf.read_bytes()).hexdigest() != SHA:
         raise AcceptanceFailure("tracked_pdf_digest_mismatch")
 
-    initial_models = [
-        process.info.get("name") or "unknown"
-        for process in psutil.process_iter(["name"])
-        if find_model_processes(
-            [ProcessIdentity(process.info["pid"], 0.0, process.info.get("name") or "", 0, 0)]
-        )
-    ]
+    initial_models = model_process_snapshot(psutil.process_iter(["name"]))
     if initial_models:
         raise AcceptanceFailure("model_process_present_before_startup")
 
