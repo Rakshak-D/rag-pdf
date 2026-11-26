@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 
 _HOST = "127.0.0.1"
@@ -216,7 +216,7 @@ def _gateway_environment(runtime_env: dict[str, str]) -> dict[str, str]:
 def _request(url: str, *, host: str | None = None, timeout: float = 1.0) -> tuple[int, str]:
     headers = {"Host": host} if host else {}
     request = Request(url, headers=headers)
-    with urlopen(request, timeout=timeout) as response:
+    with build_opener(ProxyHandler({})).open(request, timeout=timeout) as response:
         body = response.read(4096).decode("utf-8", "replace")
         return response.status, body
 
