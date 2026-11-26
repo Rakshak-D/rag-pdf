@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -75,6 +76,10 @@ def test_run_plan_preparation_returns_domain_plan_accepted_by_evaluation_contrac
     app, service, old_plan = _app(tmp_path, source)
     manifest = build_document_manifest(source)
     config = old_plan.resolved_config().model_dump(mode="json")
+    # Use portable caller paths so the server workspace is never part of the request.
+    for key, value in config.items():
+        if key.endswith("_dir") and isinstance(value, str):
+            config[key] = Path(value).name
     config["reset_collections_on_start"] = False
     body = {"resolved_config": config, "expected_manifest_hash": manifest.content_hash}
 
