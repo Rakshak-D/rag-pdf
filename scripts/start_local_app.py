@@ -45,7 +45,11 @@ def _check_ports(ports: tuple[int, ...]) -> None:
             sockets.append(sock)
             if os.name == "nt":
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                # Match the services' POSIX restart behavior for TIME_WAIT sockets.
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind((_HOST, port))
+            sock.listen(1)
     except OSError as exc:
         raise StartupError("local_ports_in_use_choose_another_offset") from exc
     finally:
