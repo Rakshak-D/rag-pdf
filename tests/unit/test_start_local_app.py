@@ -238,3 +238,19 @@ def test_loopback_readiness_works_with_system_proxy(monkeypatch):
         finally:
             server.shutdown()
             thread.join()
+
+
+@pytest.mark.skipif(start_local_app.os.name == "nt", reason="POSIX TCP restart semantics")
+def test_port_probe_allows_restart_after_server_active_close():
+    import socket
+
+    with socket.socket() as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        address = listener.getsockname()
+        with socket.create_connection(address, timeout=2) as client:
+            connection, _ = listener.accept()
+            connection.close()
+            assert client.recv(1) == b""
+    start_local_app._check_ports((address[1],))
