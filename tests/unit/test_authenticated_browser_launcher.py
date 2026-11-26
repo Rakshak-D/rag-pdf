@@ -306,7 +306,9 @@ def test_start_record_is_durable_readable_and_uses_actual_git_identity(tmp_path)
     record = json.loads((attempt.evidence_dir / "launcher-start.json").read_text(encoding="utf-8"))
     assert record == attempt.start_record
     assert record["repository_commit"] == expected_head
-    assert record["repository_branch"] == launcher.EXPECTED_BRANCH
+    assert record["repository_branch"] == subprocess.check_output(
+        ["git", "-C", str(launcher.ROOT), "rev-parse", "--abbrev-ref", "HEAD"], text=True
+    ).strip()
     assert record["launcher_source_sha256"] == source_hash
     assert record["python_version"] == sys.version
     assert record["initial_stage"] == "launcher_start"
