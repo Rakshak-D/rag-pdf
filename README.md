@@ -9,7 +9,9 @@ RAG-PDF is a local-first application for chatting with installed Ollama models a
 - **Documents** imports PDFs, shows the real source inventory, previews a server-resolved configuration, admits an explicitly confirmed fresh build, reports actual job state, and lets the user select a compatible build.
 - **Results** and the legacy job, evaluation, ablation, and artifact-detail routes continue to use persisted backend records.
 
-## Verified local demonstration
+## Historical local demonstration
+
+The November 2026 [demo runbook](docs/DEMO.md) records the following results on the original demo checkout. For the product branch, the [acceptance audit](docs/audit/m9-c0-product-acceptance.md) documents the outstanding live Document Chat check, and the [launcher report](docs/audit/m9-c2b-hosted-launcher-acceptance.md) covers startup and PDF viewing.
 
 The checked-in [demo PDF](examples/demo/Orbit_Field_Notes.pdf) was processed and indexed with the configured BAAI/bge-large-en-v1.5 text model. The fresh build completed with three persisted text records and zero image records. The index was reopened after application shutdown and selected again after runtime reconstruction.
 
