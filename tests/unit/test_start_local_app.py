@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 import signal
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +11,8 @@ from scripts import start_local_app
 
 
 def test_windows_services_start_in_private_process_groups(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(start_local_app.os, "name", "nt")
+    monkeypatch.setattr(start_local_app, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 512, raising=False)
     calls = {}
 
     class Process:
@@ -29,7 +31,8 @@ def test_windows_services_start_in_private_process_groups(tmp_path: Path, monkey
 
 
 def test_windows_shutdown_sends_ctrl_break_before_waiting(monkeypatch):
-    monkeypatch.setattr(start_local_app.os, "name", "nt")
+    monkeypatch.setattr(start_local_app, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(signal, "CTRL_BREAK_EVENT", 1, raising=False)
     events = []
 
     class Process:
@@ -211,3 +214,27 @@ def test_port_collision_is_rejected_without_starting_children():
         listener.bind(("127.0.0.1", 0)); listener.listen()
         with pytest.raises(start_local_app.StartupError, match="local_ports_in_use"):
             start_local_app._check_ports((listener.getsockname()[1],))
+
+
+def test_loopback_readiness_works_with_system_proxy(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from threading import Thread
+
+    class Health(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ready")
+
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    with HTTPServer(("127.0.0.1", 0), Health) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/health"
+            assert start_local_app._request(url) == (200, "ready")
+        finally:
+            server.shutdown()
+            thread.join()
