@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import argparse
+from collections.abc import Callable
 import socket
 from pathlib import Path
 import secrets
@@ -27,6 +28,14 @@ class StartupError(RuntimeError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+class _ShutdownRequested(Exception):
+    """Leave startup promptly and let the supervisor stop its owned children."""
+
+
+def _never_stop() -> bool:
+    return False
 
 
 def _port_values(offset: int) -> tuple[int, int, int, int]:
@@ -225,9 +234,19 @@ def _request(url: str, *, host: str | None = None, timeout: float = 1.0) -> tupl
         return response.status, body
 
 
-def _wait_http(name: str, process: subprocess.Popen, url: str, *, expected: int, host: str | None = None) -> None:
+def _wait_http(
+    name: str,
+    process: subprocess.Popen,
+    url: str,
+    *,
+    expected: int,
+    host: str | None = None,
+    should_stop: Callable[[], bool] = _never_stop,
+) -> None:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
+        if should_stop():
+            raise _ShutdownRequested
         if process.poll() is not None:
             raise StartupError(f"{name}_exited_before_ready")
         try:
@@ -277,7 +296,7 @@ def _stop_owned(processes: list[subprocess.Popen]) -> None:
                 process.wait(timeout=5)
 
 
-def main(*, port_offset: int = 0) -> int:
+def main(*, port_offset: int = 0, should_stop: Callable[[], bool] = _never_stop) -> int:
     global _APP_PORT, _ORDINARY_PORT, _BOOTSTRAP_PORT, _GATEWAY_PORT
     repo = Path(__file__).resolve().parents[1]
     frontend = repo / "frontend"
@@ -291,33 +310,36 @@ def main(*, port_offset: int = 0) -> int:
         if not node or not vite.is_file():
             raise StartupError("node_modules_unavailable_run_npm_ci")
 
+        if should_stop():
+            return 0
         ordinary = _start("ordinary_api", [sys.executable, "-m", "backend.app"], cwd=repo, env=_ordinary_environment(runtime_env))
         processes.append(ordinary)
-        _wait_http("ordinary_api", ordinary, f"http://{_HOST}:{_ORDINARY_PORT}/health", expected=200)
+        _wait_http("ordinary_api", ordinary, f"http://{_HOST}:{_ORDINARY_PORT}/health", expected=200, should_stop=should_stop)
         bootstrap = _start("bootstrap_api", [sys.executable, "-m", "backend.bootstrap_app"], cwd=repo, env=_bootstrap_environment(runtime_env))
         processes.append(bootstrap)
-        _wait_http("bootstrap_api", bootstrap, f"http://{_HOST}:{_BOOTSTRAP_PORT}/health", expected=200)
+        _wait_http("bootstrap_api", bootstrap, f"http://{_HOST}:{_BOOTSTRAP_PORT}/health", expected=200, should_stop=should_stop)
         gateway = _start("local_gateway", [sys.executable, "-m", "backend.local_gateway"], cwd=repo, env=_gateway_environment(runtime_env))
         processes.append(gateway)
         _wait_http("local_gateway", gateway, f"http://{_HOST}:{_GATEWAY_PORT}/gateway-health", expected=200,
-                   host=f"{_HOST}:{_APP_PORT}")
+                   host=f"{_HOST}:{_APP_PORT}", should_stop=should_stop)
         bootstrap_proxy = f"http://{_HOST}:{_APP_PORT}/bootstrap-api/health"
         vite_env = _vite_environment(runtime_env)
         vite_process = _start("vite", [node, str(vite), "--host", _HOST, "--port", str(_APP_PORT), "--strictPort"],
                               cwd=frontend, env=vite_env)
         processes.append(vite_process)
-        _wait_http("vite", vite_process, f"http://{_HOST}:{_APP_PORT}/", expected=200)
-        _wait_http("vite_bootstrap_proxy", vite_process, bootstrap_proxy, expected=200)
+        _wait_http("vite", vite_process, f"http://{_HOST}:{_APP_PORT}/", expected=200, should_stop=should_stop)
+        _wait_http("vite_bootstrap_proxy", vite_process, bootstrap_proxy, expected=200, should_stop=should_stop)
         print(f"Source checkout: {repo}")
         print(f"RAG-PDF is running at http://{_HOST}:{_APP_PORT}")
         print("Local bearer credentials are generated for this run and remain in server processes.")
         print("Press Ctrl+C to stop the services started by this command.")
-        while True:
+        while not should_stop():
             for process in processes:
                 if process.poll() is not None:
                     raise StartupError("local_service_exited")
             time.sleep(0.5)
-    except KeyboardInterrupt:
+        return 0
+    except (KeyboardInterrupt, _ShutdownRequested):
         return 0
     except StartupError as exc:
         print(f"RAG-PDF startup failed: {exc.code}", file=sys.stderr)
@@ -326,7 +348,23 @@ def main(*, port_offset: int = 0) -> int:
         _stop_owned(processes)
 
 
-if __name__ == "__main__":
+def _cli() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port-offset", type=int, default=0, help="Add 0..10000 to all four loopback ports; default 0")
-    raise SystemExit(main(port_offset=parser.parse_args().port_offset))
+    args = parser.parse_args()
+    stopping = False
+
+    def request_shutdown(_signum: int, _frame: object) -> None:
+        # Do not interrupt Popen or its registration in the owned child list.
+        nonlocal stopping
+        stopping = True
+
+    previous_handler = signal.signal(signal.SIGTERM, request_shutdown)
+    try:
+        return main(port_offset=args.port_offset, should_stop=lambda: stopping)
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())

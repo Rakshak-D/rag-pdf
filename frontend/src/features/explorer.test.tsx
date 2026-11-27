@@ -95,7 +95,10 @@ describe("jobs and artifacts explorer", () => {
     await router.navigate("/experiments/ablation");
     expect(await screen.findByRole("heading", { name: "Ablation run" })).toBeInTheDocument();
     await router.navigate("/research");
-    await user.click(screen.getByRole("link", { name: /Results/ }));
+    // Commit the destination view before clicking: the previous workflow also
+    // renders a Results link, which can be detached during the transition.
+    const researchTools = await screen.findByRole("navigation", { name: "Advanced research tools" });
+    await user.click(within(researchTools).getByRole("link", { name: /Results/ }));
     expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
     expect(document.querySelector('[aria-disabled="true"]')).toBeNull();
     expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getAllByRole("link")).toHaveLength(3);

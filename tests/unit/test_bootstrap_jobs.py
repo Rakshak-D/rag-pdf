@@ -14,7 +14,8 @@ from backend.services.bootstrap_jobs import BootstrapJobError, BootstrapJobManag
 from backend.engine.manifest import build_document_manifest
 from backend.experiments.run_plan import build_run_plan
 from backend.engine.index_builder import IndexBuildResult
-from tests.integration.test_index_builder import _plan_with_text_and_optional_image
+from backend.model_lifecycle import ModelLifecycleError
+from tests.integration.test_index_builder import StubTextAdapter, _plan_with_text_and_optional_image
 
 
 def _owner_process(database, source, storage, ready, release):
@@ -69,6 +70,36 @@ def test_constructor_does_not_mutate_state_or_start_worker(tmp_path):
     assert manager._worker is None
     with pytest.raises(BootstrapJobError, match="manager_not_accepting"):
         manager.submit("request-1234567890", None, "a" * 64, "b" * 64)
+
+
+@pytest.mark.parametrize(("code", "public_code"), [
+    ("model_resource_capacity_insufficient", "model_resource_capacity_insufficient"),
+    ("model_resource_measurement_unavailable", "model_resource_measurement_unavailable"),
+    ("private_model_loader_detail", "build_failed"),
+])
+def test_worker_retains_only_safe_capacity_failure_reasons(tmp_path, code, public_code):
+    from backend.api.bootstrap import _job_payload
+
+    source, config, plan = _plan_with_text_and_optional_image(tmp_path)
+    state = tmp_path / "state"
+    state.mkdir()
+    storage = tmp_path / "storage"
+    text = StubTextAdapter(config, error=ModelLifecycleError(code))
+    manager = BootstrapJobManager(state / "jobs.sqlite", source, storage, adapter_factory=lambda: (text, None))
+    manager.start()
+    try:
+        job = manager.submit("request-resource-check", config, plan.document_manifest_hash, plan.index_fingerprint)
+        assert manager._completion[job.job_id].wait(10)
+        completed = manager.get(job.job_id)
+        assert completed.status == "failed"
+        assert completed.error_code == public_code
+        public = _job_payload(completed)
+        assert public["error_code"] == public_code
+        assert public["partial_persistence"] is False
+        assert public["report_reference"] is None
+        assert not (storage / "indexes").exists()
+    finally:
+        manager.shutdown()
 
 
 def test_shutdown_is_idempotent_and_releases_only_owner_reservation(tmp_path):

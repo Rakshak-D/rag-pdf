@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from chromadb.config import Settings
 
 from backend.config import PathContainmentError, ResolvedRunConfig
 from backend.experiments import build_run_plan
@@ -59,6 +60,22 @@ def test_supplied_vectors_are_persistent_and_modalities_are_separate(tmp_path):
         reopened.close()
 
 
+def test_chroma_product_telemetry_stays_disabled_when_environment_enables_it(tmp_path, monkeypatch):
+    import chromadb
+    open_client = chromadb.PersistentClient
+    observed = []
+
+    def verify_settings(*, path, settings):
+        observed.append(settings.anonymized_telemetry)
+        return open_client(path=path, settings=settings)
+
+    monkeypatch.setenv("ANONYMIZED_TELEMETRY", "True")
+    monkeypatch.setattr(chromadb, "PersistentClient", verify_settings)
+    store = ChromaVectorStore.open(tmp_path / "owned", make_plan(tmp_path))
+    store.close()
+    assert observed == [False]
+
+
 def test_distinct_index_fingerprints_are_isolated(tmp_path):
     storage = tmp_path / "owned"
     first = make_plan(tmp_path, model_name="model-a")
@@ -103,7 +120,7 @@ def test_tampered_manifest_and_collection_metadata_fail_without_repair(tmp_path)
         repaired.close()
     import chromadb
 
-    client = chromadb.PersistentClient(path=str(index_root / "chroma"))
+    client = chromadb.PersistentClient(path=str(index_root / "chroma"), settings=Settings(anonymized_telemetry=False))
     collection = None
     try:
         collection = client.get_collection("text_vectors", embedding_function=None)

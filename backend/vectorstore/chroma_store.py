@@ -17,6 +17,7 @@ from typing import Any
 from dataclasses import dataclass
 
 import chromadb
+from chromadb.config import Settings
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from backend.config.fingerprint import INDEX_SCHEMA_VERSION
@@ -354,7 +355,8 @@ class ChromaVectorStore:
                 raise ChromaStoreStateError(f"could not create new index store: {index_root}") from exc
 
         try:
-            client = chromadb.PersistentClient(path=str(chroma_path))
+            # The local-first app must not emit Chroma product analytics.
+            client = chromadb.PersistentClient(path=str(chroma_path), settings=Settings(anonymized_telemetry=False))
             if is_new:
                 text_collection = client.create_collection(
                     name=TEXT_COLLECTION_NAME,

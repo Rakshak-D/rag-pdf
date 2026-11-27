@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import subprocess
 import signal
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -84,6 +86,45 @@ def test_shutdown_falls_back_to_owned_process_termination_after_timeout(monkeypa
 
     start_local_app._stop_owned([Process()])
     assert events == ["terminate", ("wait", 8), "kill", ("wait", 5)]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="OS process termination on Windows is not SIGTERM delivery")
+def test_cli_converts_sigterm_into_a_shutdown_request_and_restores_handler(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["start_local_app.py", "--port-offset", "12"])
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def fake_main(*, port_offset, should_stop):
+        assert port_offset == 12
+        assert not should_stop()
+        signal.raise_signal(signal.SIGTERM)
+        assert should_stop()
+        return 0
+
+    monkeypatch.setattr(start_local_app, "main", fake_main)
+    assert start_local_app._cli() == 0
+    assert signal.getsignal(signal.SIGTERM) == previous
+
+
+def test_stop_during_startup_cleans_only_the_started_child(tmp_path, monkeypatch):
+    frontend = tmp_path / "frontend" / "node_modules" / "vite" / "bin"
+    frontend.mkdir(parents=True)
+    (frontend / "vite.js").touch()
+    monkeypatch.setattr(start_local_app, "__file__", str(tmp_path / "scripts" / "start_local_app.py"))
+    monkeypatch.setattr(start_local_app, "_check_ports", lambda _ports: None)
+    monkeypatch.setattr(start_local_app, "_runtime_environment", dict)
+    monkeypatch.setattr(start_local_app.shutil, "which", lambda _name: "node")
+    started = []
+    cleaned = []
+
+    def start_child(name, _args, **_kwargs):
+        started.append(name)
+        return object()
+
+    monkeypatch.setattr(start_local_app, "_start", start_child)
+    monkeypatch.setattr(start_local_app, "_stop_owned", cleaned.extend)
+    assert start_local_app.main(should_stop=lambda: bool(started)) == 0
+    assert started == ["ordinary_api"]
+    assert len(cleaned) == 1
 
 
 def test_launcher_generates_distinct_server_credentials_and_preserves_configured_roots(tmp_path: Path, monkeypatch):
