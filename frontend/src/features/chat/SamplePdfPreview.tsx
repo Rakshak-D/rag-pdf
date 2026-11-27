@@ -25,38 +25,45 @@ export function SamplePdfPreview() {
   const textHost = useRef<HTMLDivElement>(null);
   const renderTask = useRef<RenderTask | null>(null);
   const textLayer = useRef<TextLayer | null>(null);
+  const renderOperation = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     let active = true;
     let task: PDFDocumentLoadingTask | null = null;
-    void fetch(SAMPLE_URL, { credentials: "same-origin", cache: "force-cache" }).then(async (response) => {
-      if (!response.ok) throw new Error("sample_unavailable");
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (await sha256(bytes) !== SAMPLE_SHA256) throw new Error("sample_identity_mismatch");
-      if (!active) return null;
-      const loadingTask = getDocument({
-        data: bytes,
-        enableScripting: false,
-        enableXfa: false,
-        useWasm: false,
-        useWorkerFetch: false,
-        disableRange: true,
-        disableStream: true,
-        disableAutoFetch: true,
-        stopAtErrors: true,
-        maxImageSize: 16_000_000,
-        canvasMaxAreaInBytes: 16 * 1024 * 1024,
-      } as Parameters<typeof getDocument>[0] & { enableScripting: false });
-      if (!loadingTask || !loadingTask.promise || typeof loadingTask.destroy !== "function") {
-        throw new Error("pdf_loading_task_unavailable");
-      }
-      task = loadingTask;
-      return task.promise;
-    }).then((pdf) => {
-      if (active && pdf) setSample({ kind: "ready", pdf, pageCount: pdf.numPages });
-    }).catch(() => { if (active) setSample({ kind: "error" }); });
+    const controller = new AbortController();
+    // Strict Mode cancels its first mount effect before this turn finishes.
+    queueMicrotask(() => {
+      if (!active) return;
+      void fetch(SAMPLE_URL, { credentials: "same-origin", cache: "force-cache", signal: controller.signal }).then(async (response) => {
+        if (!response.ok) throw new Error("sample_unavailable");
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (await sha256(bytes) !== SAMPLE_SHA256) throw new Error("sample_identity_mismatch");
+        if (!active) return null;
+        const loadingTask = getDocument({
+          data: bytes,
+          enableScripting: false,
+          enableXfa: false,
+          useWasm: false,
+          useWorkerFetch: false,
+          disableRange: true,
+          disableStream: true,
+          disableAutoFetch: true,
+          stopAtErrors: true,
+          maxImageSize: 16_000_000,
+          canvasMaxAreaInBytes: 16 * 1024 * 1024,
+        } as Parameters<typeof getDocument>[0] & { enableScripting: false });
+        if (!loadingTask || !loadingTask.promise || typeof loadingTask.destroy !== "function") {
+          throw new Error("pdf_loading_task_unavailable");
+        }
+        task = loadingTask;
+        return task.promise;
+      }).then((pdf) => {
+        if (active && pdf) setSample({ kind: "ready", pdf, pageCount: pdf.numPages });
+      }).catch(() => { if (active) setSample({ kind: "error" }); });
+    });
     return () => {
       active = false;
+      controller.abort();
       renderTask.current?.cancel();
       textLayer.current?.cancel();
       if (task) void task.destroy().catch(() => undefined);
@@ -66,7 +73,10 @@ export function SamplePdfPreview() {
   useEffect(() => {
     const node = host.current;
     if (!node) return;
-    const update = () => setHostSize({ width: node.clientWidth, height: node.clientHeight });
+    const update = () => {
+      const { clientWidth: width, clientHeight: height } = node;
+      setHostSize((current) => current.width === width && current.height === height ? current : { width, height });
+    };
     update();
     if (typeof ResizeObserver === "undefined") {
       window.addEventListener("resize", update);
@@ -78,19 +88,24 @@ export function SamplePdfPreview() {
   }, []);
 
   useEffect(() => {
-    if (sample.kind !== "ready" || hostSize.width < 1 || hostSize.height < 1 || !canvas.current || !pageFrame.current || !textHost.current) return;
+    if (sample.kind !== "ready" || hostSize.width <= 16 || hostSize.height <= 16 || !canvas.current || !pageFrame.current || !textHost.current) return;
     let active = true;
     let pageTask: RenderTask | null = null;
     let layer: TextLayer | null = null;
     let pageProxy: Awaited<ReturnType<PDFDocumentProxy["getPage"]>> | null = null;
+    const previous = renderOperation.current;
     renderTask.current?.cancel();
     textLayer.current?.cancel();
     textHost.current.replaceChildren();
     setMarks([]);
 
-    void (async () => {
+    const operation = (async () => {
       try {
+        // Wait for PDF.js to release this canvas after cancelling a render.
+        await previous;
+        if (!active) return;
         pageProxy = await sample.pdf.getPage(1);
+        if (!active) return;
         const unit = pageProxy.getViewport({ scale: 1 });
         const scale = Math.min(1, (hostSize.width - 16) / unit.width, (hostSize.height - 16) / unit.height);
         const viewport = pageProxy.getViewport({ scale });
@@ -123,6 +138,7 @@ export function SamplePdfPreview() {
         await pageTask.promise;
         if (!active) return;
         const textContent = await pageProxy.getTextContent();
+        if (!active) return;
         layer = new TextLayer({ textContentSource: textContent, container: textContainer, viewport });
         textLayer.current = layer;
         await layer.render();
@@ -148,6 +164,10 @@ export function SamplePdfPreview() {
         try { pageProxy?.cleanup(); } catch { /* PDF.js page cleanup is best-effort. */ }
       }
     })();
+    renderOperation.current = operation;
+    void operation.finally(() => {
+      if (renderOperation.current === operation) renderOperation.current = null;
+    });
     return () => {
       active = false;
       pageTask?.cancel();

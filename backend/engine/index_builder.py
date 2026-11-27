@@ -17,7 +17,7 @@ import numpy as np
 from backend.config.paths import PathContainmentError, resolve_disjoint_paths, resolve_owned_path
 from backend.config.schema import ResolvedRunConfig
 from backend.config.writer_lease import WriterLease
-from backend.model_lifecycle import ModelLifecycleCoordinator, ModelLifecycleError, ModelResourceAdmission, validate_model_lifecycle_policy
+from backend.model_lifecycle import ModelLifecycleCoordinator, ModelLifecycleError, ModelResourceAdmission, find_model_lifecycle_error, validate_model_lifecycle_policy
 from backend.embeddings.image import ImageEmbeddingAdapter, ImageEmbeddingBatchResult
 from backend.embeddings.text import EmbeddingBatchResult, TextEmbeddingAdapter
 from backend.experiments.run_plan import RunPlan
@@ -99,6 +99,8 @@ class IndexBuildResult:
     image_embeddings_created: int = 0
     text_records_persisted: int = 0
     image_records_persisted: int = 0
+    # Internal operational result, not part of the persisted build report schema.
+    lifecycle_error_code: str | None = None
 
     def to_serializable_dict(self) -> dict[str, Any]:
         return {
@@ -375,6 +377,7 @@ def _failure_result(
     image_embeddings_created: int = 0,
     text_records_persisted: int = 0,
     image_records_persisted: int = 0,
+    lifecycle_error_code: str | None = None,
 ) -> IndexBuildResult:
     failures = tuple(
         {
@@ -411,6 +414,7 @@ def _failure_result(
         image_embeddings_created=image_embeddings_created,
         text_records_persisted=text_records_persisted,
         image_records_persisted=image_records_persisted,
+        lifecycle_error_code=lifecycle_error_code,
     )
     _write_report(result)
     return result
@@ -516,6 +520,7 @@ def _build_index_owned(
         *,
         partial_persistence: bool = False,
     ) -> IndexBuildResult:
+        lifecycle_error = find_model_lifecycle_error(exc)
         return _failure_result(
             build_id=build_id,
             artifact_root=artifact_root,
@@ -540,6 +545,7 @@ def _build_index_owned(
             image_embeddings_created=image_embeddings_created,
             text_records_persisted=text_records_persisted,
             image_records_persisted=image_records_persisted,
+            lifecycle_error_code=lifecycle_error.error_code if lifecycle_error else None,
         )
     try:
         extraction = extract_pdfs(

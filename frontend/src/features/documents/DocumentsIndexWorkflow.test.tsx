@@ -27,6 +27,10 @@ const queuedJob = {
   index_fingerprint: fingerprint, created_at: "2026-11-07T00:00:00+00:00", started_at: null, finished_at: null,
   error_code: null, build_id: null, report_reference: null, text_records: null, image_records: null, partial_persistence: null,
 };
+const emptyInventory = {
+  expected_index_fingerprint: fingerprint, document_manifest_hash: manifest, candidates: [], total_candidates: 0,
+  offset: 0, limit: 25, complete: true, reason_code: "inventory_complete", check_level: "report", store_checked: false,
+};
 
 function json(value: unknown, status = 200): Response { return Response.json(value, { status }); }
 function mount(sourceManifestHash: string | null = manifest, sourceCount: number | null = 2) {
@@ -40,6 +44,73 @@ function mount(sourceManifestHash: string | null = manifest, sourceCount: number
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("DocumentsIndexWorkflow", () => {
+  it("can recheck documents while an older report scan is still in flight", async () => {
+    let releaseFirstScan!: (value: Response) => void;
+    let scans = 0;
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const path = String(input);
+      if (path === "/bootstrap-api/v1/bootstrap/configuration") return json({ schema_version: "1", configuration_source: "trusted_server_defaults", resolved_config: config() });
+      if (path.startsWith("/bootstrap-api/v1/bootstrap/jobs?")) return json({ jobs: [], limit: 25, offset: 0 });
+      if (path === "/bootstrap-api/v1/bootstrap/preview") return json(preview);
+      if (path === "/bootstrap-api/v1/bootstrap/index-inventory") {
+        scans += 1;
+        if (scans === 1) return new Promise<Response>((resolve) => { releaseFirstScan = resolve; });
+        return json(emptyInventory);
+      }
+      return json({ error: { code: "unexpected_route" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    mount();
+    await waitFor(() => expect(scans).toBe(1));
+    await user.click(screen.getByText("Advanced", { selector: "summary" }));
+    await user.click(screen.getByRole("button", { name: "Check documents" }));
+    expect(await screen.findByRole("button", { name: "Prepare documents" })).toBeDisabled();
+    expect(scans).toBe(2);
+    releaseFirstScan(json({ error: { code: "old_scan_failed" } }, 503));
+    await waitFor(() => expect(screen.queryByText(/old_scan_failed/)).not.toBeInTheDocument());
+  });
+
+  it.each([
+    { hadPartial: false, indexExists: false, retry: true },
+    { hadPartial: true, indexExists: false, retry: false },
+    { hadPartial: false, indexExists: true, retry: false },
+  ])("requires new confirmation and a fresh index after a known failure: %j", async ({ hadPartial, indexExists, retry }) => {
+    const failed = { ...queuedJob, status: "failed", error_code: "model_resource_capacity_insufficient", partial_persistence: hadPartial };
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path === "/bootstrap-api/v1/bootstrap/configuration") return json({ schema_version: "1", configuration_source: "trusted_server_defaults", resolved_config: config() });
+      if (path.startsWith("/bootstrap-api/v1/bootstrap/jobs?")) return json({ jobs: [failed], limit: 25, offset: 0 });
+      if (path === "/bootstrap-api/v1/bootstrap/preview") return json({
+        ...preview, existing_index: indexExists, fresh_build_eligible: !indexExists,
+        reason_code: indexExists ? "index_already_exists" : "fresh_build_available",
+      });
+      if (path === "/bootstrap-api/v1/bootstrap/index-inventory") return json(emptyInventory);
+      if (path === "/bootstrap-api/v1/bootstrap/jobs" && init?.method === "POST") return json({
+        job: { ...queuedJob, job_id: "10c3aabc-11a2-40f6-adc2-8a34c3dd2d73" },
+      }, 202);
+      return json({ error: { code: "unexpected_route" } }, 404);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText("Report check complete.");
+    await screen.findByRole("heading", { name: "Preparation stopped" });
+    expect(screen.getByText(/did not have enough free memory/)).toBeVisible();
+    const posts = () => fetcher.mock.calls.filter(([url, init]) => String(url) === "/bootstrap-api/v1/bootstrap/jobs" && init?.method === "POST");
+    expect(posts()).toHaveLength(0);
+    if (!retry) {
+      expect(screen.queryByRole("button", { name: "Retry preparation" })).not.toBeInTheDocument();
+      return;
+    }
+    const button = screen.getByRole("button", { name: "Retry preparation" });
+    expect(button).toBeDisabled();
+    await user.click(screen.getByLabelText(/Prepare all 2 PDFs/));
+    await user.click(button);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(JSON.parse(String(posts()[0]?.[1]?.body)).client_request_id).not.toBe(failed.client_request_id);
+  });
+
   it("previews actual source identity, scans existing reports, and requires explicit confirmation before one build", async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = String(input);

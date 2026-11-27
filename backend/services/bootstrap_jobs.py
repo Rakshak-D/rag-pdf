@@ -26,6 +26,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+PUBLIC_BUILD_CAPACITY_ERRORS = frozenset({"model_resource_capacity_insufficient", "model_resource_measurement_unavailable"})
+
+
 @dataclass(frozen=True)
 class BuildJob:
     job_id: str
@@ -335,6 +338,7 @@ class BootstrapJobManager:
             )
 
     def _persist_worker_result(self, job_id: str, result: IndexBuildResult, status: str) -> None:
+        error_code = result.lifecycle_error_code if result.lifecycle_error_code in PUBLIC_BUILD_CAPACITY_ERRORS else "build_failed"
         with self._connect() as db:
             cursor = db.execute(
                 "UPDATE bootstrap_jobs SET status=?,finished_at=?,stage=?,error_code=?,build_id=?,"
@@ -344,7 +348,7 @@ class BootstrapJobManager:
                     status,
                     _now(),
                     "completed" if status == "succeeded" else result.failure_stage,
-                    None if status == "succeeded" else "build_failed",
+                    None if status == "succeeded" else error_code,
                     result.build_id,
                     result.report_path.name,
                     result.text_records_persisted,

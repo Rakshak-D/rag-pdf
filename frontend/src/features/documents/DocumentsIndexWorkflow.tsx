@@ -45,7 +45,10 @@ function readableStatus(job: BootstrapJobRecord): string {
     case "queued": return "Queued. The single local worker has not started this build yet.";
     case "running": return "Running. The local worker is building this index.";
     case "succeeded": return "Build completed and the server validated its report. It is not selected automatically.";
-    case "failed": return `Build failed${job.error_code ? ` (${job.error_code})` : ""}. Any partial index evidence is preserved.`;
+    case "failed":
+      if (job.error_code === "model_resource_capacity_insufficient") return "This computer did not have enough free memory or memory headroom to load a model. Close other heavy apps or try a roomier environment.";
+      if (job.error_code === "model_resource_measurement_unavailable") return "The local runtime could not check the resources needed to load a model. Review its device and memory configuration.";
+      return `Build failed${job.error_code ? ` (${job.error_code})` : ""}. Any partial index evidence is preserved.`;
     case "interrupted": return "Build was interrupted. It will not be replayed or repaired automatically.";
   }
 }
@@ -94,7 +97,7 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
   const submitLock = useRef(false);
   const mounted = useRef(true);
   const currentManifest = useRef(sourceManifestHash);
-  const refreshedCompletedJob = useRef<string | null>(null);
+  const refreshedTerminalJob = useRef<string | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -176,8 +179,8 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
   }, [client]);
 
   useEffect(() => {
-    if (activeJob?.status === "succeeded" && refreshedCompletedJob.current !== activeJob.job_id) {
-      refreshedCompletedJob.current = activeJob.job_id;
+    if (activeJob && terminal.has(activeJob.status) && refreshedTerminalJob.current !== activeJob.job_id) {
+      refreshedTerminalJob.current = activeJob.job_id;
       void createPreview();
     }
   }, [activeJob?.job_id, activeJob?.status]);
@@ -190,7 +193,7 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
     if (!client || !config || !sourceManifestHash || !sourceCount) return;
     const serial = ++previewSerial.current;
     inventorySerial.current += 1;
-    setPreview(null); setInventoryPage(null); setInventoryError(null); setPreviewError(null); setAcknowledged(false); setPreviewLoading(true);
+    setPreview(null); setInventoryPage(null); setInventoryError(null); setInventoryLoading(false); setPreviewError(null); setAcknowledged(false); setPreviewLoading(true);
     try {
       const result = await client.preview({ resolved_config: config });
       if (!mounted.current || previewSerial.current !== serial) return;
@@ -269,6 +272,7 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
       });
       if (!mounted.current) return;
       setActiveJob(result.job); setHistory((items) => [result.job, ...items.filter((item) => item.job_id !== result.job.job_id)].slice(0, JOB_PAGE_SIZE));
+      setAcknowledged(false);
       setUncertainState("idle");
       void refreshHistory();
     } catch (error) {
@@ -326,6 +330,8 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
   const preparing = currentJob && ["queued", "running"].includes(currentJob.status);
   const failed = currentJob && ["failed", "interrupted"].includes(currentJob.status);
   const stage = !token ? "offline" : sourceError ? "unavailable" : sourceCount === null || sourceChecking ? "checking" : sourceCount === 0 ? "empty" : uncertainRequestId ? "uncertain" : currentSelection ? "selected" : preparing ? "building" : configurationError || previewError || inventoryError || inventoryPage?.complete === false ? "unavailable" : previewLoading || configurationLoading || inventoryLoading || !preview ? "checking" : matchingReports ? "reusable" : failed ? "failed" : preview.fresh_build_eligible ? "needed" : "blocked";
+  const retryFresh = stage === "failed" && currentJob?.status === "failed" &&
+    currentJob.partial_persistence === false && preview?.fresh_build_eligible === true && inventoryPage?.complete === true;
   const heading = { offline: "Connect your workspace", unavailable: "Unable to check documents", checking: "Checking your collection", empty: "Your first PDF awaits", uncertain: "Confirm the last request", selected: "Ready to ask", building: "Preparing your documents", reusable: "Use your prepared collection", failed: "Preparation stopped", needed: "Prepare your documents", blocked: "Preparation needs review" }[stage];
 
   return <aside className={`documents-workflow documents-workflow--${stage}`} aria-label="Prepare and use a document index" aria-busy={stage === "checking"}>
@@ -336,10 +342,10 @@ export function DocumentsIndexWorkflow({ token, status, sourceManifestHash, sour
       {stage === "selected" ? <Link className="button button--primary" to="/?mode=document">Ask PDFs <span aria-hidden="true">→</span></Link> : null}
       {stage === "checking" ? <p className="documents-progress" role="status">Checking documents…</p> : null}
       {stage === "unavailable" && !sourceError ? <div role="alert" className="documents-error"><p>{configurationError ?? previewError ?? inventoryError ?? "Completed indexes could not be checked. Try again or review Advanced."}</p><button className="button button--primary" type="button" onClick={() => { if (sourceError) onRefreshDocuments(); else if (!config) { setConfigurationLoading(true); void getTrustedBootstrapConfiguration(token).then(value => { setConfig(value.resolved_config); setConfigurationError(null); }).catch(error => setConfigurationError(apiErrorText(error))).finally(() => setConfigurationLoading(false)); } else void createPreview(); }}>Try again</button></div> : null}
-      {stage === "needed" ? <div className="documents-workflow__build-confirm">
-        <p>Uses your configured local models and may take a few minutes.</p>
+      {stage === "needed" || retryFresh ? <div className="documents-workflow__build-confirm">
+        <p>{retryFresh ? "The last attempt left no partial index. After addressing the failure, confirm to prepare a fresh index." : "Uses your configured local models and may take a few minutes."}</p>
         <label><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} disabled={submitting || sourceChecking || !status?.accepting_jobs} /> Prepare all {sourceCount} PDFs. Keep existing indexes.</label>
-        <button className="button button--primary" type="button" onClick={() => void submitBuild()} disabled={!acknowledged || !status?.accepting_jobs || submitting || Boolean(uncertainRequestId) || sourceChecking}>{submitting ? "Submitting…" : "Prepare documents"}</button>
+        <button className="button button--primary" type="button" onClick={() => void submitBuild()} disabled={!acknowledged || !status?.accepting_jobs || submitting || Boolean(uncertainRequestId) || sourceChecking}>{submitting ? "Submitting…" : retryFresh ? "Retry preparation" : "Prepare documents"}</button>
         {!status?.accepting_jobs ? <p role="alert">The preparation service is not accepting work. Check its connection in Advanced.</p> : null}
       </div> : null}
       {stage === "building" ? <div className="documents-build-progress"><span>{currentJob?.status === "queued" ? "Queued" : "Running"}</span><button className="documents-text-button" type="button" onClick={() => void refreshHistory()} disabled={historyLoading}>Refresh status</button></div> : null}

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import subprocess
 import signal
+import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +13,8 @@ from scripts import start_local_app
 
 
 def test_windows_services_start_in_private_process_groups(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(start_local_app.os, "name", "nt")
+    monkeypatch.setattr(start_local_app, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 512, raising=False)
     calls = {}
 
     class Process:
@@ -29,7 +33,8 @@ def test_windows_services_start_in_private_process_groups(tmp_path: Path, monkey
 
 
 def test_windows_shutdown_sends_ctrl_break_before_waiting(monkeypatch):
-    monkeypatch.setattr(start_local_app.os, "name", "nt")
+    monkeypatch.setattr(start_local_app, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(signal, "CTRL_BREAK_EVENT", 1, raising=False)
     events = []
 
     class Process:
@@ -81,6 +86,45 @@ def test_shutdown_falls_back_to_owned_process_termination_after_timeout(monkeypa
 
     start_local_app._stop_owned([Process()])
     assert events == ["terminate", ("wait", 8), "kill", ("wait", 5)]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="OS process termination on Windows is not SIGTERM delivery")
+def test_cli_converts_sigterm_into_a_shutdown_request_and_restores_handler(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["start_local_app.py", "--port-offset", "12"])
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def fake_main(*, port_offset, should_stop):
+        assert port_offset == 12
+        assert not should_stop()
+        signal.raise_signal(signal.SIGTERM)
+        assert should_stop()
+        return 0
+
+    monkeypatch.setattr(start_local_app, "main", fake_main)
+    assert start_local_app._cli() == 0
+    assert signal.getsignal(signal.SIGTERM) == previous
+
+
+def test_stop_during_startup_cleans_only_the_started_child(tmp_path, monkeypatch):
+    frontend = tmp_path / "frontend" / "node_modules" / "vite" / "bin"
+    frontend.mkdir(parents=True)
+    (frontend / "vite.js").touch()
+    monkeypatch.setattr(start_local_app, "__file__", str(tmp_path / "scripts" / "start_local_app.py"))
+    monkeypatch.setattr(start_local_app, "_check_ports", lambda _ports: None)
+    monkeypatch.setattr(start_local_app, "_runtime_environment", dict)
+    monkeypatch.setattr(start_local_app.shutil, "which", lambda _name: "node")
+    started = []
+    cleaned = []
+
+    def start_child(name, _args, **_kwargs):
+        started.append(name)
+        return object()
+
+    monkeypatch.setattr(start_local_app, "_start", start_child)
+    monkeypatch.setattr(start_local_app, "_stop_owned", cleaned.extend)
+    assert start_local_app.main(should_stop=lambda: bool(started)) == 0
+    assert started == ["ordinary_api"]
+    assert len(cleaned) == 1
 
 
 def test_launcher_generates_distinct_server_credentials_and_preserves_configured_roots(tmp_path: Path, monkeypatch):
@@ -211,3 +255,43 @@ def test_port_collision_is_rejected_without_starting_children():
         listener.bind(("127.0.0.1", 0)); listener.listen()
         with pytest.raises(start_local_app.StartupError, match="local_ports_in_use"):
             start_local_app._check_ports((listener.getsockname()[1],))
+
+
+def test_loopback_readiness_works_with_system_proxy(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from threading import Thread
+
+    class Health(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ready")
+
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    with HTTPServer(("127.0.0.1", 0), Health) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/health"
+            assert start_local_app._request(url) == (200, "ready")
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+@pytest.mark.skipif(start_local_app.os.name == "nt", reason="POSIX TCP restart semantics")
+def test_port_probe_allows_restart_after_server_active_close():
+    import socket
+
+    with socket.socket() as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        address = listener.getsockname()
+        with socket.create_connection(address, timeout=2) as client:
+            connection, _ = listener.accept()
+            connection.close()
+            assert client.recv(1) == b""
+    start_local_app._check_ports((address[1],))

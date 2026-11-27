@@ -48,6 +48,7 @@ jobs:
         run: >-
           python -m pytest -p no:cacheprovider -q
           tests/unit/test_api_schemas.py
+          tests/unit/test_start_local_app.py
           tests/unit/test_local_gateway.py
           tests/unit/test_bm25.py
           tests/unit/test_context_contracts.py

@@ -16,7 +16,10 @@ configured source, index, SQLite, and artifact locations and does not load
 embedding or reranking models. Stop the services with Ctrl+C. The launcher
 stops only child processes it created. On Windows, Ctrl+C is sent as a console
 break to those owned services and shutdown is bounded; the launcher never
-stops Ollama or unrelated processes.
+stops Ollama or unrelated processes. On Linux and macOS, a SIGTERM sent to the
+launcher also stops its owned services and allows the bootstrap process to
+release its ownership marker during an idle shutdown. A hard kill cannot
+guarantee cleanup.
 
 Set `RAG_WORKBENCH_DATA_DIR` and `RAG_WORKBENCH_INDEX_STORAGE_ROOT` to the
 existing trusted source and index roots. They must be absolute, non-overlapping
@@ -45,6 +48,9 @@ separate service credentials protect the local application from ordinary
 cross-origin browser access; they are not a security boundary against other
 processes running as the same operating-system user, who may be able to inspect
 or control that user's processes.
+
+The application's embedded Chroma client disables Chroma product telemetry.
+Model packages may still need to download weights if they are not cached.
 
 ## Chat modes and model behavior
 

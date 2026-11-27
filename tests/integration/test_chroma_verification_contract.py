@@ -16,6 +16,7 @@ import traceback
 import chromadb
 import pytest
 from chromadb.api.shared_system_client import SharedSystemClient
+from chromadb.config import Settings
 
 from backend.config.writer_lease import WriterLease, WriterLeaseError
 from backend.engine.retrieval import RetrievalStoreError, retrieve_semantic
@@ -522,7 +523,7 @@ def test_missing_index_directory_is_rejected_before_reservation(tmp_path):
 def test_open_existing_checks_exact_collection_set_and_metadata_without_repair(tmp_path, case):
     _, plan, storage, report = _prepared(tmp_path)
     chroma_path = storage / "indexes" / plan.index_fingerprint / "chroma"
-    client = chromadb.PersistentClient(path=str(chroma_path))
+    client = chromadb.PersistentClient(path=str(chroma_path), settings=Settings(anonymized_telemetry=False))
     if case == "wrong_collection_metadata":
         collection = client.get_collection(TEXT_COLLECTION, embedding_function=None)
         changed = dict(collection.metadata)

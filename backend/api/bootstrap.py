@@ -23,7 +23,7 @@ from backend.config.schema import ResolvedRunConfig, WorkbenchSafetyPolicy
 from notebooks.config import Config
 from backend.engine.manifest import ManifestSourceChangedError, ManifestValidationError, build_document_manifest
 from backend.experiments.run_plan import RunPlan, build_run_plan
-from backend.services.bootstrap_jobs import BootstrapJobError, BootstrapJobManager, BuildJob
+from backend.services.bootstrap_jobs import PUBLIC_BUILD_CAPACITY_ERRORS, BootstrapJobError, BootstrapJobManager, BuildJob
 from backend.services.bootstrap_documents import (
     MAX_DOCUMENT_PAGES,
     MAX_OFFSET as MAX_DOCUMENT_OFFSET,
@@ -299,6 +299,7 @@ def _job_payload(job: BuildJob) -> dict[str, Any]:
     if job.status == "succeeded" and build_id is not None and job.report_reference == "build-report.json":
         report_reference = f"build-artifacts/{build_id}/build-report.json"
     allowed_errors = {
+        *PUBLIC_BUILD_CAPACITY_ERRORS,
         "server_restarted", "server_shutdown", "queue_admission_failed", "worker_claim_failed",
         "confirmation_changed", "build_failed", "job_result_state_conflict", "job_result_persistence_failed",
         "writer_lease_busy", "fresh_index_exists", "manifest_source_changed", "manifest_invalid",

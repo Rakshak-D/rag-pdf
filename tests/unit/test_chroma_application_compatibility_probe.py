@@ -1,5 +1,6 @@
 import traceback
 from argparse import Namespace
+from types import SimpleNamespace
 from pathlib import Path
 import json
 
@@ -450,6 +451,7 @@ def test_worker_root_requires_attempt_bound_temporary_marker(tmp_path):
 
 
 def test_invalid_observer_evidence_makes_parent_runner_exit_nonzero(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(probe, "os", SimpleNamespace(name="nt", replace=probe.os.replace))
     baseline = tmp_path / "baseline-python.exe"
     candidate = tmp_path / "candidate-python.exe"
     baseline.write_bytes(b"synthetic path placeholder")
